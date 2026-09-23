@@ -1,9 +1,9 @@
 // 画像ビューア - メイン画面
-// 現状は一覧（仮想モードの ListView）＋コマンドの仕組みまで。サムネイルグリッドは ThumbnailGrid で置き換え予定
-using System.Runtime.InteropServices;
 using ImageViewer.App.Commands;
+using ImageViewer.App.Grid;
 using ImageViewer.Core.Commands;
 using ImageViewer.Core.Imaging;
+using ImageViewer.Core.Thumbnails;
 
 namespace ImageViewer.App;
 
@@ -12,13 +12,13 @@ public class MainForm : Form, ICommandHost
     public const string AppTitle = "画像ビューア";
 
     private readonly CommandRegistry _registry = new();
-    private readonly ListView _list;
+    private readonly ThumbnailService _thumbnails;
+    private readonly ThumbnailGrid _grid;
     private readonly ToolStripStatusLabel _status;
     private readonly ContextMenuStrip _contextMenu = new();
     // メニュー項目とコマンドの対応（選択が変わるたびに有効/無効を更新する）
     private readonly List<(ToolStripMenuItem Item, IImageCommand Command)> _commandItems = new();
 
-    private List<FileInfo> _files = new();
     private string? _folder;
     private CancellationTokenSource? _loadCts;
 
@@ -32,30 +32,19 @@ public class MainForm : Form, ICommandHost
 
         RegisterCommands();
 
-        _list = new ListView
-        {
-            Dock = DockStyle.Fill,
-            View = View.Details,
-            VirtualMode = true,
-            FullRowSelect = true,
-            MultiSelect = true,
-            HideSelection = false,
-            ContextMenuStrip = _contextMenu,
-        };
-        _list.Columns.Add("名前", 420);
-        _list.Columns.Add("サイズ", 100, HorizontalAlignment.Right);
-        _list.Columns.Add("更新日時", 160);
-        _list.RetrieveVirtualItem += OnRetrieveVirtualItem;
-        // 仮想モードでは Shift による範囲選択は VirtualItemsSelectionRangeChanged でしか通知されない
-        _list.SelectedIndexChanged += (_, _) => UpdateCommandStates();
-        _list.VirtualItemsSelectionRangeChanged += (_, _) => UpdateCommandStates();
+        // サムネイルは長辺 160（DPI 反映）で生成し、メモリ上には最大 128MB（この大きさで約 300〜1000 枚）まで持つ
+        _thumbnails = new ThumbnailService(LogicalToDeviceUnits(160), 128L * 1024 * 1024,
+            SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext());
+        _grid = new ThumbnailGrid(_thumbnails) { Dock = DockStyle.Fill, ContextMenuStrip = _contextMenu };
+        _grid.SelectionChanged += (_, _) => UpdateCommandStates();
+        FormClosed += (_, _) => _thumbnails.Dispose();
 
         var statusStrip = new StatusStrip();
         _status = new ToolStripStatusLabel { Spring = true, TextAlign = ContentAlignment.MiddleLeft };
         statusStrip.Items.Add(_status);
 
         // Dock の都合で Fill を先に追加する
-        Controls.Add(_list);
+        Controls.Add(_grid);
         Controls.Add(BuildMainMenu());
         Controls.Add(statusStrip);
         BuildContextMenu();
@@ -95,7 +84,7 @@ public class MainForm : Form, ICommandHost
 
         var editMenu = new ToolStripMenuItem("編集(&E)");
         editMenu.DropDownItems.Add(new ToolStripMenuItem("すべて選択(&A)", null,
-            (_, _) => SelectAll()) { ShortcutKeys = Keys.Control | Keys.A });
+            (_, _) => _grid.SelectAll()) { ShortcutKeys = Keys.Control | Keys.A });
         menu.Items.Add(editMenu);
 
         // 登録済みコマンドをカテゴリ名のメニューに追加（同名のメニューがあればそこへ追記）
@@ -173,7 +162,7 @@ public class MainForm : Form, ICommandHost
     // ---- コマンド実行 ----
 
     private IReadOnlyList<string> SelectedPaths() =>
-        _list.SelectedIndices.Cast<int>().Order().Select(i => _files[i].FullName).ToList();
+        _grid.SelectedIndices.Select(i => _grid.Items[i].FullName).ToList();
 
     private void UpdateCommandStates()
     {
@@ -183,8 +172,8 @@ public class MainForm : Form, ICommandHost
 
         string where = _folder ?? "フォルダ未選択（Ctrl+O で開く / フォルダをドロップ）";
         _status.Text = paths.Count > 0
-            ? $"{where}   {_files.Count} 枚中 {paths.Count} 枚選択"
-            : $"{where}   {_files.Count} 枚";
+            ? $"{where}   {_grid.Items.Count} 枚中 {paths.Count} 枚選択"
+            : $"{where}   {_grid.Items.Count} 枚";
     }
 
     private async Task ExecuteAsync(IImageCommand cmd)
@@ -240,55 +229,13 @@ public class MainForm : Form, ICommandHost
         }
 
         _folder = folder;
-        _files = files;
-        _list.SelectedIndices.Clear();
-        _list.VirtualListSize = files.Count;
-        _list.Invalidate();
+        _grid.SetItems(files);
+        _grid.Focus();
         Text = $"{Path.GetFileName(folder.TrimEnd('\\'))} - {AppTitle}";
         UpdateCommandStates();
-    }
-
-    private void OnRetrieveVirtualItem(object? sender, RetrieveVirtualItemEventArgs e)
-    {
-        var f = _files[e.ItemIndex];
-        e.Item = new ListViewItem(new[]
-        {
-            f.Name,
-            $"{Math.Max(1, (f.Length + 1023) / 1024):N0} KB",
-            f.LastWriteTime.ToString("yyyy/MM/dd HH:mm"),
-        });
     }
 
     private static string? DroppedFolder(DragEventArgs e) =>
         e.Data?.GetData(DataFormats.FileDrop) is string[] { Length: > 0 } paths && Directory.Exists(paths[0])
             ? paths[0] : null;
-
-    // ---- 全選択 ----
-    // 仮想モードで Items[i].Selected を全件回すと遅いので、LVM_SETITEMSTATE で一括指定する
-
-    private void SelectAll()
-    {
-        if (_files.Count == 0) return;
-        var item = new LVITEM { stateMask = LVIS_SELECTED, state = LVIS_SELECTED };
-        SendMessage(_list.Handle, LVM_SETITEMSTATE, -1, ref item);
-        UpdateCommandStates();
-    }
-
-    private const int LVM_SETITEMSTATE = 0x1000 + 43;
-    private const int LVIS_SELECTED = 0x0002;
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    private struct LVITEM
-    {
-        public int mask, iItem, iSubItem, state, stateMask;
-        public IntPtr pszText;
-        public int cchTextMax, iImage;
-        public IntPtr lParam;
-        public int iIndent, iGroupId, cColumns;
-        public IntPtr puColumns, piColFmt;
-        public int iGroup;
-    }
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, int wParam, ref LVITEM lParam);
 }

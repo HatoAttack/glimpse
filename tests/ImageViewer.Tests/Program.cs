@@ -1,4 +1,4 @@
-// Core・ショートカット解釈・画像読み込みの動作確認（GUI なし）
+// Core・ショートカット解釈・画像読み込み・サムネイルの動作確認（GUI なし）
 using System.Text;
 using System.Windows.Forms;
 using ImageViewer.App;
@@ -70,6 +70,11 @@ Directory.Delete(dir, true);
 // ---- 画像読み込み ----
 Directory.CreateDirectory(dir);
 await LoaderTests.RunAsync(Check, dir);
+Directory.Delete(dir, true);
+
+// ---- サムネイル・グリッド ----
+Directory.CreateDirectory(dir);
+ThumbnailTests.Run(Check, dir);
 Directory.Delete(dir, true);
 
 Console.WriteLine(failed ? "\n失敗あり" : "\nすべて OK");
