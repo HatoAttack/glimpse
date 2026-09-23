@@ -9,6 +9,9 @@ public sealed record AppSettings
     /// <summary>ホームフォルダ（未設定なら null = ピクチャ）</summary>
     public string? HomeFolder { get; init; }
 
+    /// <summary>サムネイルの表示サイズ（論理 px。null なら既定の 160）</summary>
+    public int? ThumbnailSize { get; init; }
+
     /// <summary>フォルダジャンプの索引を作る範囲（null ならユーザーフォルダだけ）</summary>
     public IReadOnlyList<string>? JumpRoots { get; init; }
 

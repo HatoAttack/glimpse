@@ -38,22 +38,35 @@ public static class ShellThumbnail
 
     /// <summary>
     /// シェルの HBITMAP（32bpp の DIB セクション）を透過を保ったまま Bitmap にする。
-    /// Image.FromHbitmap は透過を捨てるので使わない。ハンドラによって
-    /// 「上下逆」「アルファが全部 0」「乗算済みでない」ことがあるので、それぞれ補正する
+    /// Image.FromHbitmap は透過を捨てるので使わない。
+    /// 行の並び（上から / 下から）は GetObject の値からは正しく判定できない（常に正の高さが返る）ため、
+    /// GetDIBits に「上から順（高さを負）・32bpp」で取り出させて、並びの違いを GDI に吸収させる。
+    /// ハンドラによって「アルファが全部 0」「乗算済みでない」ことがあるので、それぞれ補正する
     /// </summary>
     private static Bitmap FromHBitmap(IntPtr hbmp)
     {
-        if (GetObject(hbmp, Marshal.SizeOf<DIBSECTION>(), out DIBSECTION ds) == 0
-            || ds.dsBm.bmBitsPixel != 32 || ds.dsBm.bmBits == IntPtr.Zero)
-            return Image.FromHbitmap(hbmp); // DIB でない・32bpp でない: 透過なしで妥協
+        if (GetObject(hbmp, Marshal.SizeOf<DIBSECTION>(), out DIBSECTION ds) == 0 || ds.dsBm.bmBitsPixel != 32)
+            return Image.FromHbitmap(hbmp); // 32bpp でない: 透過なしで妥協
 
-        int w = ds.dsBm.bmWidth, h = ds.dsBm.bmHeight, srcStride = ds.dsBm.bmWidthBytes;
-        bool bottomUp = ds.dsBmih.biHeight > 0;
+        int w = ds.dsBm.bmWidth, h = Math.Abs(ds.dsBm.bmHeight);
         var pixels = new byte[w * 4 * h];
-        for (int y = 0; y < h; y++)
+        var info = new BITMAPINFOHEADER
         {
-            int srcRow = bottomUp ? h - 1 - y : y;
-            Marshal.Copy(ds.dsBm.bmBits + srcRow * srcStride, pixels, y * w * 4, w * 4);
+            biSize = (uint)Marshal.SizeOf<BITMAPINFOHEADER>(),
+            biWidth = w,
+            biHeight = -h, // 負 = 上の行から順に
+            biPlanes = 1,
+            biBitCount = 32,
+        };
+        IntPtr dc = GetDC(IntPtr.Zero);
+        try
+        {
+            if (GetDIBits(dc, hbmp, 0, (uint)h, pixels, ref info, 0 /* DIB_RGB_COLORS */) != h)
+                return Image.FromHbitmap(hbmp);
+        }
+        finally
+        {
+            ReleaseDC(IntPtr.Zero, dc);
         }
 
         bool allTransparent = true, premultiplied = true;
@@ -135,4 +148,14 @@ public static class ShellThumbnail
 
     [DllImport("gdi32.dll")]
     private static extern bool DeleteObject(IntPtr h);
+
+    [DllImport("gdi32.dll")]
+    private static extern int GetDIBits(IntPtr hdc, IntPtr hbmp, uint start, uint lines, [Out] byte[] bits,
+        ref BITMAPINFOHEADER info, uint usage);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetDC(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    private static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);
 }

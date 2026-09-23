@@ -26,6 +26,7 @@ public sealed class ThumbnailService : IDisposable
     private readonly HashSet<ThumbnailKey> _pendingSet = new();
     private readonly HashSet<ThumbnailKey> _inFlight = new();
     private bool _disposed;
+    private int _generation; // 大きさを変えるたびに増やす。古い大きさで作られた結果は捨てる
 
     // ---- UI スレッド専用 ----
     private readonly Dictionary<ThumbnailKey, LinkedListNode<Entry>> _cache = new();
@@ -35,7 +36,7 @@ public sealed class ThumbnailService : IDisposable
     private sealed record Entry(ThumbnailKey Key, Bitmap Bitmap, long Bytes);
 
     /// <summary>生成するサムネイルの長辺（px）</summary>
-    public int Size { get; }
+    public int Size { get; private set; }
 
     public long CachedBytes { get; private set; }
     public int CachedCount => _cache.Count;
@@ -113,6 +114,28 @@ public sealed class ThumbnailService : IDisposable
         CachedBytes = 0;
     }
 
+    /// <summary>
+    /// 生成する大きさを変える（UI スレッドから）。キャッシュと待ち行列を捨てて、以後は新しい大きさで作る。
+    /// 作成中だったものは、出来上がっても古い大きさなので捨てる
+    /// </summary>
+    public void SetSize(int size)
+    {
+        if (size == Size) return;
+        lock (_lock)
+        {
+            Size = size;
+            _generation++;
+            _pending.Clear();
+            _pendingSet.Clear();
+            _inFlight.Clear();
+        }
+        foreach (var e in _lru) e.Bitmap.Dispose();
+        _lru.Clear();
+        _cache.Clear();
+        _failed.Clear();
+        CachedBytes = 0;
+    }
+
     // ---- ワーカースレッド ----
 
     private void WorkerLoop()
@@ -120,6 +143,7 @@ public sealed class ThumbnailService : IDisposable
         while (true)
         {
             ThumbnailKey key;
+            int generation, size;
             lock (_lock)
             {
                 while (!_disposed && _pending.Count == 0) Monitor.Wait(_lock);
@@ -127,34 +151,36 @@ public sealed class ThumbnailService : IDisposable
                 key = _pending.Dequeue();
                 _pendingSet.Remove(key);
                 _inFlight.Add(key);
+                generation = _generation;
+                size = Size;
             }
 
             Bitmap? bitmap = null;
             try
             {
-                bitmap = _generator(key.Path, Size);
+                bitmap = _generator(key.Path, size);
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"サムネイル生成失敗: {key.Path}: {ex.Message}");
             }
-            _uiContext.Post(_ => Complete(key, bitmap), null);
+            _uiContext.Post(_ => Complete(key, bitmap, generation), null);
         }
     }
 
     // ---- 結果の受け取り（UI スレッド） ----
 
-    private void Complete(ThumbnailKey key, Bitmap? bitmap)
+    private void Complete(ThumbnailKey key, Bitmap? bitmap, int generation)
     {
-        bool disposed;
+        bool stale;
         lock (_lock)
         {
-            _inFlight.Remove(key);
-            disposed = _disposed;
+            stale = _disposed || generation != _generation;
+            if (!stale) _inFlight.Remove(key);
         }
-        if (disposed)
+        if (stale)
         {
-            bitmap?.Dispose();
+            bitmap?.Dispose(); // 終了済み、または古い大きさで作られたもの
             return;
         }
 

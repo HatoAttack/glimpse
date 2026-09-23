@@ -1,5 +1,6 @@
 // 画像ビューア - メイン画面
 using ImageViewer.App.Commands;
+using ImageViewer.App.Dialogs;
 using ImageViewer.App.Filer;
 using ImageViewer.App.Grid;
 using ImageViewer.App.Jump;
@@ -84,10 +85,10 @@ public class MainForm : Form, ICommandHost
         _settings = _settingsStore.Load();
         RegisterCommands();
 
-        // サムネイルは長辺 160（DPI 反映）で生成し、メモリ上には最大 128MB（この大きさで約 300〜1000 枚）まで持つ
+        // サムネイルはメモリ上に最大 128MB まで持つ（大きさは表示サイズに合わせて段階的に決まる）
         _thumbnails = new ThumbnailService(LogicalToDeviceUnits(160), 128L * 1024 * 1024,
             SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext());
-        _grid = new ThumbnailGrid(_thumbnails) { Dock = DockStyle.Fill, ContextMenuStrip = _contextMenu };
+        _grid = new ThumbnailGrid(_thumbnails, _settings.ThumbnailSize ?? 160) { Dock = DockStyle.Fill, ContextMenuStrip = _contextMenu };
         _grid.SelectionChanged += (_, _) => UpdateCommandStates();
         _grid.MarksChanged += (_, _) => UpdateCommandStates();
         _grid.OrderChanged += (_, _) => SaveManualOrder();
@@ -106,8 +107,9 @@ public class MainForm : Form, ICommandHost
         var statusStrip = new StatusStrip();
         _status = new ToolStripStatusLabel { Spring = true, TextAlign = ContentAlignment.MiddleLeft };
         statusStrip.Items.Add(_status);
+        AddThumbnailSizeSlider(statusStrip);
 
-        var split = new SplitContainer
+        var split = new NoFocusSplitContainer
         {
             Dock = DockStyle.Fill,
             FixedPanel = FixedPanel.Panel1,
@@ -140,6 +142,80 @@ public class MainForm : Form, ICommandHost
         if (_settings.HomeFolder != null && !Directory.Exists(_settings.HomeFolder) && initialFolder == null)
             Shown += (_, _) => Notify($"ホームフォルダが見つからないのでピクチャを開きました: {_settings.HomeFolder}");
         if (Directory.Exists(start)) Shown += async (_, _) => await LoadFolderAsync(start);
+    }
+
+    // ---- サムネイルの大きさ（フッターのスライダー / Ctrl+ホイール） ----
+
+    private void AddThumbnailSizeSlider(StatusStrip strip)
+    {
+        var slider = new TrackBar
+        {
+            Minimum = ThumbnailGrid.MinThumbnailSize,
+            Maximum = ThumbnailGrid.MaxThumbnailSize,
+            SmallChange = ThumbnailGrid.ThumbnailSizeStep,
+            LargeChange = ThumbnailGrid.ThumbnailSizeStep * 2,
+            TickStyle = TickStyle.None,
+            AutoSize = false,
+            Width = LogicalToDeviceUnits(140),
+            Height = LogicalToDeviceUnits(22),
+            Value = _grid.ThumbnailSize,
+            BackColor = SystemColors.Control,
+        };
+        var host = new ToolStripControlHost(slider) { AutoSize = false, Width = slider.Width, Margin = new Padding(0, 1, 4, 0) };
+        var label = new ToolStripStatusLabel("サイズ") { ToolTipText = "サムネイルの大きさ（Ctrl+ホイールでも変えられます）" };
+        _toolTip.SetToolTip(slider, "サムネイルの大きさ（Ctrl+ホイールでも変えられます）");
+        strip.Items.Add(label);
+        strip.Items.Add(host);
+
+        slider.ValueChanged += (_, _) => _grid.ThumbnailSize = slider.Value;
+        _grid.ThumbnailSizeChanged += (_, size) => slider.Value = Math.Clamp(size, slider.Minimum, slider.Maximum);
+        // 設定には終了時に 1 回だけ書く（動かすたびに書かない）
+        FormClosing += (_, _) =>
+        {
+            if ((_settings.ThumbnailSize ?? 160) == _grid.ThumbnailSize) return; // 変えていなければ書かない
+            _settings = _settings with { ThumbnailSize = _grid.ThumbnailSize };
+            try { _settingsStore.Save(_settings); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        };
+    }
+
+    // ---- 新しいフォルダー ----
+
+    private async Task CreateFolderAsync()
+    {
+        if (_folder == null) return;
+        string parent = _folder;
+        string? Validate(string name) =>
+            RenamePlanner.ValidateName(name)
+            ?? (Directory.Exists(Path.Combine(parent, name)) || File.Exists(Path.Combine(parent, name))
+                ? "同じ名前のフォルダーまたはファイルがすでにあります" : null);
+
+        using var dlg = new TextInputDialog("新しいフォルダー", $"{parent} に作るフォルダーの名前:", UniqueFolderName(parent), Validate);
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+        string path = Path.Combine(parent, dlg.Value);
+        try
+        {
+            Directory.CreateDirectory(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(this, ex.Message, "フォルダーを作れませんでした", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+        await LoadFolderAsync(parent, NavKind.Reload);
+        _grid.SelectPath(path);
+        Notify($"フォルダーを作りました: {dlg.Value}");
+    }
+
+    /// <summary>「新しいフォルダー」、あれば「新しいフォルダー (2)」…（エクスプローラーと同じ付け方）</summary>
+    private static string UniqueFolderName(string parent)
+    {
+        const string baseName = "新しいフォルダー";
+        string name = baseName;
+        for (int i = 2; Directory.Exists(Path.Combine(parent, name)) || File.Exists(Path.Combine(parent, name)); i++)
+            name = $"{baseName} ({i})";
+        return name;
     }
 
     // ---- アドレスバー・戻る / 進む / 上へ ----
@@ -421,6 +497,8 @@ public class MainForm : Form, ICommandHost
         var fileMenu = new ToolStripMenuItem("ファイル(&F)");
         fileMenu.DropDownItems.Add(new ToolStripMenuItem("フォルダを開く(&O)...", null,
             async (_, _) => await ChooseFolderAsync()) { ShortcutKeys = Keys.Control | Keys.O });
+        fileMenu.DropDownItems.Add(new ToolStripMenuItem("新しいフォルダー(&N)...", null,
+            async (_, _) => await CreateFolderAsync()) { ShortcutKeys = Keys.Control | Keys.N });
         fileMenu.DropDownItems.Add(new ToolStripMenuItem("再読み込み(&R)", null,
             (_, _) => RequestRefresh()) { ShortcutKeys = Keys.F5 });
         menu.Items.Add(fileMenu);
@@ -558,6 +636,9 @@ public class MainForm : Form, ICommandHost
 
     private void BuildContextMenu()
     {
+        _contextMenu.Items.Add(new ToolStripMenuItem("新しいフォルダー...", null, async (_, _) => await CreateFolderAsync())
+            { ShortcutKeyDisplayString = "Ctrl+N" });
+        _contextMenu.Items.Add(new ToolStripSeparator());
         _contextMenu.Items.Add(new ToolStripMenuItem("チェックを付ける", null, (_, _) => _grid.SetMarkOnSelected(true))
             { ShortcutKeyDisplayString = "Shift+¥" });
         _contextMenu.Items.Add(new ToolStripMenuItem("チェックを外す", null, (_, _) => _grid.SetMarkOnSelected(false)));
