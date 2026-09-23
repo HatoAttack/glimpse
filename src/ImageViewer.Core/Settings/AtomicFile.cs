@@ -19,4 +19,16 @@ public static class AtomicFile
         }
         File.Move(temp, path, overwrite: true);
     }
+
+    public static void WriteAllBytes(string path, byte[] bytes)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+        string temp = path + ".tmp";
+        using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
+        {
+            stream.Write(bytes);
+            stream.Flush(flushToDisk: true);
+        }
+        File.Move(temp, path, overwrite: true);
+    }
 }

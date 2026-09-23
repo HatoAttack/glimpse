@@ -8,6 +8,17 @@ public sealed record AppSettings
 {
     /// <summary>ホームフォルダ（未設定なら null = ピクチャ）</summary>
     public string? HomeFolder { get; init; }
+
+    /// <summary>フォルダジャンプの索引を作る範囲（null ならユーザーフォルダだけ）</summary>
+    public IReadOnlyList<string>? JumpRoots { get; init; }
+
+    /// <summary>フォルダジャンプで Everything を使う（既定は使わない。起動していなければ自前の索引）</summary>
+    public bool UseEverything { get; init; }
+
+    /// <summary>実際に使う範囲（保存はしない）</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IReadOnlyList<string> EffectiveJumpRoots =>
+        JumpRoots is { Count: > 0 } roots ? roots : new[] { Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) };
 }
 
 public sealed class SettingsStore

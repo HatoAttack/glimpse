@@ -2,8 +2,10 @@
 using ImageViewer.App.Commands;
 using ImageViewer.App.Filer;
 using ImageViewer.App.Grid;
+using ImageViewer.App.Jump;
 using ImageViewer.Core.Commands;
 using ImageViewer.Core.Imaging;
+using ImageViewer.Core.Jump;
 using ImageViewer.Core.Navigation;
 using ImageViewer.Core.Ordering;
 using ImageViewer.Core.Rename;
@@ -53,6 +55,14 @@ public class MainForm : Form, ICommandHost
     private readonly ToolTip _toolTip = new();
     private ToolStripMenuItem _backItem = null!, _forwardItem = null!, _upItem = null!;
 
+    // ---- フォルダジャンプ ----
+    private readonly FolderJumpService _jump = new(FolderJumpService.DefaultDataDir);
+    private readonly JumpList _jumpList = new();
+    private readonly System.Windows.Forms.Timer _jumpDelay = new() { Interval = 120 };
+    private EverythingClient? _everything;
+    private CancellationTokenSource? _jumpCts;
+    private int _visitsSinceSave;
+
     private readonly SettingsStore _settingsStore = SettingsStore.CreateDefault();
     private AppSettings _settings;
 
@@ -86,7 +96,12 @@ public class MainForm : Form, ICommandHost
         _grid.MouseDown += OnMouseBackForward;
         _tree.MouseDown += OnMouseBackForward;
         _tree.FolderSelected += async (_, path) => await LoadFolderAsync(path);
-        FormClosed += (_, _) => _thumbnails.Dispose();
+        FormClosed += (_, _) =>
+        {
+            _thumbnails.Dispose();
+            _jump.SaveVisits();
+            _everything?.Dispose();
+        };
 
         var statusStrip = new StatusStrip();
         _status = new ToolStripStatusLabel { Spring = true, TextAlign = ContentAlignment.MiddleLeft };
@@ -119,6 +134,7 @@ public class MainForm : Form, ICommandHost
         UpdateCommandStates();
         UpdateNavigationState();
         _tree.SetHome(HomeFolder);
+        SetUpJump();
         // 起動時は指定のフォルダ、無ければホーム（未設定・見つからなければピクチャ）を開く
         string start = initialFolder ?? HomeFolder;
         if (_settings.HomeFolder != null && !Directory.Exists(_settings.HomeFolder) && initialFolder == null)
@@ -153,14 +169,28 @@ public class MainForm : Form, ICommandHost
 
         _address.KeyDown += async (_, e) =>
         {
-            if (e.KeyCode == Keys.Enter)
+            if (_jumpList.Visible && e.KeyCode is Keys.Down or Keys.Up or Keys.PageDown or Keys.PageUp)
             {
                 e.SuppressKeyPress = true;
-                await NavigateFromAddressAsync();
+                _jumpList.MoveSelection(e.KeyCode switch
+                {
+                    Keys.Down => 1, Keys.Up => -1, Keys.PageDown => _jumpList.MaxVisibleItems, _ => -_jumpList.MaxVisibleItems,
+                });
+            }
+            else if (e.KeyCode == Keys.Enter)
+            {
+                e.SuppressKeyPress = true;
+                if (_jumpList.Visible && _jumpList.SelectedPath is string picked) await JumpToAsync(picked);
+                else await NavigateFromAddressAsync();
             }
             else if (e.KeyCode == Keys.Escape)
             {
                 e.SuppressKeyPress = true;
+                if (_jumpList.Visible)
+                {
+                    HideJumpList();
+                    return;
+                }
                 _address.Text = _folder ?? "";
                 _grid.Focus();
             }
@@ -176,12 +206,131 @@ public class MainForm : Form, ICommandHost
         return bar;
     }
 
+    // ---- フォルダジャンプ ----
+
+    private void SetUpJump()
+    {
+        _jumpList.Font = Font;
+        _jumpList.ItemHeight = Font.Height * 2 + LogicalToDeviceUnits(6);
+        Controls.Add(_jumpList);
+        _jumpList.BringToFront();
+        _jumpList.Picked += async (_, path) => await JumpToAsync(path);
+
+        // 入力が止まってから検索する（1 文字ごとに走らせない）
+        _address.TextChanged += (_, _) =>
+        {
+            if (!_address.Focused) return;
+            _jumpDelay.Stop();
+            _jumpDelay.Start();
+        };
+        _jumpDelay.Tick += async (_, _) =>
+        {
+            _jumpDelay.Stop();
+            await UpdateJumpListAsync();
+        };
+        // 候補をクリックしたときはアドレスバーからフォーカスが移るので、それ以外で外れたときだけ閉じる
+        _address.LostFocus += (_, _) => BeginInvoke(() =>
+        {
+            if (!_jumpList.Focused && !_address.Focused) HideJumpList();
+        });
+
+        Shown += (_, _) => _ = _jump.StartAsync(_settings.EffectiveJumpRoots);
+    }
+
+    /// <summary>パスらしい入力（C:\… \\server %VAR% など）はフォルダジャンプではなくパスとして扱う</summary>
+    private static bool LooksLikePath(string text)
+    {
+        string t = text.Trim().Trim('"');
+        return t.Length >= 2 && t[1] == ':' || t.StartsWith(@"\\") || t.StartsWith('%') || t.StartsWith('/') || t.StartsWith('\\');
+    }
+
+    private async Task UpdateJumpListAsync()
+    {
+        string query = _address.Text.Trim();
+        if (!_address.Focused || query.Length == 0 || LooksLikePath(query) || string.Equals(query, _folder, StringComparison.OrdinalIgnoreCase))
+        {
+            HideJumpList();
+            return;
+        }
+
+        _jumpCts?.Cancel();
+        var cts = _jumpCts = new CancellationTokenSource();
+        IReadOnlyList<string>? extra = null;
+        if (_settings.UseEverything && EverythingClient.IsRunning)
+        {
+            _everything ??= new EverythingClient();
+            extra = await _everything.QueryFoldersAsync(query, 300, TimeSpan.FromSeconds(1)); // 応答が無ければ null → 自前の索引
+        }
+        List<JumpResult> results;
+        try
+        {
+            results = await Task.Run(() => _jump.Search(query, 30, extra, cts.Token), cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return; // 次の入力で検索し直している
+        }
+        if (cts.IsCancellationRequested || !_address.Focused) return;
+
+        string? message = results.Count > 0 ? null
+            : _jump.Index == null && _jump.IsBuilding ? "フォルダの索引を作成中です…（少し待ってから入力し直してください）"
+            : "見つかりません";
+        _jumpList.SetResults(results, message);
+        var below = PointToClient(_address.Parent!.PointToScreen(new Point(_address.Left, _address.Bottom)));
+        _jumpList.SetBounds(below.X, below.Y + 1, _address.Width, _jumpList.Height);
+        _jumpList.Visible = true;
+        _jumpList.BringToFront();
+    }
+
+    private void HideJumpList()
+    {
+        _jumpCts?.Cancel();
+        _jumpList.Visible = false;
+    }
+
+    private async Task JumpToAsync(string path)
+    {
+        HideJumpList();
+        if (!Directory.Exists(path))
+        {
+            System.Media.SystemSounds.Beep.Play();
+            Notify($"フォルダが見つかりません（移動・削除された可能性があります）: {path}");
+            return;
+        }
+        _grid.Focus(); // 先にフォーカスを移しておくと、読み込み後にアドレスバーが移動先のパスに更新される
+        await LoadFolderAsync(path);
+    }
+
+    /// <summary>Ctrl+J: 空のアドレスバーから入力を始める</summary>
+    private void StartJump()
+    {
+        _address.Focus();
+        _address.Text = "";
+    }
+
+    private void ShowJumpSettings()
+    {
+        using var dlg = new JumpSettingsDialog(_settings.EffectiveJumpRoots, _settings.UseEverything, _jump);
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        bool rootsChanged = !dlg.Roots.SequenceEqual(_settings.EffectiveJumpRoots, StringComparer.OrdinalIgnoreCase);
+        _settings = _settings with { JumpRoots = dlg.Roots.ToList(), UseEverything = dlg.UseEverything };
+        try
+        {
+            _settingsStore.Save(_settings);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Notify($"設定を保存できませんでした（この起動中だけ有効）: {ex.Message}");
+        }
+        if (rootsChanged) _jump.Rebuild(_settings.EffectiveJumpRoots);
+    }
+
     private async Task NavigateFromAddressAsync()
     {
         if (FolderListing.Normalize(_address.Text) is string folder)
         {
+            _grid.Focus(); // 先にフォーカスを移しておくと、読み込み後にアドレスバーが正規化したパスに更新される
             await LoadFolderAsync(folder);
-            _grid.Focus();
         }
         else
         {
@@ -331,6 +480,9 @@ public class MainForm : Form, ICommandHost
             new ToolStripMenuItem("ホームフォルダを選ぶ(&C)...", null, (_, _) => ChooseHome()),
             new ToolStripSeparator(),
             new ToolStripMenuItem("アドレスバーに入力(&A)", null, (_, _) => _address.Focus()) { ShortcutKeys = Keys.Control | Keys.L },
+            new ToolStripMenuItem("フォルダへジャンプ(&J)", null, (_, _) => StartJump()) { ShortcutKeys = Keys.Control | Keys.J },
+            new ToolStripSeparator(),
+            new ToolStripMenuItem("フォルダジャンプの設定(&O)...", null, (_, _) => ShowJumpSettings()),
         });
         return go;
     }
@@ -605,6 +757,15 @@ public class MainForm : Form, ICommandHost
         _folder = folder;
         _sortMode = mode;
         if (kind == NavKind.New) _history.Navigate(folder);
+        if (!reload)
+        {
+            _jump.RecordVisit(folder);
+            if (++_visitsSinceSave >= 10)
+            {
+                _visitsSinceSave = 0;
+                _ = Task.Run(_jump.SaveVisits);
+            }
+        }
         UpdateSortChecks();
         _grid.SetContents(folders, files, reload);
         if (!_address.Focused) _address.Text = folder;

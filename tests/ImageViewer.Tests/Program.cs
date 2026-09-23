@@ -90,6 +90,10 @@ Directory.Delete(dir, true);
 NavigationTests.Run(Check, dir);
 Directory.Delete(dir, true);
 
+// ---- フォルダジャンプ ----
+JumpTests.Run(Check, dir);
+Directory.Delete(dir, true);
+
 Console.WriteLine(failed ? "\n失敗あり" : "\nすべて OK");
 return failed ? 1 : 0;
 
