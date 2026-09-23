@@ -23,6 +23,10 @@ public class MainForm : Form, ICommandHost
     private readonly ThumbnailService _thumbnails;
     private readonly ThumbnailGrid _grid;
     private readonly ToolStripStatusLabel _status;
+    private readonly ToolStripStatusLabel _selectionInfo = new() { TextAlign = ContentAlignment.MiddleRight };
+    private readonly System.Windows.Forms.Timer _infoDelay = new() { Interval = 100 };
+    private readonly Dictionary<ThumbnailKey, ImageHeader?> _infoCache = new();
+    private CancellationTokenSource? _infoCts;
     private readonly ContextMenuStrip _contextMenu = new();
     // メニュー項目とコマンドの対応（選択が変わるたびに有効/無効を更新する）
     private readonly List<(ToolStripMenuItem Item, IImageCommand Command)> _commandItems = new();
@@ -107,7 +111,19 @@ public class MainForm : Form, ICommandHost
         var statusStrip = new StatusStrip();
         _status = new ToolStripStatusLabel { Spring = true, TextAlign = ContentAlignment.MiddleLeft };
         statusStrip.Items.Add(_status);
+        statusStrip.Items.Add(_selectionInfo);
         AddThumbnailSizeSlider(statusStrip);
+        _grid.SelectionChanged += (_, _) =>
+        {
+            // 選択を素早く切り替えている間は読まない（止まってから読む）
+            _infoDelay.Stop();
+            _infoDelay.Start();
+        };
+        _infoDelay.Tick += async (_, _) =>
+        {
+            _infoDelay.Stop();
+            await UpdateSelectionInfoAsync();
+        };
 
         var split = new NoFocusSplitContainer
         {
@@ -178,6 +194,61 @@ public class MainForm : Form, ICommandHost
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
         };
     }
+
+    // ---- 選択中の画像の情報（フッター） ----
+
+    private async Task UpdateSelectionInfoAsync()
+    {
+        _infoCts?.Cancel();
+        var images = _grid.SelectedImages;
+        var folders = _grid.SelectedFolders;
+
+        if (images.Count == 0 && folders.Count == 1)
+        {
+            _selectionInfo.Text = $"フォルダー ・ {folders[0].LastWriteTime:yyyy/MM/dd HH:mm}";
+            return;
+        }
+        if (images.Count != 1)
+        {
+            _selectionInfo.Text = images.Count == 0 ? "" : $"{images.Count} 枚 ・ 合計 {FormatBytes(images.Sum(SafeLength))}";
+            return;
+        }
+
+        var file = images[0];
+        string rest = $"{FormatBytes(SafeLength(file))} ・ {file.LastWriteTime:yyyy/MM/dd HH:mm}";
+        var key = ThumbnailKey.From(file);
+        if (!_infoCache.TryGetValue(key, out var info))
+        {
+            _selectionInfo.Text = rest; // 大きさを読んでいる間も、サイズと日時は先に出す
+            var cts = _infoCts = new CancellationTokenSource();
+            try
+            {
+                info = await Task.Run(() => ImageLoader.Identify(file.FullName), cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            if (cts.IsCancellationRequested) return;
+            if (_infoCache.Count >= 2000) _infoCache.Clear(); // 覚えておく数に上限
+            _infoCache[key] = info;
+        }
+        _selectionInfo.Text = info != null ? $"{info.Width} × {info.Height} ・ {info.Format} ・ {rest}" : rest;
+    }
+
+    private static long SafeLength(FileInfo f)
+    {
+        try { return f.Length; }
+        catch (IOException) { return 0; }
+    }
+
+    private static string FormatBytes(long bytes) => bytes switch
+    {
+        < 1024 => $"{bytes} B",
+        < 1024 * 1024 => $"{bytes / 1024.0:0.#} KB",
+        < 1024L * 1024 * 1024 => $"{bytes / 1024.0 / 1024:0.#} MB",
+        _ => $"{bytes / 1024.0 / 1024 / 1024:0.##} GB",
+    };
 
     // ---- 新しいフォルダー ----
 

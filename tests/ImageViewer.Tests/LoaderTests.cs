@@ -46,6 +46,12 @@ static class LoaderTests
             check(img.Width == 100 && img.Height == 200 && Near(img[50, 20], Red) && Near(img[50, 180], Blue),
                 $"JPEG の EXIF 回転補正 200x100 → {img.Width}x{img.Height}");
 
+        // ---- 大きさと形式だけを調べる（ヘッダーだけ読む） ----
+        var info = ImageLoader.Identify(rotated);
+        check(info == new ImageHeader(100, 200, "JPEG"), $"Identify: 回転を反映した縦横（{info}）");
+        info = ImageLoader.Identify(small);
+        check(info == new ImageHeader(300, 100, "PNG"), $"Identify: PNG（{info}）");
+
         string gif = Path.Combine(dir, "anim.gif");
         using (var img = new Image<Rgba32>(40, 40, Red))
         {
@@ -69,6 +75,7 @@ static class LoaderTests
         check(Throws<NotSupportedException>(() => ImageLoader.Load(txt)), "未対応の拡張子は NotSupportedException");
         string broken = Path.Combine(dir, "broken.png");
         File.WriteAllBytes(broken, new byte[] { 1, 2, 3, 4, 5 });
+        check(ImageLoader.Identify(broken) == null && ImageLoader.Identify(txt) == null, "Identify: 壊れた・未対応のファイルは null");
         check(Throws<Exception>(() => ImageLoader.Load(broken)), "壊れたファイルは例外（WIC へのフォールバック後も失敗）");
     }
 
@@ -98,6 +105,10 @@ static class LoaderTests
             Console.WriteLine($"SKIP {label}: テスト画像を作れない（{ex.Message.Trim()}）");
             return;
         }
+
+        var info = ImageLoader.Identify(path);
+        var expected = orientation == 6 ? new ImageHeader(200, 400, ext.TrimStart('.').ToUpperInvariant()) : new ImageHeader(400, 200, ext.TrimStart('.').ToUpperInvariant());
+        check(info == expected, $"{label} Identify（{info}）");
 
         using var img = ImageLoader.Load(path, LoadOptions.Thumbnail(100));
         if (orientation == 6)
