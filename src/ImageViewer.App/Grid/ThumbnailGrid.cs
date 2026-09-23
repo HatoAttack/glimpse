@@ -1,5 +1,7 @@
 // サムネイルグリッド
 // 見えているセル＋前後 1 画面分だけサムネイルを要求するので、メモリと処理量はファイル数ではなく画面の広さで決まる
+// 並びは「サブフォルダのタイル（先頭）＋画像」。セル番号 i < FolderCount がフォルダ、それ以降が画像（画像番号 = i - FolderCount）。
+// チェック・手動の並べ替え・コマンドの対象は画像だけ
 using System.Drawing.Drawing2D;
 using ImageViewer.Core.Ordering;
 using ImageViewer.Core.Thumbnails;
@@ -14,9 +16,18 @@ public sealed class ThumbnailGrid : Control
     private readonly System.Windows.Forms.Timer _autoScroll = new() { Interval = 30 };
     private readonly ThumbnailService _thumbnails;
 
+    private IReadOnlyList<DirectoryInfo> _folders = Array.Empty<DirectoryInfo>();
     private IReadOnlyList<FileInfo> _items = Array.Empty<FileInfo>();
     private ThumbnailKey[] _keys = Array.Empty<ThumbnailKey>();
-    private Dictionary<string, int> _indexByPath = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, int> _indexByPath = new(StringComparer.OrdinalIgnoreCase); // パス → セル番号
+    private Bitmap? _folderIcon;
+    private bool _folderIconLoaded;
+
+    private int F => _folders.Count;
+    private int CellCount => _folders.Count + _items.Count;
+    private bool IsFolder(int cell) => cell < _folders.Count;
+    private string CellPath(int cell) => IsFolder(cell) ? _folders[cell].FullName : _items[cell - F].FullName;
+    private string CellName(int cell) => IsFolder(cell) ? _folders[cell].Name : _items[cell - F].Name;
 
     // 見た目の寸法（px、DPI 反映済み）
     private readonly int _thumb, _pad, _gap;
@@ -34,8 +45,11 @@ public sealed class ThumbnailGrid : Control
     /// <summary>エクスプローラー等からフォルダがドロップされた</summary>
     public event EventHandler<string>? FolderDropped;
 
-    /// <summary>ダブルクリックまたは Enter（1 枚表示を開く用）</summary>
+    /// <summary>画像をダブルクリックまたは Enter（1 枚表示を開く用）。引数は画像番号</summary>
     public event EventHandler<int>? ItemActivated;
+
+    /// <summary>フォルダのタイルをダブルクリックまたは Enter（そのフォルダへ移動）</summary>
+    public event EventHandler<DirectoryInfo>? FolderActivated;
 
     public ThumbnailGrid(ThumbnailService thumbnails)
     {
@@ -63,30 +77,48 @@ public sealed class ThumbnailGrid : Control
 
     // ---- 公開 API ----
 
+    /// <summary>画像（フォルダのタイルは含まない）</summary>
     public IReadOnlyList<FileInfo> Items => _items;
-    public IReadOnlyList<int> SelectedIndices => _selection.SelectedIndices;
+    public IReadOnlyList<DirectoryInfo> Folders => _folders;
+
+    /// <summary>選択中の画像（画面の並び順）。コマンドの対象</summary>
+    public IReadOnlyList<FileInfo> SelectedImages =>
+        _selection.SelectedIndices.Where(i => !IsFolder(i)).Select(i => _items[i - F]).ToList();
+
+    /// <summary>選択中の画像の番号（Items での位置）</summary>
+    private IEnumerable<int> SelectedImageIndices => _selection.SelectedIndices.Where(i => !IsFolder(i)).Select(i => i - F);
+
     public int SelectedCount => _selection.Count;
+
+    /// <summary>画像だけを入れ替える（フォルダのタイルはそのまま）。並べ替え・リネーム後に使う</summary>
+    public void SetItems(IReadOnlyList<FileInfo> items, bool reload = false, IReadOnlyDictionary<string, string>? renamed = null) =>
+        SetContents(_folders, items, reload, renamed);
 
     /// <param name="reload">同じフォルダの読み直し（F5・並べ替え・リネーム後）なら true。チェック・選択・スクロール位置を引き継ぐ</param>
     /// <param name="renamed">名前を変えたファイル（元のパス → 新しいパス）。チェックと選択を付け替える</param>
-    public void SetItems(IReadOnlyList<FileInfo> items, bool reload = false, IReadOnlyDictionary<string, string>? renamed = null)
+    public void SetContents(IReadOnlyList<DirectoryInfo> folders, IReadOnlyList<FileInfo> items, bool reload = false,
+        IReadOnlyDictionary<string, string>? renamed = null)
     {
         EndBand();
         string Map(string path) => renamed != null && renamed.TryGetValue(path, out var to) ? to : path;
-        var selectedPaths = reload ? SelectedIndices.Select(i => Map(_items[i].FullName)).ToList() : new List<string>();
+        var selectedPaths = reload ? _selection.SelectedIndices.Select(i => Map(CellPath(i))).ToList() : new List<string>();
+        int focusCell = _selection.Focus;
+        string? focusPath = reload && focusCell >= 0 && focusCell < CellCount ? Map(CellPath(focusCell)) : null;
         if (renamed != null) _marks.Remap(renamed);
         int scrollY = reload ? ScrollY : 0;
 
+        _folders = folders;
         _items = items;
         _keys = items.Select(ThumbnailKey.From).ToArray();
-        _indexByPath = new Dictionary<string, int>(items.Count, StringComparer.OrdinalIgnoreCase);
-        for (int i = 0; i < items.Count; i++) _indexByPath[items[i].FullName] = i;
+        _indexByPath = new Dictionary<string, int>(CellCount, StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < CellCount; i++) _indexByPath[CellPath(i)] = i;
 
-        _selection.Reset(items.Count);
+        _selection.Reset(CellCount);
         if (reload)
         {
             _marks.Retain(items.Select(f => f.FullName));
             _selection.Select(selectedPaths.Where(_indexByPath.ContainsKey).Select(p => _indexByPath[p]));
+            if (focusPath != null && _indexByPath.TryGetValue(focusPath, out int f)) _selection.SetFocus(f);
         }
         else
         {
@@ -112,21 +144,22 @@ public sealed class ThumbnailGrid : Control
 
     public int MarkedCount => _marks.Count;
 
-    public bool IsMarked(int index) => _marks.IsMarked(_items[index].FullName);
+    /// <summary>セルにチェックがあるか（フォルダは常に false）</summary>
+    private bool IsMarked(int cell) => !IsFolder(cell) && _marks.IsMarked(_items[cell - F].FullName);
 
-    /// <summary>現在位置（フォーカス枠）の画像のチェックを付け外し。位置は動かさない</summary>
+    /// <summary>現在位置（フォーカス枠）の画像のチェックを付け外し。位置は動かさない（フォルダでは何もしない）</summary>
     public void ToggleFocusedMark()
     {
         int focus = _selection.Focus;
-        if (focus < 0 || focus >= _items.Count) return;
-        _marks.Toggle(_items[focus].FullName);
+        if (focus < F || focus >= CellCount) return;
+        _marks.Toggle(_items[focus - F].FullName);
         OnMarksChanged();
     }
 
     /// <summary>選択中の画像にまとめてチェックを付ける / 外す</summary>
     public void SetMarkOnSelected(bool marked)
     {
-        _marks.Set(SelectedIndices.Select(i => _items[i].FullName), marked);
+        _marks.Set(SelectedImages.Select(f => f.FullName), marked);
         OnMarksChanged();
     }
 
@@ -151,7 +184,7 @@ public sealed class ThumbnailGrid : Control
     /// <summary>チェックした画像を選択に変える（コマンドは選択中の画像を対象にするので、チェック分を処理する前に使う）</summary>
     public void SelectMarked()
     {
-        _selection.Select(Enumerable.Range(0, _items.Count).Where(IsMarked));
+        _selection.Select(Enumerable.Range(F, _items.Count).Where(IsMarked));
         EnsureVisible(_selection.Focus);
         Invalidate();
         SelectionChanged?.Invoke(this, EventArgs.Empty);
@@ -165,7 +198,7 @@ public sealed class ThumbnailGrid : Control
 
     // ---- 配置・スクロール ----
 
-    private GridLayout CurrentLayout => new(_items.Count, ClientSize.Width - _scroll.Width,
+    private GridLayout CurrentLayout => new(CellCount, ClientSize.Width - _scroll.Width,
         _thumb + _pad * 2, _thumb + _pad * 2 + TextHeight, _gap);
 
     private int ScrollY => _scroll.Value;
@@ -223,15 +256,19 @@ public sealed class ThumbnailGrid : Control
         var (first, count) = layout.VisibleRange(ScrollY, ClientSize.Height);
         int page = Math.Max(count, layout.Columns);
         var order = new List<ThumbnailKey>(count + page * 2);
-        for (int i = first; i < first + count; i++) order.Add(_keys[i]);
-        for (int i = first + count; i < Math.Min(_items.Count, first + count + page); i++) order.Add(_keys[i]);
-        for (int i = first - 1; i >= Math.Max(0, first - page); i--) order.Add(_keys[i]);
+        void Add(int cell)
+        {
+            if (!IsFolder(cell)) order.Add(_keys[cell - F]);
+        }
+        for (int i = first; i < first + count; i++) Add(i);
+        for (int i = first + count; i < Math.Min(CellCount, first + count + page); i++) Add(i);
+        for (int i = first - 1; i >= Math.Max(0, first - page); i--) Add(i);
         _thumbnails.Schedule(order);
     }
 
     private void OnThumbnailReady(ThumbnailKey key)
     {
-        if (!_indexByPath.TryGetValue(key.Path, out int i) || i >= _keys.Length || _keys[i] != key) return;
+        if (!_indexByPath.TryGetValue(key.Path, out int i) || IsFolder(i) || i - F >= _keys.Length || _keys[i - F] != key) return;
         var r = CurrentLayout.CellBounds(i);
         r.Offset(0, -ScrollY);
         if (r.IntersectsWith(ClientRectangle)) Invalidate(r);
@@ -265,11 +302,12 @@ public sealed class ThumbnailGrid : Control
         var cell = layout.CellBounds(i);
 
         var image = ThumbArea(cell);
-        if (_thumbnails.TryGet(_keys[i], out var bmp) == ThumbnailState.Ready) image = Fit(bmp!.Size, image);
+        if (IsFolder(i)) image = FolderIconBounds(image);
+        else if (_thumbnails.TryGet(_keys[i - F], out var bmp) == ThumbnailState.Ready) image = Fit(bmp!.Size, image);
         if (image.Contains(p)) return i;
 
         var name = NameArea(cell);
-        int textWidth = Math.Min(name.Width, TextRenderer.MeasureText(_items[i].Name, Font).Width);
+        int textWidth = Math.Min(name.Width, TextRenderer.MeasureText(CellName(i), Font).Width);
         var text = new Rectangle(name.X + (name.Width - textWidth) / 2, name.Y, textWidth, name.Height);
         return text.Contains(p) ? i : -1;
     }
@@ -322,7 +360,15 @@ public sealed class ThumbnailGrid : Control
             ControlPaint.DrawFocusRectangle(g, Rectangle.Inflate(cell, -2, -2));
 
         var area = ThumbArea(cell);
-        switch (_thumbnails.TryGet(_keys[index], out var bmp))
+        if (IsFolder(index))
+        {
+            DrawFolderIcon(g, FolderIconBounds(area));
+            TextRenderer.DrawText(g, CellName(index), Font, NameArea(cell), ForeColor,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
+            return;
+        }
+
+        switch (_thumbnails.TryGet(_keys[index - F], out var bmp))
         {
             case ThumbnailState.Ready:
                 var dest = Fit(bmp!.Size, area);
@@ -332,7 +378,7 @@ public sealed class ThumbnailGrid : Control
                 break;
             case ThumbnailState.Failed:
                 g.FillRectangle(SystemBrushes.ControlLight, area);
-                TextRenderer.DrawText(g, _items[index].Extension.TrimStart('.').ToUpperInvariant() + "\n読めません",
+                TextRenderer.DrawText(g, _items[index - F].Extension.TrimStart('.').ToUpperInvariant() + "\n読めません",
                     Font, area, SystemColors.GrayText,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
                 break;
@@ -343,8 +389,38 @@ public sealed class ThumbnailGrid : Control
 
         if (IsMarked(index)) DrawCheckBadge(g, area);
 
-        TextRenderer.DrawText(g, _items[index].Name, Font, NameArea(cell), ForeColor,
+        TextRenderer.DrawText(g, CellName(index), Font, NameArea(cell), ForeColor,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
+    }
+
+    /// <summary>フォルダのアイコンの位置（サムネイル枠の中央、枠の 6 割の大きさ）</summary>
+    private Rectangle FolderIconBounds(Rectangle area)
+    {
+        int size = _thumb * 6 / 10;
+        return new Rectangle(area.X + (area.Width - size) / 2, area.Y + (area.Height - size) / 2, size, size);
+    }
+
+    /// <summary>
+    /// フォルダのアイコン。フォルダごとには取らず、普通のフォルダのアイコンを 1 回だけ取って使い回す（軽さ優先）。
+    /// 取れなければ簡単なフォルダの形を描く
+    /// </summary>
+    private void DrawFolderIcon(Graphics g, Rectangle r)
+    {
+        if (!_folderIconLoaded)
+        {
+            _folderIconLoaded = true;
+            _folderIcon = ShellThumbnail.TryGetIcon(AppContext.BaseDirectory, r.Width);
+        }
+        if (_folderIcon != null)
+        {
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.DrawImage(_folderIcon, Fit(_folderIcon.Size, r));
+            return;
+        }
+        using var body = new SolidBrush(Color.FromArgb(240, 196, 80));
+        using var tab = new SolidBrush(Color.FromArgb(224, 170, 50));
+        g.FillRectangle(tab, r.X, r.Y + r.Height / 6, r.Width * 2 / 5, r.Height / 6);
+        g.FillRectangle(body, r.X, r.Y + r.Height / 4, r.Width, r.Height * 5 / 8);
     }
 
     /// <summary>サムネイル枠の左上に丸いチェックの印（画像の上に重ねても見えるよう白い縁取り付き）</summary>
@@ -467,7 +543,13 @@ public sealed class ThumbnailGrid : Control
     {
         base.OnMouseDoubleClick(e);
         int index = HitTest(e.Location);
-        if (e.Button == MouseButtons.Left && index >= 0) ItemActivated?.Invoke(this, index);
+        if (e.Button == MouseButtons.Left && index >= 0) Activate(index);
+    }
+
+    private void Activate(int cell)
+    {
+        if (IsFolder(cell)) FolderActivated?.Invoke(this, _folders[cell]);
+        else ItemActivated?.Invoke(this, cell - F);
     }
 
     protected override void OnMouseWheel(MouseEventArgs e)
@@ -494,8 +576,8 @@ public sealed class ThumbnailGrid : Control
     {
         _dragCandidate = false;
         _pendingClick = -1;
-        var paths = SelectedIndices.Select(i => _items[i].FullName).ToArray();
-        if (paths.Length == 0) return;
+        var paths = SelectedImages.Select(f => f.FullName).ToArray();
+        if (paths.Length == 0) return; // フォルダだけを掴んだときは何もしない
 
         var data = new DataObject();
         data.SetData(DataFormats.FileDrop, paths);
@@ -541,7 +623,9 @@ public sealed class ThumbnailGrid : Control
         else if (client.Y > ClientSize.Height - edge) SetScroll(ScrollY + Math.Max(4, (client.Y - ClientSize.Height + edge) / 2));
 
         var (index, marker) = CurrentLayout.InsertionAt(client.X, client.Y + ScrollY, Math.Max(2, LogicalToDeviceUnits(3)));
-        SetDropIndex(index, marker);
+        // フォルダのタイルの間には入れられない（並べ替えは画像どうしだけ）
+        if (index < F || (index == F && F > 0 && IsBeforeFirstImageRowStart(marker))) SetDropIndex(-1, Rectangle.Empty);
+        else SetDropIndex(index, marker);
     }
 
     protected override void OnDragLeave(EventArgs e)
@@ -563,7 +647,7 @@ public sealed class ThumbnailGrid : Control
         SetDropIndex(-1, Rectangle.Empty);
         if (insertAt < 0) return;
 
-        var order = ManualOrder.Move(_items.Count, SelectedIndices, insertAt);
+        var order = ManualOrder.Move(_items.Count, SelectedImageIndices, insertAt - F);
         if (order.Select((from, to) => from == to).All(same => same)) return; // 動いていない
         SetItems(order.Select(i => _items[i]).ToList(), reload: true);
         OrderChanged?.Invoke(this, EventArgs.Empty);
@@ -576,6 +660,16 @@ public sealed class ThumbnailGrid : Control
         if (!_dragOverSelf) return;
         e.UseDefaultCursors = false;
         Cursor.Current = Cursors.Default;
+    }
+
+    /// <summary>
+    /// 挿入位置が最初の画像の直前でも、縦線が最後のフォルダの右側（同じ行の途中）に出るなら
+    /// それは「フォルダの後ろ」なので受け付けない（最初の画像の左に出るときだけ受け付ける）
+    /// </summary>
+    private bool IsBeforeFirstImageRowStart(Rectangle marker)
+    {
+        var firstImage = CurrentLayout.CellBounds(F);
+        return marker.Top != firstImage.Top || marker.Right > firstImage.Left + _gap;
     }
 
     private void SetDropIndex(int index, Rectangle marker)
@@ -665,7 +759,7 @@ public sealed class ThumbnailGrid : Control
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
-        if (_items.Count == 0) return;
+        if (CellCount == 0) return;
         var layout = CurrentLayout;
         int cols = layout.Columns;
         int pageItems = Math.Max(1, ClientSize.Height / layout.RowHeight) * cols;
@@ -680,7 +774,7 @@ public sealed class ThumbnailGrid : Control
             case Keys.PageUp: _selection.Move(-pageItems, e.Shift, e.Control); break;
             case Keys.PageDown: _selection.Move(pageItems, e.Shift, e.Control); break;
             case Keys.Home: _selection.MoveTo(0, e.Shift, e.Control); break;
-            case Keys.End: _selection.MoveTo(_items.Count - 1, e.Shift, e.Control); break;
+            case Keys.End: _selection.MoveTo(CellCount - 1, e.Shift, e.Control); break;
             case Keys.Space when e.Control && focus >= 0: _selection.CtrlClick(focus); break;
             case Keys.Oem5 when !e.Control && !e.Alt:
                 // ¥ = 現在位置のチェックを付け外し、Shift+¥ = 選択中の画像にチェック（どちらも位置は動かさない）
@@ -690,7 +784,7 @@ public sealed class ThumbnailGrid : Control
                 e.SuppressKeyPress = true;
                 return;
             case Keys.Enter when focus >= 0:
-                ItemActivated?.Invoke(this, focus);
+                Activate(focus);
                 e.Handled = true;
                 return;
             default:
@@ -708,6 +802,7 @@ public sealed class ThumbnailGrid : Control
         {
             _thumbnails.ThumbnailReady -= OnThumbnailReady;
             _autoScroll.Dispose();
+            _folderIcon?.Dispose();
         }
         base.Dispose(disposing);
     }

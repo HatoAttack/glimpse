@@ -81,6 +81,12 @@ public sealed class SelectionModel
 
     public void Clear() => _selected.Clear();
 
+    /// <summary>選択は変えずに現在位置（と Shift の起点）だけを移す</summary>
+    public void SetFocus(int index)
+    {
+        if (Valid(index)) Anchor = Focus = index;
+    }
+
     /// <summary>指定したものだけを選択（範囲外は無視）。先頭の項目を起点・現在位置にする</summary>
     public void Select(IEnumerable<int> indices)
     {
