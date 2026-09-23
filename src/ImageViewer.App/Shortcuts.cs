@@ -18,6 +18,8 @@ public static class Shortcuts
                 "del" => Keys.Delete,
                 "esc" => Keys.Escape,
                 "enter" => Keys.Enter,
+                // JIS 配列の ¥ キーと US 配列の \ キーはどちらも Oem5
+                "yen" or "¥" or "\\" => Keys.Oem5,
                 _ when raw.Length == 1 && char.IsDigit(raw[0]) => Keys.D0 + (raw[0] - '0'),
                 _ => Enum.TryParse<Keys>(raw, ignoreCase: true, out var k) ? k : Keys.None,
             };

@@ -9,6 +9,7 @@ public sealed class ThumbnailGrid : Control
 {
     private readonly VScrollBar _scroll = new() { Dock = DockStyle.Right, Enabled = false };
     private readonly SelectionModel _selection = new();
+    private readonly MarkSet _marks = new();
     private readonly System.Windows.Forms.Timer _autoScroll = new() { Interval = 30 };
     private readonly ThumbnailService _thumbnails;
 
@@ -22,6 +23,9 @@ public sealed class ThumbnailGrid : Control
 
     /// <summary>選択が変わった</summary>
     public event EventHandler? SelectionChanged;
+
+    /// <summary>チェックが変わった</summary>
+    public event EventHandler? MarksChanged;
 
     /// <summary>ダブルクリックまたは Enter（1 枚表示を開く用）</summary>
     public event EventHandler<int>? ItemActivated;
@@ -55,19 +59,35 @@ public sealed class ThumbnailGrid : Control
     public IReadOnlyList<int> SelectedIndices => _selection.SelectedIndices;
     public int SelectedCount => _selection.Count;
 
-    public void SetItems(IReadOnlyList<FileInfo> items)
+    /// <param name="reload">同じフォルダの読み直し（F5・リネーム後）なら true。チェック・選択・スクロール位置を引き継ぐ</param>
+    public void SetItems(IReadOnlyList<FileInfo> items, bool reload = false)
     {
         EndBand();
+        var selectedPaths = reload ? SelectedIndices.Select(i => _items[i].FullName).ToList() : new List<string>();
+        int scrollY = reload ? ScrollY : 0;
+
         _items = items;
         _keys = items.Select(ThumbnailKey.From).ToArray();
         _indexByPath = new Dictionary<string, int>(items.Count, StringComparer.OrdinalIgnoreCase);
         for (int i = 0; i < items.Count; i++) _indexByPath[items[i].FullName] = i;
+
         _selection.Reset(items.Count);
+        if (reload)
+        {
+            _marks.Retain(items.Select(f => f.FullName));
+            _selection.Select(selectedPaths.Where(_indexByPath.ContainsKey).Select(p => _indexByPath[p]));
+        }
+        else
+        {
+            _marks.Clear();
+        }
+
         UpdateScrollBar();
-        _scroll.Value = 0;
+        SetScroll(scrollY);
         Invalidate();
         RequestThumbnails();
         SelectionChanged?.Invoke(this, EventArgs.Empty);
+        MarksChanged?.Invoke(this, EventArgs.Empty);
     }
 
     public void SelectAll()
@@ -75,6 +95,61 @@ public sealed class ThumbnailGrid : Control
         _selection.SelectAll();
         Invalidate();
         SelectionChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    // ---- チェック ----
+
+    public int MarkedCount => _marks.Count;
+
+    public bool IsMarked(int index) => _marks.IsMarked(_items[index].FullName);
+
+    /// <summary>現在位置（フォーカス枠）の画像のチェックを付け外し。位置は動かさない</summary>
+    public void ToggleFocusedMark()
+    {
+        int focus = _selection.Focus;
+        if (focus < 0 || focus >= _items.Count) return;
+        _marks.Toggle(_items[focus].FullName);
+        OnMarksChanged();
+    }
+
+    /// <summary>選択中の画像にまとめてチェックを付ける / 外す</summary>
+    public void SetMarkOnSelected(bool marked)
+    {
+        _marks.Set(SelectedIndices.Select(i => _items[i].FullName), marked);
+        OnMarksChanged();
+    }
+
+    public void MarkAll()
+    {
+        _marks.Set(_items.Select(f => f.FullName), true);
+        OnMarksChanged();
+    }
+
+    public void InvertMarks()
+    {
+        _marks.Invert(_items.Select(f => f.FullName));
+        OnMarksChanged();
+    }
+
+    public void ClearMarks()
+    {
+        _marks.Clear();
+        OnMarksChanged();
+    }
+
+    /// <summary>チェックした画像を選択に変える（コマンドは選択中の画像を対象にするので、チェック分を処理する前に使う）</summary>
+    public void SelectMarked()
+    {
+        _selection.Select(Enumerable.Range(0, _items.Count).Where(IsMarked));
+        EnsureVisible(_selection.Focus);
+        Invalidate();
+        SelectionChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void OnMarksChanged()
+    {
+        Invalidate();
+        MarksChanged?.Invoke(this, EventArgs.Empty);
     }
 
     // ---- 配置・スクロール ----
@@ -247,9 +322,35 @@ public sealed class ThumbnailGrid : Control
                 break;
         }
 
+        if (IsMarked(index)) DrawCheckBadge(g, area);
+
         TextRenderer.DrawText(g, _items[index].Name, Font, NameArea(cell), ForeColor,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
     }
+
+    /// <summary>サムネイル枠の左上に丸いチェックの印（画像の上に重ねても見えるよう白い縁取り付き）</summary>
+    private void DrawCheckBadge(Graphics g, Rectangle area)
+    {
+        int d = LogicalToDeviceUnits(22);
+        var r = new Rectangle(area.X, area.Y, d, d);
+        var oldMode = g.SmoothingMode;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        using (var fill = new SolidBrush(CheckColor))
+            g.FillEllipse(fill, r);
+        using (var ring = new Pen(Color.White, Math.Max(1.5f, d / 12f)))
+            g.DrawEllipse(ring, r);
+        using (var tick = new Pen(Color.White, Math.Max(2f, d / 9f)) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+            g.DrawLines(tick, new[]
+            {
+                new PointF(r.X + d * 0.27f, r.Y + d * 0.52f),
+                new PointF(r.X + d * 0.44f, r.Y + d * 0.68f),
+                new PointF(r.X + d * 0.74f, r.Y + d * 0.34f),
+            });
+        g.SmoothingMode = oldMode;
+    }
+
+    /// <summary>チェックの色（選択の青と区別できる橙）</summary>
+    private static readonly Color CheckColor = Color.FromArgb(232, 112, 0);
 
     protected override void OnGotFocus(EventArgs e)
     {
@@ -426,6 +527,13 @@ public sealed class ThumbnailGrid : Control
             case Keys.Home: _selection.MoveTo(0, e.Shift, e.Control); break;
             case Keys.End: _selection.MoveTo(_items.Count - 1, e.Shift, e.Control); break;
             case Keys.Space when e.Control && focus >= 0: _selection.CtrlClick(focus); break;
+            case Keys.Oem5 when !e.Control && !e.Alt:
+                // ¥ = 現在位置のチェックを付け外し、Shift+¥ = 選択中の画像にチェック（どちらも位置は動かさない）
+                if (e.Shift) SetMarkOnSelected(true);
+                else ToggleFocusedMark();
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                return;
             case Keys.Enter when focus >= 0:
                 ItemActivated?.Invoke(this, focus);
                 e.Handled = true;

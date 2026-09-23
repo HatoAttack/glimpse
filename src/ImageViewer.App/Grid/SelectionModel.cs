@@ -81,6 +81,15 @@ public sealed class SelectionModel
 
     public void Clear() => _selected.Clear();
 
+    /// <summary>指定したものだけを選択（範囲外は無視）。先頭の項目を起点・現在位置にする</summary>
+    public void Select(IEnumerable<int> indices)
+    {
+        _selected.Clear();
+        foreach (int i in indices)
+            if (Valid(i)) _selected.Add(i);
+        if (_selected.Count > 0) Anchor = Focus = _selected.Min();
+    }
+
     // ---- ドラッグ範囲選択 ----
 
     public bool IsBanding => _bandBase != null;

@@ -114,6 +114,28 @@ static class ThumbnailTests
         s.UpdateBand(new[] { -1, 19, 25 });
         s.EndBand();
         check(s.SelectedIndices.SequenceEqual(new[] { 19 }), "範囲外の番号は無視");
+
+        s.Reset(10);
+        s.Select(new[] { 7, 2, 4, 99 });
+        check(s.SelectedIndices.SequenceEqual(new[] { 2, 4, 7 }) && s.Focus == 2 && s.Anchor == 2, "指定した番号だけを選択（先頭が起点）");
+        s.Select(Array.Empty<int>());
+        check(s.Count == 0 && s.Focus == 2, "空で選択すると解除（位置は残す）");
+
+        // ---- チェック ----
+        var m = new MarkSet();
+        m.Toggle(@"C:\a\1.jpg");
+        m.Toggle(@"C:\a\2.jpg");
+        m.Toggle(@"C:\A\1.JPG");
+        check(m.Count == 1 && m.IsMarked(@"C:\a\2.jpg"), "付け外し（パスの大文字小文字は同一視）");
+        m.Set(new[] { @"C:\a\3.jpg", @"C:\a\4.jpg" }, true);
+        m.Set(new[] { @"C:\a\2.jpg" }, false);
+        check(m.Count == 2 && !m.IsMarked(@"C:\a\2.jpg"), "まとめて付ける / 外す");
+        m.Invert(new[] { @"C:\a\1.jpg", @"C:\a\3.jpg" });
+        check(m.IsMarked(@"C:\a\1.jpg") && !m.IsMarked(@"C:\a\3.jpg") && m.IsMarked(@"C:\a\4.jpg"), "反転は指定した範囲だけ");
+        m.Retain(new[] { @"C:\a\1.jpg", @"C:\a\2.jpg" });
+        check(m.Count == 1 && m.IsMarked(@"C:\a\1.jpg"), "無くなったファイルのチェックは捨てる");
+        m.Clear();
+        check(m.Count == 0, "全解除");
     }
 
     // ---- ThumbnailService（生成処理は差し替え） ----

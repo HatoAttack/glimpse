@@ -37,6 +37,7 @@ public class MainForm : Form, ICommandHost
             SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext());
         _grid = new ThumbnailGrid(_thumbnails) { Dock = DockStyle.Fill, ContextMenuStrip = _contextMenu };
         _grid.SelectionChanged += (_, _) => UpdateCommandStates();
+        _grid.MarksChanged += (_, _) => UpdateCommandStates();
         FormClosed += (_, _) => _thumbnails.Dispose();
 
         var statusStrip = new StatusStrip();
@@ -86,6 +87,7 @@ public class MainForm : Form, ICommandHost
         editMenu.DropDownItems.Add(new ToolStripMenuItem("すべて選択(&A)", null,
             (_, _) => _grid.SelectAll()) { ShortcutKeys = Keys.Control | Keys.A });
         menu.Items.Add(editMenu);
+        menu.Items.Add(BuildMarkMenu());
 
         // 登録済みコマンドをカテゴリ名のメニューに追加（同名のメニューがあればそこへ追記）
         foreach (var group in _registry.ByCategory())
@@ -114,6 +116,32 @@ public class MainForm : Form, ICommandHost
         return menu;
     }
 
+    /// <summary>
+    /// チェック（マーク）メニュー。¥ / Shift+¥ は修飾キー無しでメニューのショートカットにできないので
+    /// グリッド側のキー処理で受け、メニューには表示だけする
+    /// </summary>
+    private ToolStripMenuItem BuildMarkMenu()
+    {
+        var markMenu = new ToolStripMenuItem("チェック(&K)");
+        markMenu.DropDownItems.AddRange(new ToolStripItem[]
+        {
+            new ToolStripMenuItem("チェックを付ける / 外す(&T)", null, (_, _) => _grid.ToggleFocusedMark())
+                { ShortcutKeyDisplayString = "¥" },
+            new ToolStripMenuItem("選択中の画像にチェック(&M)", null, (_, _) => _grid.SetMarkOnSelected(true))
+                { ShortcutKeyDisplayString = "Shift+¥" },
+            new ToolStripMenuItem("選択中の画像のチェックを外す(&U)", null, (_, _) => _grid.SetMarkOnSelected(false)),
+            new ToolStripSeparator(),
+            new ToolStripMenuItem("チェックした画像を選択(&S)", null, (_, _) => _grid.SelectMarked())
+                { ShortcutKeys = Keys.Control | Keys.Oem5, ShortcutKeyDisplayString = "Ctrl+¥" },
+            new ToolStripSeparator(),
+            new ToolStripMenuItem("すべての画像にチェック(&A)", null, (_, _) => _grid.MarkAll()),
+            new ToolStripMenuItem("チェックを反転(&I)", null, (_, _) => _grid.InvertMarks()),
+            new ToolStripMenuItem("チェックをすべて外す(&C)", null, (_, _) => _grid.ClearMarks())
+                { ShortcutKeys = Keys.Control | Keys.Shift | Keys.Oem5, ShortcutKeyDisplayString = "Ctrl+Shift+¥" },
+        });
+        return markMenu;
+    }
+
     /// <summary>ImageSharp で常に読める形式と、この PC の WIC 拡張機能で読める形式を表示</summary>
     private void ShowSupportedFormats()
     {
@@ -134,6 +162,11 @@ public class MainForm : Form, ICommandHost
 
     private void BuildContextMenu()
     {
+        _contextMenu.Items.Add(new ToolStripMenuItem("チェックを付ける", null, (_, _) => _grid.SetMarkOnSelected(true))
+            { ShortcutKeyDisplayString = "Shift+¥" });
+        _contextMenu.Items.Add(new ToolStripMenuItem("チェックを外す", null, (_, _) => _grid.SetMarkOnSelected(false)));
+        _contextMenu.Items.Add(new ToolStripMenuItem("チェックした画像を選択", null, (_, _) => _grid.SelectMarked())
+            { ShortcutKeyDisplayString = "Ctrl+¥" });
         foreach (var group in _registry.ByCategory())
         {
             if (_contextMenu.Items.Count > 0) _contextMenu.Items.Add(new ToolStripSeparator());
@@ -171,9 +204,10 @@ public class MainForm : Form, ICommandHost
             item.Enabled = cmd.CanExecute(paths);
 
         string where = _folder ?? "フォルダ未選択（Ctrl+O で開く / フォルダをドロップ）";
-        _status.Text = paths.Count > 0
-            ? $"{where}   {_grid.Items.Count} 枚中 {paths.Count} 枚選択"
-            : $"{where}   {_grid.Items.Count} 枚";
+        string text = $"{where}   {_grid.Items.Count} 枚";
+        if (paths.Count > 0) text += $"   選択 {paths.Count} 枚";
+        if (_grid.MarkedCount > 0) text += $"   チェック {_grid.MarkedCount} 枚";
+        _status.Text = text;
     }
 
     private async Task ExecuteAsync(IImageCommand cmd)
@@ -228,8 +262,9 @@ public class MainForm : Form, ICommandHost
             return;
         }
 
+        bool reload = string.Equals(_folder, folder, StringComparison.OrdinalIgnoreCase);
         _folder = folder;
-        _grid.SetItems(files);
+        _grid.SetItems(files, reload);
         _grid.Focus();
         Text = $"{Path.GetFileName(folder.TrimEnd('\\'))} - {AppTitle}";
         UpdateCommandStates();
