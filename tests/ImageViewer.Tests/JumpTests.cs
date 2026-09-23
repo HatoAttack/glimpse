@@ -80,6 +80,52 @@ static class JumpTests
         SpinWait.SpinUntil(() => !service.IsBuilding && service.Index != null, 10000);
         check(service.Index != null, "サービスが索引を作る（保存が無いとき）");
 
+        // 最初のビルド完了時に次の指定を入れ、最後の roots が使われることを確認する
+        string nextRoot = Path.Combine(dir, "next");
+        string latestRoot = Path.Combine(dir, "latest");
+        Directory.CreateDirectory(nextRoot);
+        Directory.CreateDirectory(latestRoot);
+        var rebuild = new FolderJumpService(Path.Combine(dir, "rebuild"));
+        using var firstBuilt = new ManualResetEventSlim();
+        using var continueBuild = new ManualResetEventSlim();
+        int changes = 0;
+        rebuild.IndexChanged += () =>
+        {
+            if (Interlocked.Increment(ref changes) != 1) return;
+            firstBuilt.Set();
+            continueBuild.Wait();
+        };
+        rebuild.Rebuild(new[] { root });
+        bool firstCompleted = firstBuilt.Wait(10000);
+        if (firstCompleted)
+        {
+            rebuild.Rebuild(new[] { nextRoot });
+            rebuild.Rebuild(new[] { latestRoot });
+        }
+        continueBuild.Set();
+        bool latestCompleted = SpinWait.SpinUntil(() => !rebuild.IsBuilding, 10000);
+        check(firstCompleted && latestCompleted && rebuild.Index?.Roots.SequenceEqual(new[] { Path.GetFullPath(latestRoot) }) == true
+              && Volatile.Read(ref changes) == 2, "ビルド中の再指定は最新 roots で再構築する");
+
+        // 先に頼まれた作り直し（設定の変更など）の後で起動時の処理が走っても、保存してあった古い索引・古い指定で上書きしない
+        var late = new FolderJumpService(Path.Combine(dir, "rebuild")); // 保存してある索引は latestRoot のもの
+        using var lateBuilt = new ManualResetEventSlim();
+        using var lateContinue = new ManualResetEventSlim();
+        int lateChanges = 0;
+        late.IndexChanged += () =>
+        {
+            if (Interlocked.Increment(ref lateChanges) != 1) return;
+            lateBuilt.Set();
+            lateContinue.Wait();
+        };
+        late.Rebuild(new[] { nextRoot });
+        bool lateFirst = lateBuilt.Wait(10000);
+        late.StartAsync(new[] { root }).Wait(10000); // 別の roots（本来なら作り直しを頼む）
+        lateContinue.Set();
+        bool lateDone = SpinWait.SpinUntil(() => !late.IsBuilding, 10000);
+        check(lateFirst && lateDone && late.Index?.Roots.SequenceEqual(new[] { Path.GetFullPath(nextRoot) }) == true
+              && Volatile.Read(ref lateChanges) == 1, "起動時の処理は、先に頼まれた作り直しを古い索引・古い指定で上書きしない");
+
         var r = service.Search("旅行");
         check(r.Count == 2 && r.All(x => x.Name == "旅行"), $"名前で探す（{string.Join(" / ", r.Select(x => x.Path))}）");
         r = service.Search("2024 旅行");

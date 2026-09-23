@@ -18,6 +18,7 @@ public sealed class QuickLookView : Control
     private int _index = -1;
     private readonly Dictionary<string, Bitmap> _cache = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _failed = new(StringComparer.OrdinalIgnoreCase);
+    private readonly SemaphoreSlim _decodeGate = new(1, 1);
     private CancellationTokenSource? _loadCts;
     private readonly Stopwatch _openedFor = new();
     private bool _openedByKey;
@@ -128,14 +129,28 @@ public sealed class QuickLookView : Control
             Bitmap? bmp = null;
             try
             {
-                bmp = await Task.Run(() =>
+                await _decodeGate.WaitAsync(cts.Token);
+                try
                 {
-                    using var image = ImageLoader.Load(path, LoadOptions.Thumbnail(maxEdge));
-                    return ThumbnailGenerator.ToPArgbBitmap(image);
-                });
+                    cts.Token.ThrowIfCancellationRequested();
+                    bmp = await Task.Run(() =>
+                    {
+                        using var image = ImageLoader.Load(path, LoadOptions.Thumbnail(maxEdge));
+                        return ThumbnailGenerator.ToPArgbBitmap(image);
+                    });
+                }
+                finally
+                {
+                    _decodeGate.Release();
+                }
+            }
+            catch (OperationCanceledException) when (cts.IsCancellationRequested)
+            {
+                return;
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
+                if (cts.IsCancellationRequested) return;
                 _failed.Add(path);
             }
             if (bmp == null) continue;
