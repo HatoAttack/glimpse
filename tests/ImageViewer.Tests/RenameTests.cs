@@ -39,6 +39,8 @@ static class RenameTests
         check(RenamePlanner.ValidateName("a?.jpg") != null && RenamePlanner.ValidateName("CON.jpg") != null
               && RenamePlanner.ValidateName("x .jpg") == null && RenamePlanner.ValidateName("x.") != null && RenamePlanner.ValidateName(".jpg") != null,
             "使えない文字・予約名・末尾の . ・空の名前");
+        plan = RenamePlanner.Plan(new[] { P("a.jpg") }, new RenameOptions { Prefix = @"..\moved_" });
+        check(plan[0].Status == RenameStatus.Error, "\\ を含む名前はエラー（別のフォルダへ移さない）");
 
         // ---- 実行: 入れ替え ----
         Make("a.jpg", "b.jpg");

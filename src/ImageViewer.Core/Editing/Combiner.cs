@@ -1,4 +1,6 @@
 // 連結（image-sizechange の連結タブから移植）。複数の画像を横・縦・グリッドに並べて 1 枚にする
+// 先に画像の大きさだけから配置を計算し（Layout）、それから描く（Render）。
+// プレビューは配置を計算した後、はじめから縮めた大きさのキャンバスに描くので、何百枚並べても大きなキャンバスを作らない
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
@@ -42,6 +44,9 @@ public sealed record CombineOptions
     };
 }
 
+/// <summary>連結の配置: 全体の大きさと、各画像を置く位置と大きさ（画素は扱わない）</summary>
+public sealed record CombineLayoutResult(Size Canvas, IReadOnlyList<Rectangle> Places);
+
 public static class Combiner
 {
     /// <summary>"#RGB" / "#RRGGBB" を色に。透過なら完全な透明</summary>
@@ -77,14 +82,19 @@ public static class Combiner
     }
 
     /// <summary>
-    /// プレビュー用に、どの画像も同じ比率 scale で縮小して読む（一番大きい画像の長辺が maxEdge になる比率。拡大はしない）。
+    /// プレビュー用に、どの画像も同じ比率 scale で縮小して読む。比率は「一番大きい画像の長辺が maxEdge 以下」かつ
+    /// 「全部の画素数の合計が maxTotalPixels 以下」になるように決める（何百枚選んでもメモリが増えすぎない。拡大はしない）。
     /// 大きさを揃える計算が原寸と同じになるよう、全部同じ比率にする
     /// </summary>
-    public static (List<Image<Rgba32>> Images, double Scale) LoadForPreview(IReadOnlyList<string> paths, int maxEdge, CancellationToken ct = default)
+    public static (List<Image<Rgba32>> Images, double Scale) LoadForPreview(IReadOnlyList<string> paths, int maxEdge, long maxTotalPixels,
+        CancellationToken ct = default)
     {
         var headers = paths.Select(p => Imaging.ImageLoader.Identify(p)).ToList();
         int longest = headers.Max(h => h == null ? 0 : Math.Max(h.Width, h.Height));
-        double scale = longest > maxEdge ? (double)maxEdge / longest : 1;
+        double totalPixels = headers.Sum(h => h == null ? 0 : (double)h.Width * h.Height);
+        double scale = Math.Min(1, Math.Min(
+            longest > 0 ? (double)maxEdge / longest : 1,
+            totalPixels > 0 ? Math.Sqrt(maxTotalPixels / totalPixels) : 1));
         var images = new List<Image<Rgba32>>(paths.Count);
         try
         {
@@ -92,8 +102,9 @@ public static class Combiner
             {
                 ct.ThrowIfCancellationRequested();
                 var h = headers[i];
-                var options = h == null || scale >= 1 ? Imaging.LoadOptions.Full
-                    : Imaging.LoadOptions.Thumbnail(Math.Max(1, (int)Math.Round(Math.Max(h.Width, h.Height) * scale)));
+                // 大きさが分からない画像も縮小して読む（原寸で読んでメモリを使い切らないように）
+                var options = h != null && scale >= 1 ? Imaging.LoadOptions.Full
+                    : Imaging.LoadOptions.Thumbnail(Math.Max(1, (int)Math.Round((h != null ? Math.Max(h.Width, h.Height) : maxEdge) * scale)));
                 images.Add(Imaging.ImageLoader.Load(paths[i], options));
             }
             return (images, scale);
@@ -105,33 +116,69 @@ public static class Combiner
         }
     }
 
-    public static Image<Rgba32> Combine(IReadOnlyList<Image<Rgba32>> images, CombineOptions options)
-    {
-        if (images.Count == 0) throw new ArgumentException("画像がありません");
-        var bg = ParseColor(options.Background, options.Transparent);
-        return options.Layout == CombineLayout.Grid
-            ? CombineGrid(images, Math.Max(1, options.Columns), options.Normalize == CombineNormalize.Fixed ? options.TargetPx : null,
-                options.Spacing, options.Padding, bg)
-            : CombineLinear(images, options.Layout == CombineLayout.Horizontal, options.Normalize, options.TargetPx,
-                options.Align, options.Spacing, options.Padding, bg);
-    }
+    /// <summary>連結した画像（原寸）</summary>
+    public static Image<Rgba32> Combine(IReadOnlyList<Image<Rgba32>> images, CombineOptions options) =>
+        Render(images, Layout(SizesOf(images), options), options, maxEdge: null);
 
-    /// <summary>高さ（byHeight）または幅を target に合わせて比例で拡大縮小。同じならそのまま返す（呼び出し側は所有に注意）</summary>
-    private static Image<Rgba32> ResizeTo(Image<Rgba32> image, int target, bool byHeight)
-    {
-        int w = image.Width, h = image.Height;
-        if (byHeight)
-            return h == target ? image : image.Clone(x => x.Resize(Math.Max(1, (int)Math.Round((double)w * target / h)), target, KnownResamplers.Lanczos3));
-        return w == target ? image : image.Clone(x => x.Resize(target, Math.Max(1, (int)Math.Round((double)h * target / w)), KnownResamplers.Lanczos3));
-    }
+    /// <summary>長辺が maxEdge 以下になるよう縮めて連結する（プレビュー用。はじめから縮めたキャンバスに描く）</summary>
+    public static Image<Rgba32> CombineBounded(IReadOnlyList<Image<Rgba32>> images, CombineOptions options, int maxEdge) =>
+        Render(images, Layout(SizesOf(images), options), options, maxEdge);
 
-    /// <summary>比を保って cw×ch に収まるよう縮小（拡大はしない）</summary>
-    private static Image<Rgba32> Contain(Image<Rgba32> image, int cw, int ch)
+    private static List<Size> SizesOf(IReadOnlyList<Image<Rgba32>> images) => images.Select(im => new Size(im.Width, im.Height)).ToList();
+
+    /// <summary>画像の大きさだけから配置を計算する</summary>
+    public static CombineLayoutResult Layout(IReadOnlyList<Size> sizes, CombineOptions options)
     {
-        double s = Math.Min((double)cw / image.Width, (double)ch / image.Height);
-        if (s >= 1) return image;
-        return image.Clone(x => x.Resize(Math.Max(1, (int)Math.Round(image.Width * s)), Math.Max(1, (int)Math.Round(image.Height * s)),
-            KnownResamplers.Lanczos3));
+        if (sizes.Count == 0) throw new ArgumentException("画像がありません");
+        int spacing = Math.Max(0, options.Spacing), padding = Math.Max(0, options.Padding);
+        var places = new List<Rectangle>(sizes.Count);
+
+        if (options.Layout == CombineLayout.Grid)
+        {
+            // セルは元の一番大きい幅 × 高さか、指定 px 角。各画像は比を保ってセルに収め（拡大はしない）、中央に置く
+            bool fixedCell = options.Normalize == CombineNormalize.Fixed;
+            int cw = fixedCell ? Math.Max(1, options.TargetPx) : sizes.Max(s => s.Width);
+            int ch = fixedCell ? Math.Max(1, options.TargetPx) : sizes.Max(s => s.Height);
+            int columns = Math.Min(Math.Max(1, options.Columns), sizes.Count);
+            int rows = (sizes.Count + columns - 1) / columns;
+            for (int i = 0; i < sizes.Count; i++)
+            {
+                var size = sizes[i];
+                double s = Math.Min((double)cw / size.Width, (double)ch / size.Height);
+                int w = s >= 1 ? size.Width : Math.Max(1, (int)Math.Round(size.Width * s));
+                int h = s >= 1 ? size.Height : Math.Max(1, (int)Math.Round(size.Height * s));
+                int r = i / columns, c = i % columns;
+                places.Add(new Rectangle(padding + c * (cw + spacing) + (cw - w) / 2, padding + r * (ch + spacing) + (ch - h) / 2, w, h));
+            }
+            return new(new Size(columns * cw + spacing * (columns - 1) + 2 * padding, rows * ch + spacing * (rows - 1) + 2 * padding), places);
+        }
+
+        // 横は高さ、縦は幅を揃える（比を保って拡大縮小）
+        bool horizontal = options.Layout == CombineLayout.Horizontal;
+        var dims = sizes.Select(s => horizontal ? s.Height : s.Width).ToList();
+        int? target = options.Normalize switch
+        {
+            CombineNormalize.Min => dims.Min(),
+            CombineNormalize.Max => dims.Max(),
+            CombineNormalize.Fixed => Math.Max(1, options.TargetPx),
+            _ => null,
+        };
+        var fitted = sizes.Select(s => target is not int t ? s
+            : horizontal ? (s.Height == t ? s : new Size(Math.Max(1, (int)Math.Round((double)s.Width * t / s.Height)), t))
+            : s.Width == t ? s : new Size(t, Math.Max(1, (int)Math.Round((double)s.Height * t / s.Width)))).ToList();
+
+        int n = fitted.Count;
+        int contentW = horizontal ? fitted.Sum(s => s.Width) + spacing * (n - 1) : fitted.Max(s => s.Width);
+        int contentH = horizontal ? fitted.Max(s => s.Height) : fitted.Sum(s => s.Height) + spacing * (n - 1);
+        int cur = padding;
+        foreach (var s in fitted)
+        {
+            places.Add(horizontal
+                ? new Rectangle(cur, padding + AlignOffset(contentH, s.Height, options.Align), s.Width, s.Height)
+                : new Rectangle(padding + AlignOffset(contentW, s.Width, options.Align), cur, s.Width, s.Height));
+            cur += (horizontal ? s.Width : s.Height) + spacing;
+        }
+        return new(new Size(contentW + 2 * padding, contentH + 2 * padding), places);
     }
 
     private static int AlignOffset(int total, int size, CombineAlign align) => align switch
@@ -141,77 +188,38 @@ public static class Combiner
         _ => 0,
     };
 
-    private static Image<Rgba32> CombineLinear(IReadOnlyList<Image<Rgba32>> images, bool horizontal, CombineNormalize normalize,
-        int targetPx, CombineAlign align, int spacing, int padding, Rgba32 bg)
+    /// <summary>配置どおりに描く。maxEdge を指定すると全体がその大きさに収まるよう縮めて描く</summary>
+    private static Image<Rgba32> Render(IReadOnlyList<Image<Rgba32>> images, CombineLayoutResult layout, CombineOptions options, int? maxEdge)
     {
-        var work = new List<Image<Rgba32>>(images.Count);
-        var owned = new List<Image<Rgba32>>();
+        var bg = ParseColor(options.Background, options.Transparent);
+        int longest = Math.Max(layout.Canvas.Width, layout.Canvas.Height);
+        double scale = maxEdge is int m && longest > m ? (double)m / longest : 1;
+        int Scale(int v) => scale >= 1 ? v : (int)Math.Round(v * scale);
+
+        var canvas = new Image<Rgba32>(Math.Max(1, Scale(layout.Canvas.Width)), Math.Max(1, Scale(layout.Canvas.Height)), bg);
         try
         {
-            if (normalize != CombineNormalize.None)
+            for (int i = 0; i < images.Count; i++)
             {
-                var dims = images.Select(im => horizontal ? im.Height : im.Width);
-                int target = Math.Max(1, normalize switch
+                var place = layout.Places[i];
+                int w = Math.Max(1, Scale(place.Width)), h = Math.Max(1, Scale(place.Height));
+                var at = new Point(Scale(place.X), Scale(place.Y));
+                var image = images[i];
+                if (image.Width == w && image.Height == h)
                 {
-                    CombineNormalize.Min => dims.Min(),
-                    CombineNormalize.Max => dims.Max(),
-                    _ => targetPx,
-                });
-                foreach (var im in images)
-                {
-                    var r = ResizeTo(im, target, horizontal);
-                    if (!ReferenceEquals(r, im)) owned.Add(r);
-                    work.Add(r);
+                    canvas.Mutate(x => x.DrawImage(image, at, 1f));
+                    continue;
                 }
-            }
-            else
-            {
-                work.AddRange(images);
-            }
-
-            int n = work.Count;
-            int contentW = horizontal ? work.Sum(im => im.Width) + spacing * (n - 1) : work.Max(im => im.Width);
-            int contentH = horizontal ? work.Max(im => im.Height) : work.Sum(im => im.Height) + spacing * (n - 1);
-            var canvas = new Image<Rgba32>(contentW + 2 * padding, contentH + 2 * padding, bg);
-            int cur = padding;
-            foreach (var im in work)
-            {
-                var at = horizontal
-                    ? new Point(cur, padding + AlignOffset(contentH, im.Height, align))
-                    : new Point(padding + AlignOffset(contentW, im.Width, align), cur);
-                canvas.Mutate(x => x.DrawImage(im, at, 1f));
-                cur += (horizontal ? im.Width : im.Height) + spacing;
+                // プレビューは速さ優先（Triangle）、原寸は画質優先（Lanczos3）
+                using var resized = image.Clone(x => x.Resize(w, h, maxEdge != null ? KnownResamplers.Triangle : KnownResamplers.Lanczos3));
+                canvas.Mutate(x => x.DrawImage(resized, at, 1f));
             }
             return canvas;
         }
-        finally
+        catch
         {
-            foreach (var o in owned) o.Dispose();
+            canvas.Dispose();
+            throw;
         }
-    }
-
-    /// <summary>columns 列のグリッド。各画像はセルに収めて中央に置く。cellPx が null ならセルは元の画像の最大の幅 × 高さ</summary>
-    private static Image<Rgba32> CombineGrid(IReadOnlyList<Image<Rgba32>> images, int columns, int? cellPx, int spacing, int padding, Rgba32 bg)
-    {
-        int cw = cellPx is int c ? Math.Max(1, c) : images.Max(im => im.Width);
-        int ch = cellPx is int c2 ? Math.Max(1, c2) : images.Max(im => im.Height);
-        columns = Math.Min(columns, images.Count);
-        int rows = (images.Count + columns - 1) / columns;
-        var canvas = new Image<Rgba32>(columns * cw + spacing * (columns - 1) + 2 * padding, rows * ch + spacing * (rows - 1) + 2 * padding, bg);
-        for (int i = 0; i < images.Count; i++)
-        {
-            int r = i / columns, col = i % columns;
-            var fit = Contain(images[i], cw, ch);
-            try
-            {
-                var at = new Point(padding + col * (cw + spacing) + (cw - fit.Width) / 2, padding + r * (ch + spacing) + (ch - fit.Height) / 2);
-                canvas.Mutate(x => x.DrawImage(fit, at, 1f));
-            }
-            finally
-            {
-                if (!ReferenceEquals(fit, images[i])) fit.Dispose();
-            }
-        }
-        return canvas;
     }
 }

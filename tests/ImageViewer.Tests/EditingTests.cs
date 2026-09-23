@@ -6,6 +6,7 @@ using SixLabors.ImageSharp.Metadata.Profiles.Exif;
 using SixLabors.ImageSharp.PixelFormats;
 using Image = SixLabors.ImageSharp.Image;
 using Rectangle = SixLabors.ImageSharp.Rectangle;
+using Size = SixLabors.ImageSharp.Size;
 
 static class EditingTests
 {
@@ -126,7 +127,7 @@ static class EditingTests
         using (var img = new Image<Rgba32>(3000, 2000, Red)) img.SaveAsPng(c1);
         using (var img = new Image<Rgba32>(1000, 1500, Blue)) img.SaveAsPng(c2);
         var co = new CombineOptions { Normalize = CombineNormalize.Max, Spacing = 30, Padding = 60 };
-        var (pre, scale) = Combiner.LoadForPreview(new[] { c1, c2 }, 1200);
+        var (pre, scale) = Combiner.LoadForPreview(new[] { c1, c2 }, 1200, long.MaxValue);
         try
         {
             using var preview = Combiner.Combine(pre, co.Scaled(scale));
@@ -134,11 +135,51 @@ static class EditingTests
             check(scale == 0.4 && size == (3000 + 1333 + 30 + 120, 2000 + 120)
                   && Math.Abs(preview.Width / scale - size.Width) < 10 && Math.Abs(preview.Height / scale - size.Height) < 10,
                 $"連結: プレビュー（{preview.Width}x{preview.Height}、×{scale}）と原寸（{size.Width}x{size.Height}）が合う");
+            using var bounded = Combiner.CombineBounded(pre, co.Scaled(scale), 600);
+            check(bounded.Width == 600 && Math.Abs(bounded.Height - preview.Height * 600.0 / preview.Width) <= 1,
+                $"連結: プレビューは長辺の上限の大きさで描く（{bounded.Width}x{bounded.Height}）");
         }
         finally
         {
             foreach (var im in pre) im.Dispose();
         }
+
+        // 画素数の合計の上限: 3000x2000 + 1000x1500 = 7.5M 画素を 0.75M 画素までに → 比率 √0.1
+        (pre, scale) = Combiner.LoadForPreview(new[] { c1, c2 }, 1200, 750_000);
+        try
+        {
+            check(Math.Abs(scale - Math.Sqrt(0.1)) < 1e-9 && pre.Sum(im => (long)im.Width * im.Height) <= 760_000,
+                $"連結: プレビュー用に読む画素数の合計に上限（×{scale:0.###}）");
+        }
+        finally
+        {
+            foreach (var im in pre) im.Dispose();
+        }
+
+        // 何百枚並べても、プレビューのキャンバスは上限の大きさ（原寸なら 60000 x 200 になる並び）
+        var many = Enumerable.Range(0, 300).Select(_ => new Image<Rgba32>(200, 200, Red)).ToList();
+        try
+        {
+            var layout = Combiner.Layout(many.Select(im => new Size(im.Width, im.Height)).ToList(), new CombineOptions());
+            using var bounded = Combiner.CombineBounded(many, new CombineOptions(), 2400);
+            check(layout.Canvas == new Size(60000, 200) && bounded.Width == 2400 && bounded.Height == 8,
+                $"連結: 300 枚の横並び（原寸 {layout.Canvas.Width}x{layout.Canvas.Height}）もプレビューは {bounded.Width}x{bounded.Height} で描く");
+        }
+        finally
+        {
+            foreach (var im in many) im.Dispose();
+        }
+
+        // ---- 出力先の外に書かない・メタデータを残せない形式 ----
+        plan = Converter.Plan(new[] { P("b.png") }, new ConvertOptions { Suffix = @"\..\..\evil" });
+        check(plan[0].Status == ConvertStatus.Error, "計画: 末尾に \\ や .. を含む名前はエラー（出力先の外に書かない）");
+        plan = Converter.Plan(new[] { P("b.png") }, new ConvertOptions { ReplaceSearch = "b", ReplaceWith = @"sub\b" });
+        check(plan[0].Status == ConvertStatus.Error, "計画: 置換で \\ を含む名前はエラー（勝手にフォルダを作らない）");
+        plan = Converter.Plan(new[] { P("b.png") }, new ConvertOptions { SubfolderName = @"..\x" });
+        check(plan[0].Status == ConvertStatus.Error, "計画: 中のフォルダの名前に \\ や .. はエラー");
+        plan = Converter.Plan(new[] { P("x.heic"), P("clear.png") }, new ConvertOptions { StripMetadata = false });
+        check(plan[0].Status == ConvertStatus.Ok && plan[0].Note?.Contains("メタデータ") == true && plan[1].Note == null,
+            "計画: メタデータを残す設定でも HEIC などは残せないと示す");
 
         // ---- 前回の設定の保存 ----
         var store = new SettingsStore(P("settings.json"));

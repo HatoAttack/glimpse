@@ -102,16 +102,18 @@ public static class Converter
     /// <summary>出力先の名前を決めて検査する（ファイルには触らない）</summary>
     public static List<ConvertPlanItem> Plan(IReadOnlyList<string> sources, ConvertOptions options)
     {
-        var targets = sources
-            .Select(s => Path.Combine(OutputFolderFor(Path.GetDirectoryName(s)!, options), BuildDestName(Path.GetFileName(s), options)))
-            .ToList();
+        var names = sources.Select(s => BuildDestName(Path.GetFileName(s), options)).ToList();
+        var targets = sources.Select((s, i) => Path.Combine(OutputFolderFor(Path.GetDirectoryName(s)!, options), names[i])).ToList();
         var counts = targets.GroupBy(t => Path.GetFullPath(t), StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+        string? folderError = options.OutputMode == OutputFolderMode.Subfolder && Rename.RenamePlanner.ValidateName(options.SubfolderName) is string e
+            ? $"中のフォルダの名前: {e}" : null;
 
         var plan = new List<ConvertPlanItem>(sources.Count);
         for (int i = 0; i < sources.Count; i++)
         {
             string src = sources[i], dst = targets[i];
-            string? nameError = Rename.RenamePlanner.ValidateName(Path.GetFileName(dst));
+            // 組み立てる前の名前を調べる（置換や末尾に \ や .. があっても出力先の外に書かないように）
+            string? nameError = folderError ?? Rename.RenamePlanner.ValidateName(names[i]);
             if (nameError != null)
                 plan.Add(new(src, dst, ConvertStatus.Error, nameError));
             else if (counts[Path.GetFullPath(dst)] > 1)
@@ -120,13 +122,21 @@ public static class Converter
                 plan.Add(new(src, dst, ConvertStatus.Skip, "同名のファイルがあるので飛ばします"));
             else
             {
-                var item = new ConvertPlanItem(src, dst, ConvertStatus.Ok, null);
-                plan.Add(item.ReplacesSource ? item with { Note = "元の画像を置き換えます" }
-                    : File.Exists(dst) ? item with { Note = "上書きします" } : item);
+                var notes = new List<string>();
+                if (Path.GetFullPath(src).Equals(Path.GetFullPath(dst), StringComparison.OrdinalIgnoreCase)) notes.Add("元の画像を置き換えます");
+                else if (File.Exists(dst)) notes.Add("上書きします");
+                if (!options.StripMetadata && !KeepsMetadata(src)) notes.Add("メタデータは残せません");
+                plan.Add(new(src, dst, ConvertStatus.Ok, notes.Count > 0 ? string.Join("・", notes) : null));
             }
         }
         return plan;
     }
+
+    /// <summary>
+    /// メタデータ（EXIF など）を残して変換できる形式か。
+    /// HEIC / AVIF / RAW などの WIC で読む形式は画素だけを取り出すので残せない
+    /// </summary>
+    public static bool KeepsMetadata(string path) => ImageFormats.IsImageSharpFormat(path);
 
     /// <summary>計画の Ok のものを 1 枚ずつ変換する（重い処理なので呼び出し側で別スレッドへ）</summary>
     public static ConvertResult Run(IReadOnlyList<ConvertPlanItem> plan, ConvertOptions options,
