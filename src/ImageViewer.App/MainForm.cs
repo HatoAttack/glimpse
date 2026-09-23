@@ -3,6 +3,7 @@ using ImageViewer.App.Commands;
 using ImageViewer.App.Grid;
 using ImageViewer.Core.Commands;
 using ImageViewer.Core.Imaging;
+using ImageViewer.Core.Ordering;
 using ImageViewer.Core.Thumbnails;
 
 namespace ImageViewer.App;
@@ -18,6 +19,10 @@ public class MainForm : Form, ICommandHost
     private readonly ContextMenuStrip _contextMenu = new();
     // メニュー項目とコマンドの対応（選択が変わるたびに有効/無効を更新する）
     private readonly List<(ToolStripMenuItem Item, IImageCommand Command)> _commandItems = new();
+
+    private readonly FolderOrderStore _orderStore = FolderOrderStore.CreateDefault();
+    private readonly List<(ToolStripMenuItem Item, SortMode Mode)> _sortItems = new();
+    private SortMode _sortMode = SortMode.Name;
 
     private string? _folder;
     private CancellationTokenSource? _loadCts;
@@ -38,6 +43,8 @@ public class MainForm : Form, ICommandHost
         _grid = new ThumbnailGrid(_thumbnails) { Dock = DockStyle.Fill, ContextMenuStrip = _contextMenu };
         _grid.SelectionChanged += (_, _) => UpdateCommandStates();
         _grid.MarksChanged += (_, _) => UpdateCommandStates();
+        _grid.OrderChanged += (_, _) => SaveManualOrder();
+        _grid.FolderDropped += async (_, folder) => await LoadFolderAsync(folder);
         FormClosed += (_, _) => _thumbnails.Dispose();
 
         var statusStrip = new StatusStrip();
@@ -88,6 +95,7 @@ public class MainForm : Form, ICommandHost
             (_, _) => _grid.SelectAll()) { ShortcutKeys = Keys.Control | Keys.A });
         menu.Items.Add(editMenu);
         menu.Items.Add(BuildMarkMenu());
+        menu.Items.Add(BuildViewMenu());
 
         // 登録済みコマンドをカテゴリ名のメニューに追加（同名のメニューがあればそこへ追記）
         foreach (var group in _registry.ByCategory())
@@ -114,6 +122,31 @@ public class MainForm : Form, ICommandHost
         helpMenu.DropDownItems.Add(new ToolStripMenuItem("対応形式(&F)...", null, (_, _) => ShowSupportedFormats()));
         menu.Items.Add(helpMenu);
         return menu;
+    }
+
+    /// <summary>表示メニュー（並び順）</summary>
+    private ToolStripMenuItem BuildViewMenu()
+    {
+        var viewMenu = new ToolStripMenuItem("表示(&V)");
+        foreach (var (label, mode) in new[]
+                 {
+                     ("名前順(&N)", SortMode.Name), ("更新日時順(&D)", SortMode.Modified),
+                     ("サイズ順(&S)", SortMode.Size), ("手動（ドラッグで並べ替え）(&M)", SortMode.Manual),
+                 })
+        {
+            var item = new ToolStripMenuItem(label, null, async (_, _) => await ChangeSortAsync(mode));
+            _sortItems.Add((item, mode));
+            viewMenu.DropDownItems.Add(item);
+        }
+        viewMenu.DropDownItems.Add(new ToolStripSeparator());
+        viewMenu.DropDownItems.Add(new ToolStripMenuItem("手動の並び順を削除(&R)", null, async (_, _) => await DeleteManualOrderAsync()));
+        UpdateSortChecks();
+        return viewMenu;
+    }
+
+    private void UpdateSortChecks()
+    {
+        foreach (var (item, mode) in _sortItems) item.Checked = mode == _sortMode;
     }
 
     /// <summary>
@@ -245,11 +278,20 @@ public class MainForm : Form, ICommandHost
         _loadCts?.Cancel();
         var cts = _loadCts = new CancellationTokenSource();
         _status.Text = $"{folder} を読み込み中...";
+        bool reload = string.Equals(_folder, folder, StringComparison.OrdinalIgnoreCase);
         List<FileInfo> files;
+        SortMode mode;
         try
         {
-            // 大きなフォルダでも UI を止めないよう列挙は別スレッドで行う
-            files = await Task.Run(() => ImageFormats.ListImages(folder, cts.Token), cts.Token);
+            // 大きなフォルダでも UI を止めないよう列挙は別スレッドで行う。
+            // 別のフォルダを開いたときは、手動の並び順が保存されていれば手動、無ければ名前順で始める
+            (files, mode) = await Task.Run(() =>
+            {
+                var listed = ImageFormats.ListImages(folder, cts.Token);
+                var saved = _orderStore.Load(folder);
+                var m = reload ? _sortMode : saved != null ? SortMode.Manual : SortMode.Name;
+                return (Arrange(listed, m, saved), m);
+            }, cts.Token);
         }
         catch (OperationCanceledException)
         {
@@ -262,12 +304,56 @@ public class MainForm : Form, ICommandHost
             return;
         }
 
-        bool reload = string.Equals(_folder, folder, StringComparison.OrdinalIgnoreCase);
         _folder = folder;
+        _sortMode = mode;
+        UpdateSortChecks();
         _grid.SetItems(files, reload);
         _grid.Focus();
         Text = $"{Path.GetFileName(folder.TrimEnd('\\'))} - {AppTitle}";
         UpdateCommandStates();
+    }
+
+    // ---- 並び順 ----
+
+    /// <summary>並び順を当てる。手動は保存した並び（無ければ名前順）</summary>
+    private static List<FileInfo> Arrange(IReadOnlyList<FileInfo> files, SortMode mode, IReadOnlyList<string>? savedOrder)
+    {
+        var sorted = FileSorting.Sort(files, mode);
+        return mode == SortMode.Manual && savedOrder != null ? ManualOrder.Apply(sorted, savedOrder) : sorted;
+    }
+
+    private async Task ChangeSortAsync(SortMode mode)
+    {
+        _sortMode = mode;
+        UpdateSortChecks();
+        if (_folder == null) return;
+        string folder = _folder;
+        var saved = mode == SortMode.Manual ? await Task.Run(() => _orderStore.Load(folder)) : null;
+        _grid.SetItems(Arrange(_grid.Items, mode, saved), reload: true);
+    }
+
+    /// <summary>ドラッグで並べ替えた: 手動に切り替えて今の並びを保存</summary>
+    private void SaveManualOrder()
+    {
+        if (_folder == null) return;
+        _sortMode = SortMode.Manual;
+        UpdateSortChecks();
+        try
+        {
+            _orderStore.Save(_folder, _grid.Items.Select(f => f.Name).ToList());
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Notify($"並び順を保存できませんでした: {ex.Message}");
+        }
+    }
+
+    private async Task DeleteManualOrderAsync()
+    {
+        if (_folder == null) return;
+        _orderStore.Delete(_folder);
+        Notify("手動の並び順を削除しました");
+        if (_sortMode == SortMode.Manual) await ChangeSortAsync(SortMode.Name);
     }
 
     private static string? DroppedFolder(DragEventArgs e) =>

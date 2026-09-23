@@ -1,6 +1,7 @@
 // サムネイルグリッド
 // 見えているセル＋前後 1 画面分だけサムネイルを要求するので、メモリと処理量はファイル数ではなく画面の広さで決まる
 using System.Drawing.Drawing2D;
+using ImageViewer.Core.Ordering;
 using ImageViewer.Core.Thumbnails;
 
 namespace ImageViewer.App.Grid;
@@ -27,6 +28,12 @@ public sealed class ThumbnailGrid : Control
     /// <summary>チェックが変わった</summary>
     public event EventHandler? MarksChanged;
 
+    /// <summary>ドラッグで並べ替えた（新しい並びは Items）</summary>
+    public event EventHandler? OrderChanged;
+
+    /// <summary>エクスプローラー等からフォルダがドロップされた</summary>
+    public event EventHandler<string>? FolderDropped;
+
     /// <summary>ダブルクリックまたは Enter（1 枚表示を開く用）</summary>
     public event EventHandler<int>? ItemActivated;
 
@@ -40,6 +47,7 @@ public sealed class ThumbnailGrid : Control
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
                  | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
         TabStop = true;
+        AllowDrop = true;
         BackColor = SystemColors.Window;
         ForeColor = SystemColors.WindowText;
 
@@ -287,6 +295,14 @@ public sealed class ThumbnailGrid : Control
             g.FillRectangle(fill, band);
             g.DrawRectangle(border, band.X, band.Y, Math.Max(0, band.Width - 1), Math.Max(0, band.Height - 1));
         }
+
+        if (_dropIndex >= 0)
+        {
+            var marker = _dropMarker;
+            marker.Offset(0, -ScrollY);
+            using var brush = new SolidBrush(SystemColors.Highlight);
+            g.FillRectangle(brush, marker);
+        }
     }
 
     private void DrawCell(Graphics g, int index, Rectangle cell)
@@ -380,9 +396,19 @@ public sealed class ThumbnailGrid : Control
                 // 空きからのドラッグは範囲選択。動かさずに離せば、修飾キーなしなら選択解除だけになる
                 BeginBand(e.Location, ctrl ? BandMode.Toggle : shift ? BandMode.Add : BandMode.Replace);
             }
-            else if (shift) _selection.ShiftClick(index, keepOthers: ctrl);
-            else if (ctrl) _selection.CtrlClick(index);
-            else _selection.Click(index);
+            else
+            {
+                if (shift) _selection.ShiftClick(index, keepOthers: ctrl);
+                else if (ctrl) _selection.CtrlClick(index);
+                else if (_selection.IsSelected(index)) _pendingClick = index; // 複数選択のままドラッグできるよう、単独選択は離したときに
+                else _selection.Click(index);
+                // Ctrl で選択を外した画像はドラッグの対象にしない
+                if (_selection.IsSelected(index))
+                {
+                    _dragCandidate = true;
+                    _dragOrigin = e.Location;
+                }
+            }
         }
         else if (e.Button == MouseButtons.Right && index >= 0 && !_selection.IsSelected(index))
         {
@@ -400,6 +426,13 @@ public sealed class ThumbnailGrid : Control
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
+        if (_dragCandidate && (e.Button & MouseButtons.Left) != 0)
+        {
+            var drag = SystemInformation.DragSize;
+            if (Math.Abs(e.X - _dragOrigin.X) >= drag.Width || Math.Abs(e.Y - _dragOrigin.Y) >= drag.Height)
+                StartDrag();
+            return;
+        }
         if (!_selection.IsBanding) return;
         _bandMouse = e.Location;
         UpdateBand();
@@ -408,7 +441,17 @@ public sealed class ThumbnailGrid : Control
     protected override void OnMouseUp(MouseEventArgs e)
     {
         base.OnMouseUp(e);
-        if (e.Button == MouseButtons.Left) EndBand();
+        if (e.Button != MouseButtons.Left) return;
+        EndBand();
+        _dragCandidate = false;
+        if (_pendingClick >= 0)
+        {
+            // ドラッグせずに離した: 通常のクリックとして、その画像だけを選択
+            _selection.Click(_pendingClick);
+            _pendingClick = -1;
+            Invalidate();
+            SelectionChanged?.Invoke(this, EventArgs.Empty);
+        }
     }
 
     protected override void OnMouseCaptureChanged(EventArgs e)
@@ -429,6 +472,115 @@ public sealed class ThumbnailGrid : Control
         base.OnMouseWheel(e);
         SetScroll(ScrollY - e.Delta * CurrentLayout.RowHeight / 120);
         if (_selection.IsBanding) UpdateBand();
+    }
+
+    // ---- ドラッグ＆ドロップ（並べ替え・ほかのアプリへファイルを渡す） ----
+    // グリッド内に落とせば並べ替え、エクスプローラー等に落とせばファイルのコピー。
+    // 移動は許可しない（うっかり別フォルダへ移ってしまうのを防ぐ）
+
+    private const string ReorderFormat = "ImaGeViewer.Reorder";
+    private readonly string _dragToken = Guid.NewGuid().ToString("N"); // 自分から出たドラッグかの判定用
+    private bool _dragCandidate;
+    private Point _dragOrigin;
+    private int _pendingClick = -1;
+    private int _dropIndex = -1;
+    private Rectangle _dropMarker;
+    private bool _dragOverSelf;
+
+    private void StartDrag()
+    {
+        _dragCandidate = false;
+        _pendingClick = -1;
+        var paths = SelectedIndices.Select(i => _items[i].FullName).ToArray();
+        if (paths.Length == 0) return;
+
+        var data = new DataObject();
+        data.SetData(DataFormats.FileDrop, paths);
+        data.SetData(ReorderFormat, _dragToken);
+        try
+        {
+            DoDragDrop(data, DragDropEffects.Copy);
+        }
+        finally
+        {
+            _dragOverSelf = false;
+            SetDropIndex(-1, Rectangle.Empty);
+        }
+    }
+
+    private bool IsOwnDrag(DragEventArgs e) =>
+        e.Data?.GetDataPresent(ReorderFormat) == true && e.Data.GetData(ReorderFormat) as string == _dragToken;
+
+    private static string? DroppedFolder(DragEventArgs e) =>
+        e.Data?.GetData(DataFormats.FileDrop) is string[] { Length: > 0 } p && Directory.Exists(p[0]) ? p[0] : null;
+
+    protected override void OnDragEnter(DragEventArgs e)
+    {
+        base.OnDragEnter(e);
+        OnDragOver(e);
+    }
+
+    protected override void OnDragOver(DragEventArgs e)
+    {
+        base.OnDragOver(e);
+        if (!IsOwnDrag(e))
+        {
+            e.Effect = DroppedFolder(e) != null ? DragDropEffects.Copy : DragDropEffects.None;
+            return;
+        }
+        _dragOverSelf = true;
+        e.Effect = DragDropEffects.Copy;
+        var client = PointToClient(new Point(e.X, e.Y));
+
+        // 上下の端に近づいたら自動スクロール（DragOver はマウスを止めていても繰り返し来る）
+        int edge = Math.Max(_thumb / 3, LogicalToDeviceUnits(24));
+        if (client.Y < edge) SetScroll(ScrollY - Math.Max(4, (edge - client.Y) / 2));
+        else if (client.Y > ClientSize.Height - edge) SetScroll(ScrollY + Math.Max(4, (client.Y - ClientSize.Height + edge) / 2));
+
+        var (index, marker) = CurrentLayout.InsertionAt(client.X, client.Y + ScrollY, Math.Max(2, LogicalToDeviceUnits(3)));
+        SetDropIndex(index, marker);
+    }
+
+    protected override void OnDragLeave(EventArgs e)
+    {
+        base.OnDragLeave(e);
+        _dragOverSelf = false;
+        SetDropIndex(-1, Rectangle.Empty);
+    }
+
+    protected override void OnDragDrop(DragEventArgs e)
+    {
+        base.OnDragDrop(e);
+        if (!IsOwnDrag(e))
+        {
+            if (DroppedFolder(e) is string folder) FolderDropped?.Invoke(this, folder);
+            return;
+        }
+        int insertAt = _dropIndex;
+        SetDropIndex(-1, Rectangle.Empty);
+        if (insertAt < 0) return;
+
+        var order = ManualOrder.Move(_items.Count, SelectedIndices, insertAt);
+        if (order.Select((from, to) => from == to).All(same => same)) return; // 動いていない
+        SetItems(order.Select(i => _items[i]).ToList(), reload: true);
+        OrderChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>グリッド内へのドラッグ中はコピーの「+」ではなく通常の矢印にする（並べ替えなので）</summary>
+    protected override void OnGiveFeedback(GiveFeedbackEventArgs e)
+    {
+        base.OnGiveFeedback(e);
+        if (!_dragOverSelf) return;
+        e.UseDefaultCursors = false;
+        Cursor.Current = Cursors.Default;
+    }
+
+    private void SetDropIndex(int index, Rectangle marker)
+    {
+        if (index == _dropIndex && marker == _dropMarker) return;
+        _dropIndex = index;
+        _dropMarker = marker;
+        Invalidate();
     }
 
     // ---- ドラッグ範囲選択 ----

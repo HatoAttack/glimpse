@@ -21,7 +21,7 @@ public static class ImageFormats
 
     public static bool IsSupported(string path) => IsImageSharpFormat(path) || IsWicFormat(path);
 
-    /// <summary>フォルダ直下の対応画像をファイル名順（大文字小文字無視）で列挙。
+    /// <summary>フォルダ直下の対応画像をファイル名順（エクスプローラーと同じ比較）で列挙。
     /// FileInfo のサイズ・更新日時は列挙時に取得済みなので追加のディスクアクセスは発生しない</summary>
     public static List<FileInfo> ListImages(string folder, CancellationToken ct = default)
     {
@@ -31,7 +31,7 @@ public static class ImageFormats
             ct.ThrowIfCancellationRequested();
             if (IsSupported(file.Name)) list.Add(file);
         }
-        list.Sort((a, b) => StringComparer.OrdinalIgnoreCase.Compare(a.Name, b.Name));
+        list.Sort((a, b) => Ordering.FileSorting.NaturalNameComparer.Compare(a.Name, b.Name));
         return list;
     }
 }

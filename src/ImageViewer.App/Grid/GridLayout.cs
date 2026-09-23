@@ -31,6 +31,36 @@ public readonly record struct GridLayout(int ItemCount, int ClientWidth, int Cel
         return index < ItemCount ? index : -1;
     }
 
+    /// <summary>
+    /// ドラッグ＆ドロップでの挿入位置（0〜ItemCount、その番号の前に入る）と、挿入位置を示す縦線の位置（コンテンツ座標）。
+    /// 点に一番近いセルの境目を選ぶ。最終行より下なら末尾
+    /// </summary>
+    public (int Index, Rectangle Marker) InsertionAt(int x, int contentY, int markerWidth)
+    {
+        if (ItemCount == 0) return (0, Rectangle.Empty);
+        int pitch = CellWidth + Gap;
+        int row, col;
+        if (contentY >= Gap + Rows * RowHeight)
+        {
+            row = Rows - 1;
+            col = CountInRow(row);
+        }
+        else
+        {
+            row = Math.Clamp((contentY - Gap) / RowHeight, 0, Rows - 1);
+            // 境目 k（k 列目の左）はセル左端から k*pitch - Gap/2 の位置。一番近い k を選ぶ
+            int lx = x - OffsetX - Gap;
+            col = (int)Math.Floor((lx + Gap / 2.0) / pitch + 0.5);
+            col = Math.Clamp(col, 0, CountInRow(row));
+        }
+        int bx = OffsetX + Gap + col * pitch - Gap / 2;
+        var marker = new Rectangle(bx - markerWidth / 2, Gap + row * RowHeight, markerWidth, CellHeight);
+        return (row * Columns + col, marker);
+    }
+
+    /// <summary>その行にあるセルの数（最終行だけ少ないことがある）</summary>
+    private int CountInRow(int row) => Math.Min(Columns, ItemCount - row * Columns);
+
     /// <summary>コンテンツ座標の矩形（範囲選択の枠）に少しでも掛かるセル</summary>
     public IEnumerable<int> IndicesIntersecting(Rectangle rect)
     {
