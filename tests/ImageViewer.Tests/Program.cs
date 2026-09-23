@@ -53,6 +53,7 @@ Check(Shortcuts.Parse("Ctrl") == Keys.None, "修飾キーのみは無効");
 Check(Shortcuts.Parse("Ctrl+Hoge") == Keys.None, "不明なキーは無効");
 Check(Shortcuts.Parse(null) == Keys.None, "null は無効");
 Check(Shortcuts.Parse("Ctrl+Yen") == (Keys.Control | Keys.Oem5) && Shortcuts.Parse("¥") == Keys.Oem5, "¥ キー（Yen / ¥）");
+Check(Shortcuts.Parse("^") == Keys.Oem7 && Shortcuts.Parse("Caret") == Keys.Oem7, "^ キー（^ / Caret）");
 
 // ---- 対応形式の判定・列挙 ----
 Check(ImageFormats.IsSupported(@"C:\a\B.JPG") && ImageFormats.IsSupported("x.webp"), "拡張子の大文字小文字を無視");
