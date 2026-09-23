@@ -20,6 +20,8 @@ public static class Shortcuts
                 "enter" => Keys.Enter,
                 // JIS 配列の ¥ キーと US 配列の \ キーはどちらも Oem5
                 "yen" or "¥" or "\\" => Keys.Oem5,
+                // JIS 配列の ^ キー（US 配列では ' のキー）
+                "caret" or "^" => Keys.Oem7,
                 _ when raw.Length == 1 && char.IsDigit(raw[0]) => Keys.D0 + (raw[0] - '0'),
                 _ => Enum.TryParse<Keys>(raw, ignoreCase: true, out var k) ? k : Keys.None,
             };

@@ -4,6 +4,7 @@ using ImageViewer.App.Dialogs;
 using ImageViewer.App.Filer;
 using ImageViewer.App.Grid;
 using ImageViewer.App.Jump;
+using ImageViewer.App.Viewer;
 using ImageViewer.Core.Commands;
 using ImageViewer.Core.Imaging;
 using ImageViewer.Core.Jump;
@@ -22,6 +23,7 @@ public class MainForm : Form, ICommandHost
     private readonly CommandRegistry _registry = new();
     private readonly ThumbnailService _thumbnails;
     private readonly ThumbnailGrid _grid;
+    private readonly QuickLookView _quickLook = new() { Dock = DockStyle.Fill };
     private readonly ToolStripStatusLabel _status;
     private readonly ToolStripStatusLabel _selectionInfo = new() { TextAlign = ContentAlignment.MiddleRight };
     private readonly System.Windows.Forms.Timer _infoDelay = new() { Interval = 100 };
@@ -133,6 +135,8 @@ public class MainForm : Form, ICommandHost
         };
         split.Panel1.Controls.Add(_tree);
         split.Panel2.Controls.Add(_grid);
+        split.Panel2.Controls.Add(_quickLook);
+        SetUpQuickLook();
 
         // Dock は後から追加したものから順に場所を取るので、Fill → アドレスバー → メニュー → ステータスバー の順に追加
         Controls.Add(split);
@@ -158,6 +162,30 @@ public class MainForm : Form, ICommandHost
         if (_settings.HomeFolder != null && !Directory.Exists(_settings.HomeFolder) && initialFolder == null)
             Shown += (_, _) => Notify($"ホームフォルダが見つからないのでピクチャを開きました: {_settings.HomeFolder}");
         if (Directory.Exists(start)) Shown += async (_, _) => await LoadFolderAsync(start);
+    }
+
+    // ---- Quick Look（Space / ダブルクリックで大きく表示） ----
+
+    private void SetUpQuickLook()
+    {
+        var markKey = Shortcuts.Parse(_settings.MarkKey ?? "¥");
+        var markNextKey = Shortcuts.Parse(_settings.MarkNextKey ?? "^");
+        _grid.MarkKey = _quickLook.MarkKey = markKey != Keys.None ? markKey : Keys.Oem5;
+        _grid.MarkNextKey = _quickLook.MarkNextKey = markNextKey != Keys.None ? markNextKey : Keys.Oem7;
+
+        _quickLook.IsMarked = _grid.IsImageMarked;
+        _quickLook.MarkedCount = () => _grid.MarkedCount;
+        _quickLook.PlaceholderProvider = f =>
+            _thumbnails.TryGet(ThumbnailKey.From(f), out var bmp) == ThumbnailState.Ready ? bmp : null;
+
+        _grid.PeekRequested += (_, index) => _quickLook.Open(_grid.Items, index, byKey: true);
+        _grid.ItemActivated += (_, index) => _quickLook.Open(_grid.Items, index, byKey: false);
+        _quickLook.CurrentChanged += (_, index) => _grid.SelectImage(index);
+        _quickLook.ToggleMarkRequested += (_, index) => _grid.ToggleImageMark(index);
+        _quickLook.Closed += (_, _) => _grid.Focus();
+        _grid.MarksChanged += (_, _) => _quickLook.Invalidate();
+        // 別のフォルダへ移った・表示中の画像が消えたら閉じる。並べ替え・リネームなら同じ画像を表示し続ける
+        _grid.ContentsChanged += (_, _) => _quickLook.ItemsChanged(_grid.Items);
     }
 
     // ---- サムネイルの大きさ（フッターのスライダー / Ctrl+ホイール） ----

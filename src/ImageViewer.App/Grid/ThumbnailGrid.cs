@@ -49,6 +49,16 @@ public sealed class ThumbnailGrid : Control
     /// <summary>画像をダブルクリックまたは Enter（1 枚表示を開く用）。引数は画像番号</summary>
     public event EventHandler<int>? ItemActivated;
 
+    /// <summary>並び・中身が入れ替わった（フォルダ移動・再読み込み・並べ替え・リネーム）</summary>
+    public event EventHandler? ContentsChanged;
+
+    /// <summary>画像の上で Space（Quick Look を開く）。引数は画像番号</summary>
+    public event EventHandler<int>? PeekRequested;
+
+    /// <summary>チェックを付け外しするキー（その場に留まる）/ 付け外しして次へ進むキー</summary>
+    public Keys MarkKey { get; set; } = Keys.Oem5;
+    public Keys MarkNextKey { get; set; } = Keys.Oem7;
+
     /// <summary>フォルダのタイルをダブルクリックまたは Enter（そのフォルダへ移動）</summary>
     public event EventHandler<DirectoryInfo>? FolderActivated;
 
@@ -77,6 +87,8 @@ public sealed class ThumbnailGrid : Control
                  | ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
         TabStop = true;
         AllowDrop = true;
+        // 日本語入力がオンだと ¥ や ^ が文字入力に取られてキーとして届かないので、このコントロールでは使わない
+        ImeMode = ImeMode.Disable;
         BackColor = SystemColors.Window;
         ForeColor = SystemColors.WindowText;
 
@@ -150,6 +162,7 @@ public sealed class ThumbnailGrid : Control
         RequestThumbnails();
         SelectionChanged?.Invoke(this, EventArgs.Empty);
         MarksChanged?.Invoke(this, EventArgs.Empty);
+        ContentsChanged?.Invoke(this, EventArgs.Empty);
     }
 
     public void SelectAll()
@@ -199,6 +212,25 @@ public sealed class ThumbnailGrid : Control
         Invalidate();
         RequestThumbnails();
         if (raiseEvent) ThumbnailSizeChanged?.Invoke(this, logical);
+    }
+
+    /// <summary>画像（Items での番号）だけを選択して見える位置へ</summary>
+    public void SelectImage(int imageIndex)
+    {
+        if (imageIndex < 0 || imageIndex >= _items.Count) return;
+        _selection.Click(F + imageIndex);
+        EnsureVisible(F + imageIndex);
+        Invalidate();
+        SelectionChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public bool IsImageMarked(int imageIndex) => imageIndex >= 0 && imageIndex < _items.Count && _marks.IsMarked(_items[imageIndex].FullName);
+
+    public void ToggleImageMark(int imageIndex)
+    {
+        if (imageIndex < 0 || imageIndex >= _items.Count) return;
+        _marks.Toggle(_items[imageIndex].FullName);
+        OnMarksChanged();
     }
 
     /// <summary>指定したパスの項目（フォルダのタイルも）だけを選択して見える位置へ</summary>
@@ -842,8 +874,34 @@ public sealed class ThumbnailGrid : Control
         int pageItems = Math.Max(1, ClientSize.Height / layout.RowHeight) * cols;
         int focus = _selection.Focus;
 
+        // チェック: MarkKey（既定 ¥）はその場で付け外し（Shift 付きは選択中の画像にチェック）、
+        // MarkNextKey（既定 ^）は付け外しして次へ。どちらも設定で変えられる
+        if (!e.Control && !e.Alt && (e.KeyCode == MarkKey || e.KeyCode == MarkNextKey))
+        {
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+            if (e.KeyCode == MarkKey)
+            {
+                if (e.Shift) SetMarkOnSelected(true);
+                else ToggleFocusedMark();
+                return;
+            }
+            ToggleFocusedMark();
+            _selection.Move(1, shift: false, ctrl: false);
+            EnsureVisible(_selection.Focus);
+            Invalidate();
+            SelectionChanged?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+
         switch (e.KeyCode)
         {
+            case Keys.Space when !e.Control && !e.Alt && focus >= F:
+                // Quick Look（押したまま / 短く押す の判定は開いた側で行う）
+                e.Handled = true;
+                e.SuppressKeyPress = true;
+                if (!e.Shift) PeekRequested?.Invoke(this, focus - F);
+                return;
             case Keys.Left: _selection.Move(-1, e.Shift, e.Control); break;
             case Keys.Right: _selection.Move(1, e.Shift, e.Control); break;
             case Keys.Up: _selection.Move(-cols, e.Shift, e.Control); break;
@@ -853,13 +911,6 @@ public sealed class ThumbnailGrid : Control
             case Keys.Home: _selection.MoveTo(0, e.Shift, e.Control); break;
             case Keys.End: _selection.MoveTo(CellCount - 1, e.Shift, e.Control); break;
             case Keys.Space when e.Control && focus >= 0: _selection.CtrlClick(focus); break;
-            case Keys.Oem5 when !e.Control && !e.Alt:
-                // ¥ = 現在位置のチェックを付け外し、Shift+¥ = 選択中の画像にチェック（どちらも位置は動かさない）
-                if (e.Shift) SetMarkOnSelected(true);
-                else ToggleFocusedMark();
-                e.Handled = true;
-                e.SuppressKeyPress = true;
-                return;
             case Keys.Enter when focus >= 0:
                 Activate(focus);
                 e.Handled = true;

@@ -12,6 +12,12 @@ public sealed record AppSettings
     /// <summary>サムネイルの表示サイズ（論理 px。null なら既定の 160）</summary>
     public int? ThumbnailSize { get; init; }
 
+    /// <summary>チェックを付け外しするキー（既定 ¥。その場に留まる）</summary>
+    public string? MarkKey { get; init; }
+
+    /// <summary>チェックを付け外しして次の画像へ進むキー（既定 ^）</summary>
+    public string? MarkNextKey { get; init; }
+
     /// <summary>フォルダジャンプの索引を作る範囲（null ならユーザーフォルダだけ）</summary>
     public IReadOnlyList<string>? JumpRoots { get; init; }
 
