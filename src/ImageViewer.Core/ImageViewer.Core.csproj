@@ -8,7 +8,15 @@
     <RootNamespace>ImageViewer.Core</RootNamespace>
     <!-- WIC（HEIC / AVIF / RAW 等）の読み込みに WPF の画像 API を使う。自己完結ビルドには元々同梱されるので exe サイズは増えない -->
     <UseWPF>true</UseWPF>
+    <!-- サムネイルを GDI+ の Bitmap で持つため System.Drawing を参照する（WinForms の UI 部品は使わない） -->
+    <UseWindowsForms>true</UseWindowsForms>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- ImageSharp の Image / Size 等と名前が衝突するので、暗黙の using には入れない -->
+    <Using Remove="System.Drawing" />
+    <Using Remove="System.Windows.Forms" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.*" />
