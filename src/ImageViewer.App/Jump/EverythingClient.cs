@@ -10,8 +10,10 @@ public sealed class EverythingClient : NativeWindow, IDisposable
 {
     private const int WM_COPYDATA = 0x004A;
     private const int COPYDATA_QUERYW = 2;
-    private const int ReplyId = 0x49560001; // 返事を見分けるための番号（任意）
     private const int FolderFlag = 0x1;
+    private readonly object _pendingLock = new();
+    private int _nextReplyId = 0x49560000;
+    private int _pendingReplyId;
     private TaskCompletionSource<List<string>?>? _pending;
 
     public EverythingClient()
@@ -28,37 +30,53 @@ public sealed class EverythingClient : NativeWindow, IDisposable
         var everything = FindWindow("EVERYTHING_TASKBAR_NOTIFICATION", null);
         if (everything == IntPtr.Zero) return null;
 
-        _pending?.TrySetResult(null); // 前の問い合わせの返事はもう待たない
-        var tcs = _pending = new TaskCompletionSource<List<string>?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        TaskCompletionSource<List<string>?> tcs;
+        int replyId;
+        lock (_pendingLock)
+        {
+            _pending?.TrySetResult(null); // 前の問い合わせの返事はもう待たない
+            tcs = _pending = new TaskCompletionSource<List<string>?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            replyId = _pendingReplyId = unchecked(++_nextReplyId);
+        }
 
-        // EVERYTHING_IPC_QUERYW: reply_hwnd, reply_copydata_message, search_flags, offset, max_results（各 32bit）＋ 検索文字列
-        string search = "folder: " + query;
-        byte[] text = Encoding.Unicode.GetBytes(search + "\0");
-        var buffer = new byte[20 + text.Length];
-        BitConverter.GetBytes((uint)Handle.ToInt64()).CopyTo(buffer, 0);
-        BitConverter.GetBytes(ReplyId).CopyTo(buffer, 4);
-        BitConverter.GetBytes(0).CopyTo(buffer, 8);
-        BitConverter.GetBytes(0).CopyTo(buffer, 12);
-        BitConverter.GetBytes(maxResults).CopyTo(buffer, 16);
-        text.CopyTo(buffer, 20);
-
-        var pin = GCHandle.Alloc(buffer, GCHandleType.Pinned);
         try
         {
-            var cds = new COPYDATASTRUCT { dwData = COPYDATA_QUERYW, cbData = buffer.Length, lpData = pin.AddrOfPinnedObject() };
-            if (SendMessage(everything, WM_COPYDATA, Handle, ref cds) == IntPtr.Zero) return null;
-        }
-        catch (Exception ex) when (ex is ExternalException or InvalidOperationException)
-        {
-            return null;
+            // EVERYTHING_IPC_QUERYW: reply_hwnd, reply_copydata_message, search_flags, offset, max_results（各 32bit）＋ 検索文字列
+            string search = "folder: " + query;
+            byte[] text = Encoding.Unicode.GetBytes(search + "\0");
+            var buffer = new byte[20 + text.Length];
+            BitConverter.GetBytes((uint)Handle.ToInt64()).CopyTo(buffer, 0);
+            BitConverter.GetBytes(replyId).CopyTo(buffer, 4);
+            BitConverter.GetBytes(0).CopyTo(buffer, 8);
+            BitConverter.GetBytes(0).CopyTo(buffer, 12);
+            BitConverter.GetBytes(maxResults).CopyTo(buffer, 16);
+            text.CopyTo(buffer, 20);
+
+            var pin = GCHandle.Alloc(buffer, GCHandleType.Pinned);
+            try
+            {
+                var cds = new COPYDATASTRUCT { dwData = COPYDATA_QUERYW, cbData = buffer.Length, lpData = pin.AddrOfPinnedObject() };
+                if (SendMessage(everything, WM_COPYDATA, Handle, ref cds) == IntPtr.Zero) return null;
+            }
+            catch (Exception ex) when (ex is ExternalException or InvalidOperationException)
+            {
+                return null;
+            }
+            finally
+            {
+                pin.Free();
+            }
+
+            var done = await Task.WhenAny(tcs.Task, Task.Delay(timeout));
+            return done == tcs.Task ? tcs.Task.Result : null;
         }
         finally
         {
-            pin.Free();
+            lock (_pendingLock)
+            {
+                if (ReferenceEquals(_pending, tcs)) _pending = null;
+            }
         }
-
-        var done = await Task.WhenAny(tcs.Task, Task.Delay(timeout));
-        return done == tcs.Task ? tcs.Task.Result : null;
     }
 
     protected override void WndProc(ref Message m)
@@ -66,9 +84,12 @@ public sealed class EverythingClient : NativeWindow, IDisposable
         if (m.Msg == WM_COPYDATA)
         {
             var cds = Marshal.PtrToStructure<COPYDATASTRUCT>(m.LParam);
-            if (cds.dwData == ReplyId)
+            TaskCompletionSource<List<string>?>? pending;
+            lock (_pendingLock)
+                pending = cds.dwData == new IntPtr(_pendingReplyId) ? _pending : null;
+            if (pending != null)
             {
-                _pending?.TrySetResult(ParseList(cds.lpData, cds.cbData));
+                pending.TrySetResult(ParseList(cds.lpData, cds.cbData));
                 m.Result = new IntPtr(1);
                 return;
             }
@@ -106,7 +127,11 @@ public sealed class EverythingClient : NativeWindow, IDisposable
 
     public void Dispose()
     {
-        _pending?.TrySetResult(null);
+        lock (_pendingLock)
+        {
+            _pending?.TrySetResult(null);
+            _pending = null;
+        }
         DestroyHandle();
     }
 

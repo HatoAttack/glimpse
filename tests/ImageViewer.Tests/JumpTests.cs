@@ -80,6 +80,33 @@ static class JumpTests
         SpinWait.SpinUntil(() => !service.IsBuilding && service.Index != null, 10000);
         check(service.Index != null, "サービスが索引を作る（保存が無いとき）");
 
+        // 最初のビルド完了時に次の指定を入れ、最後の roots が使われることを確認する
+        string nextRoot = Path.Combine(dir, "next");
+        string latestRoot = Path.Combine(dir, "latest");
+        Directory.CreateDirectory(nextRoot);
+        Directory.CreateDirectory(latestRoot);
+        var rebuild = new FolderJumpService(Path.Combine(dir, "rebuild"));
+        using var firstBuilt = new ManualResetEventSlim();
+        using var continueBuild = new ManualResetEventSlim();
+        int changes = 0;
+        rebuild.IndexChanged += () =>
+        {
+            if (Interlocked.Increment(ref changes) != 1) return;
+            firstBuilt.Set();
+            continueBuild.Wait();
+        };
+        rebuild.Rebuild(new[] { root });
+        bool firstCompleted = firstBuilt.Wait(10000);
+        if (firstCompleted)
+        {
+            rebuild.Rebuild(new[] { nextRoot });
+            rebuild.Rebuild(new[] { latestRoot });
+        }
+        continueBuild.Set();
+        bool latestCompleted = SpinWait.SpinUntil(() => !rebuild.IsBuilding, 10000);
+        check(firstCompleted && latestCompleted && rebuild.Index?.Roots.SequenceEqual(new[] { Path.GetFullPath(latestRoot) }) == true
+              && Volatile.Read(ref changes) == 2, "ビルド中の再指定は最新 roots で再構築する");
+
         var r = service.Search("旅行");
         check(r.Count == 2 && r.All(x => x.Name == "旅行"), $"名前で探す（{string.Join(" / ", r.Select(x => x.Path))}）");
         r = service.Search("2024 旅行");

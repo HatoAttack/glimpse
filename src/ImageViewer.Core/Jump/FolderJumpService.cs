@@ -12,6 +12,9 @@ public sealed class FolderJumpService
     private readonly TimeSpan _maxAge;
     private volatile FolderIndex? _index;
     private int _building; // 0/1（二重に作らない）
+    private readonly object _buildLock = new();
+    private string[]? _queuedRoots;
+    private int _queuedLimit;
 
     public VisitHistory Visits { get; }
 
@@ -45,24 +48,59 @@ public sealed class FolderJumpService
         if (loaded == null || !sameRoots || DateTime.UtcNow - loaded.BuiltUtc > _maxAge) Rebuild(roots);
     });
 
-    /// <summary>裏で（低い優先度のスレッドで）作り直す。作成中なら何もしない</summary>
+    /// <summary>裏で（低い優先度のスレッドで）作り直す。作成中の指定は最新のものを次に使う</summary>
     public void Rebuild(IReadOnlyList<string> roots, int limit = FolderIndex.DefaultLimit)
     {
-        if (Interlocked.Exchange(ref _building, 1) == 1) return;
+        var currentRoots = roots.ToArray();
+        lock (_buildLock)
+        {
+            if (_building == 1)
+            {
+                _queuedRoots = currentRoots;
+                _queuedLimit = limit;
+                return;
+            }
+            Volatile.Write(ref _building, 1);
+        }
         var thread = new Thread(() =>
         {
+            int currentLimit = limit;
+            bool released = false;
             try
             {
-                var index = FolderIndex.Build(roots, limit);
-                _index = index;
-                try { index.Save(_indexPath); }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* 次回また作る */ }
+                while (true)
+                {
+                    var index = FolderIndex.Build(currentRoots, currentLimit);
+                    _index = index;
+                    try { index.Save(_indexPath); }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* 次回また作る */ }
+                    IndexChanged?.Invoke();
+
+                    lock (_buildLock)
+                    {
+                        if (_queuedRoots == null)
+                        {
+                            Volatile.Write(ref _building, 0);
+                            released = true;
+                            break;
+                        }
+                        currentRoots = _queuedRoots;
+                        currentLimit = _queuedLimit;
+                        _queuedRoots = null;
+                    }
+                }
             }
             finally
             {
-                Volatile.Write(ref _building, 0);
+                if (!released)
+                {
+                    lock (_buildLock)
+                    {
+                        _queuedRoots = null;
+                        Volatile.Write(ref _building, 0);
+                    }
+                }
             }
-            IndexChanged?.Invoke();
         })
         { IsBackground = true, Priority = ThreadPriority.Lowest, Name = "FolderIndex" };
         thread.Start();
