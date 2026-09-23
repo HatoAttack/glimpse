@@ -13,6 +13,7 @@ public sealed class FolderTree : TreeView
     private readonly System.Windows.Forms.Timer _keyboardDelay = new() { Interval = 350 };
     private bool _suppressSelect;
     private int _revealVersion;
+    private TreeNode? _homeNode;
 
     /// <summary>ユーザーがツリーでフォルダを選んだ（マウスは即時、キー操作は少し待ってから）</summary>
     public event EventHandler<string>? FolderSelected;
@@ -65,6 +66,18 @@ public sealed class FolderTree : TreeView
         yield return ("ピクチャ", Environment.GetFolderPath(Environment.SpecialFolder.MyPictures));
         yield return ("ダウンロード", DownloadsFolder());
         yield return ("ドキュメント", Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments));
+    }
+
+    /// <summary>先頭に「ホーム」を出す（変更されたら差し替える）。今のフォルダがホーム配下ならホーム側から選択される</summary>
+    public void SetHome(string path)
+    {
+        string name = Path.GetFileName(Path.TrimEndingDirectorySeparator(path));
+        var node = MakeNode($"ホーム（{(name.Length > 0 ? name : path)}）", path);
+        BeginUpdate();
+        if (_homeNode != null) Nodes.Remove(_homeNode);
+        Nodes.Insert(0, node);
+        _homeNode = node;
+        EndUpdate();
     }
 
     /// <summary>ダウンロードフォルダ（場所を変えている人もいるので既知フォルダの API で取る）</summary>

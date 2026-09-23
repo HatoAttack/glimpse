@@ -7,6 +7,7 @@ using ImageViewer.Core.Imaging;
 using ImageViewer.Core.Navigation;
 using ImageViewer.Core.Ordering;
 using ImageViewer.Core.Rename;
+using ImageViewer.Core.Settings;
 using ImageViewer.Core.Thumbnails;
 
 namespace ImageViewer.App;
@@ -48,8 +49,16 @@ public class MainForm : Form, ICommandHost
     private readonly Button _backButton = new() { Text = "←" };
     private readonly Button _forwardButton = new() { Text = "→" };
     private readonly Button _upButton = new() { Text = "↑" };
+    private readonly Button _homeButton = new() { Text = "⌂" };
     private readonly ToolTip _toolTip = new();
     private ToolStripMenuItem _backItem = null!, _forwardItem = null!, _upItem = null!;
+
+    private readonly SettingsStore _settingsStore = SettingsStore.CreateDefault();
+    private AppSettings _settings;
+
+    /// <summary>ホームフォルダ（設定したフォルダが無ければピクチャ）</summary>
+    private string HomeFolder =>
+        _settings.HomeFolder is string h && Directory.Exists(h) ? h : Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
 
     /// <summary>移動の種類（履歴の扱いが変わる）</summary>
     private enum NavKind { New, Back, Forward, Reload }
@@ -62,6 +71,7 @@ public class MainForm : Form, ICommandHost
         StartPosition = FormStartPosition.CenterScreen;
         AllowDrop = true;
 
+        _settings = _settingsStore.Load();
         RegisterCommands();
 
         // サムネイルは長辺 160（DPI 反映）で生成し、メモリ上には最大 128MB（この大きさで約 300〜1000 枚）まで持つ
@@ -108,9 +118,12 @@ public class MainForm : Form, ICommandHost
 
         UpdateCommandStates();
         UpdateNavigationState();
-        // 起動時は指定のフォルダ、無ければピクチャを開く
-        string? start = initialFolder ?? Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
-        if (!string.IsNullOrEmpty(start) && Directory.Exists(start)) Shown += async (_, _) => await LoadFolderAsync(start);
+        _tree.SetHome(HomeFolder);
+        // 起動時は指定のフォルダ、無ければホーム（未設定・見つからなければピクチャ）を開く
+        string start = initialFolder ?? HomeFolder;
+        if (_settings.HomeFolder != null && !Directory.Exists(_settings.HomeFolder) && initialFolder == null)
+            Shown += (_, _) => Notify($"ホームフォルダが見つからないのでピクチャを開きました: {_settings.HomeFolder}");
+        if (Directory.Exists(start)) Shown += async (_, _) => await LoadFolderAsync(start);
     }
 
     // ---- アドレスバー・戻る / 進む / 上へ ----
@@ -124,6 +137,7 @@ public class MainForm : Form, ICommandHost
         foreach (var (button, tip) in new[]
                  {
                      (_backButton, "戻る (Alt+←)"), (_forwardButton, "進む (Alt+→)"), (_upButton, "上のフォルダへ (Alt+↑ / Backspace)"),
+                     (_homeButton, "ホームへ (Alt+Home)"),
                  })
         {
             button.Size = new Size(LogicalToDeviceUnits(30), _address.PreferredHeight + LogicalToDeviceUnits(2));
@@ -135,6 +149,7 @@ public class MainForm : Form, ICommandHost
         _backButton.Click += async (_, _) => await GoBackAsync();
         _forwardButton.Click += async (_, _) => await GoForwardAsync();
         _upButton.Click += async (_, _) => await GoUpAsync();
+        _homeButton.Click += async (_, _) => await LoadFolderAsync(HomeFolder);
 
         _address.KeyDown += async (_, e) =>
         {
@@ -174,6 +189,28 @@ public class MainForm : Form, ICommandHost
             Notify($"フォルダが見つかりません: {_address.Text.Trim()}");
             _address.SelectAll();
         }
+    }
+
+    private void SetHome(string folder)
+    {
+        _settings = _settings with { HomeFolder = folder };
+        try
+        {
+            _settingsStore.Save(_settings);
+            Notify($"ホームフォルダを設定しました: {folder}");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Notify($"設定を保存できませんでした（この起動中だけ有効）: {ex.Message}");
+        }
+        _tree.SetHome(HomeFolder);
+        if (_folder != null) _ = _tree.RevealAsync(_folder);
+    }
+
+    private void ChooseHome()
+    {
+        using var dlg = new FolderBrowserDialog { InitialDirectory = HomeFolder, Description = "ホームフォルダを選んでください" };
+        if (dlg.ShowDialog(this) == DialogResult.OK) SetHome(dlg.SelectedPath);
     }
 
     private async Task GoBackAsync()
@@ -287,7 +324,12 @@ public class MainForm : Form, ICommandHost
         _upItem = new ToolStripMenuItem("上のフォルダへ(&U)", null, async (_, _) => await GoUpAsync()) { ShortcutKeys = Keys.Alt | Keys.Up };
         go.DropDownItems.AddRange(new ToolStripItem[]
         {
-            _backItem, _forwardItem, _upItem, new ToolStripSeparator(),
+            _backItem, _forwardItem, _upItem,
+            new ToolStripMenuItem("ホームへ(&H)", null, async (_, _) => await LoadFolderAsync(HomeFolder)) { ShortcutKeys = Keys.Alt | Keys.Home },
+            new ToolStripSeparator(),
+            new ToolStripMenuItem("今のフォルダをホームに設定(&S)", null, (_, _) => { if (_folder != null) SetHome(_folder); }),
+            new ToolStripMenuItem("ホームフォルダを選ぶ(&C)...", null, (_, _) => ChooseHome()),
+            new ToolStripSeparator(),
             new ToolStripMenuItem("アドレスバーに入力(&A)", null, (_, _) => _address.Focus()) { ShortcutKeys = Keys.Control | Keys.L },
         });
         return go;

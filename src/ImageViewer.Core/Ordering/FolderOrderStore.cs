@@ -52,7 +52,7 @@ public sealed class FolderOrderStore
     {
         Directory.CreateDirectory(_root);
         var paths = CandidatePaths(folder).ToList();
-        File.WriteAllText(paths[0], JsonSerializer.Serialize(new Entry(folder, names.ToList())));
+        Settings.AtomicFile.WriteAllText(paths[0], JsonSerializer.Serialize(new Entry(folder, names.ToList())));
         // ID で保存できたら、以前パスで保存したものは消す
         foreach (var old in paths.Skip(1)) TryDelete(old);
         Prune();
@@ -67,6 +67,8 @@ public sealed class FolderOrderStore
     private void Prune()
     {
         var files = new DirectoryInfo(_root).GetFiles("*.json");
+        // 書き込み途中で落ちたときの一時ファイルが残っていれば消す
+        foreach (var tmp in new DirectoryInfo(_root).GetFiles("*.json.tmp")) TryDelete(tmp.FullName);
         if (files.Length <= _maxEntries) return;
         foreach (var f in files.OrderBy(f => f.LastWriteTimeUtc).Take(files.Length - _maxEntries))
             TryDelete(f.FullName);
