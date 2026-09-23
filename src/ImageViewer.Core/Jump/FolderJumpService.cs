@@ -15,6 +15,7 @@ public sealed class FolderJumpService
     private readonly object _buildLock = new();
     private string[]? _queuedRoots;
     private int _queuedLimit;
+    private int _requests; // Rebuild を頼まれた回数（起動時の古い指定・古い索引で、先に頼まれた作り直しを上書きしない）
 
     public VisitHistory Visits { get; }
 
@@ -35,25 +36,37 @@ public sealed class FolderJumpService
     public static string DefaultDataDir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ima-ge-viewer");
 
-    /// <summary>保存した索引を読み、無い・古い・対象フォルダが変わったときは裏で作り直す</summary>
+    /// <summary>
+    /// 保存した索引を読み、無い・古い・対象フォルダが変わったときは裏で作り直す（起動時に 1 回）。
+    /// それより前・読み込みの途中に Rebuild が頼まれていたら（設定の変更など）、読んだ索引も起動時の指定も使わない
+    /// </summary>
     public Task StartAsync(IReadOnlyList<string> roots) => Task.Run(() =>
     {
         var loaded = FolderIndex.Load(_indexPath);
         if (loaded != null)
         {
-            _index = loaded;
+            lock (_buildLock)
+            {
+                if (_requests != 0) return;
+                _index = loaded;
+            }
             IndexChanged?.Invoke();
         }
         bool sameRoots = loaded != null && loaded.Roots.SequenceEqual(roots.Select(Path.GetFullPath), StringComparer.OrdinalIgnoreCase);
-        if (loaded == null || !sameRoots || DateTime.UtcNow - loaded.BuiltUtc > _maxAge) Rebuild(roots);
+        if (loaded == null || !sameRoots || DateTime.UtcNow - loaded.BuiltUtc > _maxAge)
+            Rebuild(roots.ToArray(), FolderIndex.DefaultLimit, onlyIfRequests: 0);
     });
 
     /// <summary>裏で（低い優先度のスレッドで）作り直す。作成中の指定は最新のものを次に使う</summary>
-    public void Rebuild(IReadOnlyList<string> roots, int limit = FolderIndex.DefaultLimit)
+    public void Rebuild(IReadOnlyList<string> roots, int limit = FolderIndex.DefaultLimit) => Rebuild(roots.ToArray(), limit, onlyIfRequests: null);
+
+    /// <param name="onlyIfRequests">指定したとき、その後に別の Rebuild が頼まれていたら何もしない</param>
+    private void Rebuild(string[] currentRoots, int limit, int? onlyIfRequests)
     {
-        var currentRoots = roots.ToArray();
         lock (_buildLock)
         {
+            if (onlyIfRequests is int expected && _requests != expected) return;
+            _requests++;
             if (_building == 1)
             {
                 _queuedRoots = currentRoots;
