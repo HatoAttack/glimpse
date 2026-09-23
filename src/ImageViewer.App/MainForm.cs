@@ -4,6 +4,7 @@ using ImageViewer.App.Grid;
 using ImageViewer.Core.Commands;
 using ImageViewer.Core.Imaging;
 using ImageViewer.Core.Ordering;
+using ImageViewer.Core.Rename;
 using ImageViewer.Core.Thumbnails;
 
 namespace ImageViewer.App;
@@ -23,6 +24,10 @@ public class MainForm : Form, ICommandHost
     private readonly FolderOrderStore _orderStore = FolderOrderStore.CreateDefault();
     private readonly List<(ToolStripMenuItem Item, SortMode Mode)> _sortItems = new();
     private SortMode _sortMode = SortMode.Name;
+
+    // 直前の名前の変更（元に戻す用）。変更前の手動の並び順と並び順の種類も一緒に覚えておく
+    private (IReadOnlyList<RenameOp> Ops, IReadOnlyList<string>? SavedOrder, SortMode Mode)? _lastRename;
+    private ToolStripMenuItem _undoItem = null!;
 
     private string? _folder;
     private CancellationTokenSource? _loadCts;
@@ -70,6 +75,7 @@ public class MainForm : Form, ICommandHost
 
     private void RegisterCommands()
     {
+        _registry.Register(new RenameCommand(this));
         _registry.Register(new CopyPathsCommand());
         _registry.Register(new RevealInExplorerCommand());
         // TODO: リサイズ・切り抜き・連結をここに追加
@@ -91,6 +97,10 @@ public class MainForm : Form, ICommandHost
         menu.Items.Add(fileMenu);
 
         var editMenu = new ToolStripMenuItem("編集(&E)");
+        _undoItem = new ToolStripMenuItem("元に戻す(&U)", null, async (_, _) => await UndoRenameAsync())
+            { ShortcutKeys = Keys.Control | Keys.Z, Enabled = false };
+        editMenu.DropDownItems.Add(_undoItem);
+        editMenu.DropDownItems.Add(new ToolStripSeparator());
         editMenu.DropDownItems.Add(new ToolStripMenuItem("すべて選択(&A)", null,
             (_, _) => _grid.SelectAll()) { ShortcutKeys = Keys.Control | Keys.A });
         menu.Items.Add(editMenu);
@@ -260,6 +270,83 @@ public class MainForm : Form, ICommandHost
 
     public void Notify(string message) => _status.Text = message;
 
+    public void FilesRenamed(IReadOnlyList<RenameOp> ops)
+    {
+        if (_folder == null || ops.Count == 0) return;
+        _lastRename = (ops, _orderStore.Load(_folder), _sortMode);
+        ApplyRenamed(ops, restore: null);
+    }
+
+    /// <summary>
+    /// 名前の変更を画面・チェック・手動の並び順に反映する。
+    /// 手動の並びで、変更後の名前順と並びが一致したら（並べ替え → 連番の振り直しが済んだ）保存した並び順は消して名前順に戻す。
+    /// restore を渡したとき（元に戻す）は、変更前の並び順と種類をそのまま復元する
+    /// </summary>
+    private void ApplyRenamed(IReadOnlyList<RenameOp> ops, (IReadOnlyList<string>? SavedOrder, SortMode Mode)? restore)
+    {
+        if (_folder == null) return;
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var op in ops) map[op.From] = op.To;
+        var items = _grid.Items.Select(f => map.TryGetValue(f.FullName, out var to) ? new FileInfo(to) : f).ToList();
+
+        try
+        {
+            if (restore is { } r)
+            {
+                var (savedOrder, mode) = r;
+                _sortMode = mode;
+                if (savedOrder != null) _orderStore.Save(_folder, savedOrder);
+                else _orderStore.Delete(_folder);
+            }
+            else if (_sortMode == SortMode.Manual)
+            {
+                var names = items.Select(f => f.Name).ToList();
+                if (names.SequenceEqual(FileSorting.Sort(items, SortMode.Name).Select(f => f.Name)))
+                {
+                    _orderStore.Delete(_folder);
+                    _sortMode = SortMode.Name;
+                }
+                else
+                {
+                    _orderStore.Save(_folder, names);
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Notify($"並び順を保存できませんでした: {ex.Message}");
+        }
+
+        UpdateSortChecks();
+        var saved = _sortMode == SortMode.Manual ? _orderStore.Load(_folder) : null;
+        _grid.SetItems(Arrange(items, _sortMode, saved), reload: true, renamed: map);
+        _undoItem.Enabled = _lastRename != null;
+        _undoItem.Text = _lastRename != null ? "元に戻す: 名前の変更(&U)" : "元に戻す(&U)";
+    }
+
+    private async Task UndoRenameAsync()
+    {
+        if (_lastRename is not { } last) return;
+        var (ops, savedOrder, mode) = last;
+        var reverse = ops.Reverse().Select(o => new RenameOp(o.To, o.From)).ToList();
+        UseWaitCursor = true;
+        try
+        {
+            var done = await Task.Run(() => RenameExecutor.Execute(reverse));
+            _lastRename = null;
+            ApplyRenamed(done, (savedOrder, mode));
+            Notify($"{done.Count} 件の名前を元に戻しました");
+        }
+        catch (IOException ex)
+        {
+            MessageBox.Show(this, ex.Message, "元に戻せませんでした", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            UseWaitCursor = false;
+        }
+    }
+
     public async void RequestRefresh()
     {
         if (_folder != null) await LoadFolderAsync(_folder);
@@ -304,6 +391,12 @@ public class MainForm : Form, ICommandHost
             return;
         }
 
+        if (!reload)
+        {
+            _lastRename = null;
+            _undoItem.Enabled = false;
+            _undoItem.Text = "元に戻す(&U)";
+        }
         _folder = folder;
         _sortMode = mode;
         UpdateSortChecks();

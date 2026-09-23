@@ -67,11 +67,14 @@ public sealed class ThumbnailGrid : Control
     public IReadOnlyList<int> SelectedIndices => _selection.SelectedIndices;
     public int SelectedCount => _selection.Count;
 
-    /// <param name="reload">同じフォルダの読み直し（F5・リネーム後）なら true。チェック・選択・スクロール位置を引き継ぐ</param>
-    public void SetItems(IReadOnlyList<FileInfo> items, bool reload = false)
+    /// <param name="reload">同じフォルダの読み直し（F5・並べ替え・リネーム後）なら true。チェック・選択・スクロール位置を引き継ぐ</param>
+    /// <param name="renamed">名前を変えたファイル（元のパス → 新しいパス）。チェックと選択を付け替える</param>
+    public void SetItems(IReadOnlyList<FileInfo> items, bool reload = false, IReadOnlyDictionary<string, string>? renamed = null)
     {
         EndBand();
-        var selectedPaths = reload ? SelectedIndices.Select(i => _items[i].FullName).ToList() : new List<string>();
+        string Map(string path) => renamed != null && renamed.TryGetValue(path, out var to) ? to : path;
+        var selectedPaths = reload ? SelectedIndices.Select(i => Map(_items[i].FullName)).ToList() : new List<string>();
+        if (renamed != null) _marks.Remap(renamed);
         int scrollY = reload ? ScrollY : 0;
 
         _items = items;

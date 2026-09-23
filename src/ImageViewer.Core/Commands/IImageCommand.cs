@@ -9,6 +9,12 @@ public interface ICommandHost
 
     /// <summary>ファイルの追加・変更後に一覧を読み直す</summary>
     void RequestRefresh();
+
+    /// <summary>
+    /// コマンドがファイル名を変えた。本体はチェック・選択・手動の並び順を新しい名前に付け替え、
+    /// 「元に戻す」に登録する
+    /// </summary>
+    void FilesRenamed(IReadOnlyList<Rename.RenameOp> ops);
 }
 
 /// <summary>コマンド実行時に渡される情報</summary>
