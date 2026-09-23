@@ -24,6 +24,9 @@ public sealed record LoadOptions
     public static LoadOptions Thumbnail(int maxEdge) => new() { MaxEdge = maxEdge };
 }
 
+/// <summary>画像の大きさ（回転補正後の見た目どおりの縦横）と形式</summary>
+public sealed record ImageHeader(int Width, int Height, string Format);
+
 public static class ImageLoader
 {
     private static readonly HashSet<string> HeifExtensions = new(
@@ -47,6 +50,60 @@ public static class ImageLoader
         if (ImageFormats.IsWicFormat(path)) return LoadWithWic(path, options);
         throw new NotSupportedException($"この形式は読み込めません: {Path.GetExtension(path)}");
     }
+
+    /// <summary>
+    /// 画像の大きさと形式を、全体をデコードせずにヘッダーだけ読んで調べる。
+    /// EXIF の回転（90° / 270°）があれば縦横を入れ替えた見た目どおりの値。読めなければ null
+    /// </summary>
+    public static ImageHeader? Identify(string path)
+    {
+        try
+        {
+            if (ImageFormats.IsImageSharpFormat(path))
+            {
+                try
+                {
+                    var info = Image.Identify(path);
+                    ushort o = info.Metadata.ExifProfile?.TryGetValue(ExifTag.Orientation, out var v) == true ? v.Value : (ushort)1;
+                    string format = info.Metadata.DecodedImageFormat?.Name ?? FormatFromExtension(path);
+                    return Rotated(o) ? new ImageHeader(info.Height, info.Width, format) : new ImageHeader(info.Width, info.Height, format);
+                }
+                catch (Exception ex) when (IsDecodeFailure(ex) && ImageFormats.IsWicFormat(path))
+                {
+                    // ImageSharp で読めない亜種は WIC で
+                }
+            }
+            if (!ImageFormats.IsWicFormat(path)) return null;
+
+            using var stream = File.OpenRead(path);
+            var decoder = Wpf.BitmapDecoder.Create(stream,
+                Wpf.BitmapCreateOptions.DelayCreation | Wpf.BitmapCreateOptions.IgnoreColorProfile, Wpf.BitmapCacheOption.None);
+            var frame = decoder.Frames[0];
+            // HEIF 系はデコーダが回転済みの大きさを返す（ImageLoader.Load と同じ扱い）
+            ushort orientation = HeifExtensions.Contains(Path.GetExtension(path)) ? (ushort)1 : ReadOrientation(frame);
+            string fmt = FormatFromExtension(path);
+            return Rotated(orientation)
+                ? new ImageHeader(frame.PixelHeight, frame.PixelWidth, fmt)
+                : new ImageHeader(frame.PixelWidth, frame.PixelHeight, fmt);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException
+                                       or UnknownImageFormatException or InvalidImageContentException or FileFormatException
+                                       or ArgumentException or InvalidOperationException or System.Runtime.InteropServices.COMException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>EXIF の Orientation 5〜8 は 90° / 270° の回転を含む（縦横が入れ替わる）</summary>
+    private static bool Rotated(ushort orientation) => orientation is >= 5 and <= 8;
+
+    private static string FormatFromExtension(string path) => Path.GetExtension(path).TrimStart('.').ToUpperInvariant() switch
+    {
+        "JPG" or "JPEG" or "JFIF" => "JPEG",
+        "TIF" => "TIFF",
+        "HEIF" or "HIF" => "HEIC",
+        var e => e,
+    };
 
     private static bool IsDecodeFailure(Exception ex) =>
         ex is UnknownImageFormatException or InvalidImageContentException or NotSupportedException;

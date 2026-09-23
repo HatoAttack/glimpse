@@ -100,6 +100,10 @@ public sealed class ThumbnailGrid : Control
     public IReadOnlyList<FileInfo> SelectedImages =>
         _selection.SelectedIndices.Where(i => !IsFolder(i)).Select(i => _items[i - F]).ToList();
 
+    /// <summary>選択中のフォルダのタイル</summary>
+    public IReadOnlyList<DirectoryInfo> SelectedFolders =>
+        _selection.SelectedIndices.Where(IsFolder).Select(i => _folders[i]).ToList();
+
     /// <summary>選択中の画像の番号（Items での位置）</summary>
     private IEnumerable<int> SelectedImageIndices => _selection.SelectedIndices.Where(i => !IsFolder(i)).Select(i => i - F);
 
