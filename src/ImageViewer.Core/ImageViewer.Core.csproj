@@ -6,6 +6,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>ImageViewer.Core</RootNamespace>
+    <!-- WIC（HEIC / AVIF / RAW 等）の読み込みに WPF の画像 API を使う。自己完結ビルドには元々同梱されるので exe サイズは増えない -->
+    <UseWPF>true</UseWPF>
   </PropertyGroup>
 
   <ItemGroup>

@@ -33,11 +33,21 @@ public sealed class CopyPathsCommand : ImageCommandBase
 }
 ```
 
+## 対応形式
+
+| 区分 | 形式 |
+|---|---|
+| どの PC でも読める（ImageSharp） | JPG / PNG / GIF / WEBP / BMP / TIFF / TGA / ICO / CUR / PBM 系 / QOI |
+| Windows の拡張機能があれば読める（WIC） | HEIC / HEIF / AVIF / JPEG XL / 各社 RAW / JPEG XR / DDS など |
+
+WIC の対応形式は起動時にその PC のデコーダを列挙して決まる（メニューの「ヘルプ → 対応形式」で確認できる）。
+HEIC は「HEIF 画像拡張機能」＋「HEVC ビデオ拡張機能」、AVIF は「AV1 Video Extension」、RAW は「Raw Image Extension」が必要。
+
 ## 現状と予定
 
 - [x] フォルダ内の画像一覧（仮想モード、フォルダのドロップ・起動引数で開く）
 - [x] コマンドの仕組み（メニュー / 右クリック / ショートカット、複数選択）
-- [ ] 読み込み層（ImageSharp の縮小デコード + WIC 経由で HEIC / AVIF / RAW をベストエフォート対応）
+- [x] 読み込み層 `ImageLoader`（ImageSharp の縮小デコード + WIC 経由で HEIC / AVIF / RAW / JPEG XL をベストエフォート対応、回転補正・sRGB 変換）
 - [ ] サムネイル生成（シェルのサムネイル → 縮小デコード、優先度付きキュー、メモリ LRU）
 - [ ] サムネイルグリッド（見えている分だけ生成）
 - [ ] 1枚表示（画面サイズでデコード、前後の先読み、GIF / WEBP アニメ再生）
