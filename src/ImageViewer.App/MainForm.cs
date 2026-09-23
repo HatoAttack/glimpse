@@ -118,7 +118,29 @@ public class MainForm : Form, ICommandHost
 
         fileMenu.DropDownItems.Add(new ToolStripSeparator());
         fileMenu.DropDownItems.Add(new ToolStripMenuItem("終了(&X)", null, (_, _) => Close()));
+
+        var helpMenu = new ToolStripMenuItem("ヘルプ(&H)");
+        helpMenu.DropDownItems.Add(new ToolStripMenuItem("対応形式(&F)...", null, (_, _) => ShowSupportedFormats()));
+        menu.Items.Add(helpMenu);
         return menu;
+    }
+
+    /// <summary>ImageSharp で常に読める形式と、この PC の WIC 拡張機能で読める形式を表示</summary>
+    private void ShowSupportedFormats()
+    {
+        string builtIn = string.Join(" ", ImageFormats.ImageSharpExtensions);
+        var extra = WicCodecs.Decoders
+            .Select(d => (d.FriendlyName, Exts: d.Extensions.Where(e => !ImageFormats.ImageSharpExtensions.Contains(e)).ToList()))
+            .Where(d => d.Exts.Count > 0)
+            .Select(d => $"・{d.FriendlyName}\n    {string.Join(" ", d.Exts)}");
+        string wic = string.Join("\n", extra);
+        if (wic.Length == 0) wic = "（なし）";
+        MessageBox.Show(this,
+            $"どの PC でも読める形式:\n{builtIn}\n\n" +
+            $"この PC の Windows 拡張機能で読める形式:\n{wic}\n\n" +
+            "HEIC は「HEIF 画像拡張機能」と「HEVC ビデオ拡張機能」、AVIF は「AV1 Video Extension」、\n" +
+            "RAW は「Raw Image Extension」を Microsoft Store から入れると読めるようになります。",
+            "対応形式", MessageBoxButtons.OK, MessageBoxIcon.Information);
     }
 
     private void BuildContextMenu()

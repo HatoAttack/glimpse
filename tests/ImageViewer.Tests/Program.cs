@@ -1,4 +1,4 @@
-// Core とショートカット解釈の動作確認（GUI なし）
+// Core・ショートカット解釈・画像読み込みの動作確認（GUI なし）
 using System.Text;
 using System.Windows.Forms;
 using ImageViewer.App;
@@ -65,6 +65,11 @@ foreach (var name in new[] { "b.png", "A.jpg", "c.txt", "d.WEBP" })
 Directory.CreateDirectory(Path.Combine(dir, "sub.jpg"));
 var listed = ImageFormats.ListImages(dir).Select(f => f.Name).ToArray();
 Check(listed.SequenceEqual(new[] { "A.jpg", "b.png", "d.WEBP" }), $"列挙: 画像のみ・名前順・フォルダ除外 ({string.Join(",", listed)})");
+Directory.Delete(dir, true);
+
+// ---- 画像読み込み ----
+Directory.CreateDirectory(dir);
+await LoaderTests.RunAsync(Check, dir);
 Directory.Delete(dir, true);
 
 Console.WriteLine(failed ? "\n失敗あり" : "\nすべて OK");
