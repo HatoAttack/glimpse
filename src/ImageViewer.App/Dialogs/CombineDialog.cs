@@ -10,8 +10,10 @@ namespace ImageViewer.App.Dialogs;
 
 public sealed class CombineDialog : Form
 {
-    private const int PreviewSourceEdge = 1200;  // プレビュー用に読む画像の長辺の上限
-    private const int PreviewMaxEdge = 2400;     // プレビューの絵の長辺の上限
+    private const int PreviewSourceEdge = 1200;                  // プレビュー用に読む画像の長辺の上限
+    private const long PreviewSourcePixels = 16L * 1024 * 1024;  // プレビュー用に読む画像の画素数の合計の上限（約 64MB）
+    private const int PreviewMaxEdge = 2400;                     // プレビューの絵の長辺の上限（はじめからこの大きさで描く）
+    private const long LargeResultPixels = 200L * 1000 * 1000;   // これより大きい仕上がりは保存前に確認する（約 800MB 使う）
 
     private readonly List<string> _paths;
     private readonly Dictionary<string, ISImage> _previewImages = new(StringComparer.OrdinalIgnoreCase);
@@ -286,7 +288,7 @@ public sealed class CombineDialog : Form
         try
         {
             var paths = _paths.ToList();
-            var (images, scale) = await Task.Run(() => Combiner.LoadForPreview(paths, PreviewSourceEdge));
+            var (images, scale) = await Task.Run(() => Combiner.LoadForPreview(paths, PreviewSourceEdge, PreviewSourcePixels));
             if (IsDisposed)
             {
                 foreach (var im in images) im.Dispose();
@@ -326,11 +328,12 @@ public sealed class CombineDialog : Form
         {
             var task = Task.Run(() =>
             {
-                using var result = Combiner.Combine(images, options.Scaled(scale));
-                // 原寸での大きさの目安（縮小で丸めた分ずれることがある）
-                int w = (int)Math.Round(result.Width / scale), h = (int)Math.Round(result.Height / scale);
-                if (Math.Max(result.Width, result.Height) > PreviewMaxEdge)
-                    result.Mutate(x => x.Resize(new ResizeOptions { Size = new SixLabors.ImageSharp.Size(PreviewMaxEdge, PreviewMaxEdge), Mode = ResizeMode.Max }));
+                var scaled = options.Scaled(scale);
+                // 原寸での大きさの目安（縮小して読んだ画像から計算するので、丸めた分ずれることがある）
+                var layout = Combiner.Layout(images.Select(im => new SixLabors.ImageSharp.Size(im.Width, im.Height)).ToList(), scaled);
+                int w = (int)Math.Round(layout.Canvas.Width / scale), h = (int)Math.Round(layout.Canvas.Height / scale);
+                // 長辺 PreviewMaxEdge のキャンバスに直接描く（何百枚並べても大きなキャンバスを作らない）
+                using var result = Combiner.CombineBounded(images, scaled, PreviewMaxEdge);
                 if (options.Format == OutputFormat.Jpeg) result.Mutate(x => x.BackgroundColor(SixLabors.ImageSharp.Color.White));
                 return (ThumbnailGenerator.ToPArgbBitmap(result), w, h);
             });
@@ -338,7 +341,7 @@ public sealed class CombineDialog : Form
             _renders.Add(task);
             (bitmap, fullW, fullH) = await task;
         }
-        catch (ArgumentException ex)
+        catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             if (version == _previewVersion) _info.Text = ex.Message;
             return;
@@ -385,6 +388,19 @@ public sealed class CombineDialog : Form
             MessageBox.Show(this, ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
+        // プレビューの計算を待たずに、今の設定と画像のヘッダーから仕上がりの大きさを計算して確かめる
+        var paths = _paths.ToList();
+        SixLabors.ImageSharp.Size? size;
+        UseWaitCursor = true;
+        try
+        {
+            size = await Task.Run(() => Combiner.MeasureFiles(paths, options));
+        }
+        finally
+        {
+            UseWaitCursor = false;
+        }
+        if (size is { } sz && TooLargeToSave(options, sz.Width, sz.Height)) return;
         string ext = ImageSaver.ExtensionFor(options.Format == OutputFormat.Keep ? OutputFormat.Png : options.Format, ".png");
         string folder = Path.GetDirectoryName(_paths[0])!;
         using var dlg = new SaveFileDialog
@@ -398,7 +414,6 @@ public sealed class CombineDialog : Form
         };
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         string dst = dlg.FileName;
-        var paths = _paths.ToList();
 
         _busy = true;
         _save.Enabled = false;
@@ -423,6 +438,22 @@ public sealed class CombineDialog : Form
             _save.Enabled = true;
             UseWaitCursor = false;
         }
+    }
+
+    /// <summary>仕上がりが形式の上限を超える・とても大きいときは知らせる（true なら保存しない）</summary>
+    private bool TooLargeToSave(CombineOptions options, int w, int h)
+    {
+        int limit = options.Format switch { OutputFormat.Webp => ImageSaver.WebpMaxEdge, OutputFormat.Jpeg => ImageSaver.JpegMaxEdge, _ => int.MaxValue };
+        if (Math.Max(w, h) > limit)
+        {
+            MessageBox.Show(this, $"仕上がりが約 {w} × {h} px で、この形式の上限（縦横 {limit}px）を超えます。\n並べ方・大きさを変えるか、PNG で保存してください。",
+                Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return true;
+        }
+        long pixels = (long)w * h;
+        return pixels > LargeResultPixels && MessageBox.Show(this,
+            $"仕上がりが約 {w} × {h} px と大きく、保存中にメモリを {pixels * 4 / 1024 / 1024 / 1024.0:0.#}GB 以上使います。続けますか？",
+            Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes;
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)

@@ -146,6 +146,7 @@ public sealed class ResizeDialog : Form
         foreach (var t in new[] { _search, _replace, _suffix, _subfolderName, _customFolder })
             t.TextChanged += (_, _) => UpdatePreview();
         _lowercase.CheckedChanged += (_, _) => UpdatePreview();
+        _stripMetadata.CheckedChanged += (_, _) => UpdatePreview();
         _customSizeValue.ValueChanged += (_, _) => UpdatePreview();
         _keepSize.CheckedChanged += (_, _) => _noUpscale.Enabled = !_keepSize.Checked;
         _noUpscale.Enabled = !_keepSize.Checked;

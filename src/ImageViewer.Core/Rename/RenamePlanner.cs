@@ -44,9 +44,13 @@ public static class RenamePlanner
     /// <summary>paths の順（＝画面の並び順）に連番を振った計画</summary>
     public static List<RenamePlanItem> Plan(IReadOnlyList<string> paths, RenameOptions options)
     {
+        var names = new List<string>(paths.Count);
         var targets = new List<string>(paths.Count);
         for (int i = 0; i < paths.Count; i++)
-            targets.Add(Path.Combine(Path.GetDirectoryName(paths[i])!, NewName(Path.GetFileName(paths[i]), i, options)));
+        {
+            names.Add(NewName(Path.GetFileName(paths[i]), i, options));
+            targets.Add(Path.Combine(Path.GetDirectoryName(paths[i])!, names[i]));
+        }
 
         // 変更後の名前どうしの重複（Windows は大文字小文字を区別しない）
         var duplicated = targets.GroupBy(t => t, StringComparer.OrdinalIgnoreCase)
@@ -57,7 +61,8 @@ public static class RenamePlanner
         for (int i = 0; i < paths.Count; i++)
         {
             string src = paths[i], dst = targets[i];
-            string? error = ValidateName(Path.GetFileName(dst));
+            // 組み立てる前の名前を調べる（\ を含む名前で別のフォルダへ移ってしまわないように）
+            string? error = ValidateName(names[i]);
             if (error == null && duplicated.Contains(dst)) error = "変更後の名前が重複しています";
             // 対象外の既存ファイルと同名になるのは不可（対象どうしの入れ替えは 2 段階で行うので可）
             if (error == null && !sources.Contains(dst) && File.Exists(dst)) error = "同じ名前のファイルがすでにあります";
