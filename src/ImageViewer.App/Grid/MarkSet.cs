@@ -30,6 +30,17 @@ public sealed class MarkSet
         foreach (var p in all) Toggle(p);
     }
 
+    /// <summary>
+    /// まとめて付け外し: 1 つでもチェックの無いものがあれば全部に付け、全部付いていれば全部外す
+    /// （一部だけ付いているときに反転すると、ばらばらのまま残るため）。付けたら true
+    /// </summary>
+    public bool ToggleGroup(IReadOnlyCollection<string> paths)
+    {
+        bool mark = !paths.All(IsMarked);
+        Set(paths, mark);
+        return mark;
+    }
+
     public void Clear() => _marked.Clear();
 
     /// <summary>名前を変えたファイルのチェックを新しいパスに付け替える（入れ替えにも対応）</summary>

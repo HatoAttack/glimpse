@@ -259,6 +259,24 @@ public sealed class ThumbnailGrid : Control
         OnMarksChanged();
     }
 
+    /// <summary>
+    /// ¥ の動き: 画像を 2 枚以上選んでいれば選択中の画像をまとめて付け外し（1 枚でも無しがあれば全部に付け、
+    /// 全部付いていれば全部外す）。1 枚以下なら今の位置の画像を付け外し
+    /// </summary>
+    public void ToggleMarks()
+    {
+        var selected = SelectedImages;
+        if (selected.Count >= 2)
+        {
+            _marks.ToggleGroup(selected.Select(f => f.FullName).ToList());
+            OnMarksChanged();
+        }
+        else
+        {
+            ToggleFocusedMark();
+        }
+    }
+
     /// <summary>選択中の画像にまとめてチェックを付ける / 外す</summary>
     public void SetMarkOnSelected(bool marked)
     {
@@ -880,14 +898,18 @@ public sealed class ThumbnailGrid : Control
         {
             e.Handled = true;
             e.SuppressKeyPress = true;
+            bool multiple = SelectedImages.Count >= 2;
+            int lastSelected = multiple ? _selection.SelectedIndices.Max() : -1;
             if (e.KeyCode == MarkKey)
             {
                 if (e.Shift) SetMarkOnSelected(true);
-                else ToggleFocusedMark();
+                else ToggleMarks();
                 return;
             }
-            ToggleFocusedMark();
-            _selection.Move(1, shift: false, ctrl: false);
+            // ^: 付け外ししてから次へ（複数選択なら、選んだ範囲の次の画像へ）
+            ToggleMarks();
+            if (multiple) _selection.MoveTo(lastSelected + 1, shift: false, ctrl: false);
+            else _selection.Move(1, shift: false, ctrl: false);
             EnsureVisible(_selection.Focus);
             Invalidate();
             SelectionChanged?.Invoke(this, EventArgs.Empty);

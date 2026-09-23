@@ -698,7 +698,7 @@ public class MainForm : Form, ICommandHost
         var markMenu = new ToolStripMenuItem("チェック(&K)");
         markMenu.DropDownItems.AddRange(new ToolStripItem[]
         {
-            new ToolStripMenuItem("チェックを付ける / 外す(&T)", null, (_, _) => _grid.ToggleFocusedMark())
+            new ToolStripMenuItem("チェックを付ける / 外す（複数選択ならまとめて）(&T)", null, (_, _) => _grid.ToggleMarks())
                 { ShortcutKeyDisplayString = "¥" },
             new ToolStripMenuItem("選択中の画像にチェック(&M)", null, (_, _) => _grid.SetMarkOnSelected(true))
                 { ShortcutKeyDisplayString = "Shift+¥" },

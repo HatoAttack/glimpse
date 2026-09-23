@@ -136,6 +136,14 @@ static class ThumbnailTests
         check(m.Count == 1 && m.IsMarked(@"C:\a\1.jpg"), "無くなったファイルのチェックは捨てる");
         m.Clear();
         check(m.Count == 0, "全解除");
+
+        // ---- まとめて付け外し（複数選択で ¥） ----
+        var group = new[] { @"C:\g\1.jpg", @"C:\g\2.jpg", @"C:\g\3.jpg" };
+        m.Toggle(group[1]); // 一部だけ付いている
+        check(m.ToggleGroup(group) && group.All(m.IsMarked), "一部だけ付いていれば全部に付ける");
+        check(!m.ToggleGroup(group) && !group.Any(m.IsMarked), "全部付いていれば全部外す");
+        m.Toggle(@"C:\g\other.jpg");
+        check(m.ToggleGroup(group) && m.IsMarked(@"C:\g\other.jpg") && m.Count == 4, "選んでいないもののチェックは変えない");
     }
 
     // ---- ThumbnailService（生成処理は差し替え） ----
