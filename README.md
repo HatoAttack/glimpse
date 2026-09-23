@@ -70,7 +70,7 @@ HEIC は「HEIF 画像拡張機能」＋「HEVC ビデオ拡張機能」、AVIF 
 - [x] 読み込み層 `ImageLoader`（ImageSharp の縮小デコード + WIC 経由で HEIC / AVIF / RAW / JPEG XL をベストエフォート対応、回転補正・sRGB 変換）
 - [x] サムネイル生成 `ThumbnailService`（シェルのサムネイル → 縮小デコード、表示中優先の待ち行列、上限付きメモリキャッシュ）
 - [x] サムネイルグリッド（見えている分＋前後 1 画面だけ生成、クリック / Ctrl / Shift / キー操作 / ドラッグ範囲選択で複数選択）
-- [x] チェック（¥ で付け外し、^ で付け外しして次へ、Shift+¥ で選択中にチェック、Ctrl+¥ でチェックした画像を選択。¥ / ^ は settings.json の MarkKey / MarkNextKey で変更可）
+- [x] チェック（¥ で付け外し（複数選択ならまとめて）、^ で付け外しして次へ、Shift+¥ で選択中にチェック、Ctrl+¥ でチェックした画像を選択。¥ / ^ は settings.json の MarkKey / MarkNextKey で変更可）
 - [x] Quick Look: Space（短く押すと開いたまま / 押し続けると離したら閉じる）・ダブルクリックで大きく表示。表示中も ← → ¥ ^ が使える
 - [x] 並び順（名前・更新日時・サイズ・手動）。手動はドラッグで並べ替え、フォルダごとに保存（`%LOCALAPPDATA%\ima-ge-viewer\orders`）
 - [x] 名前の変更（F2）: 文字列＋連番 / 置換・末尾追加 / 小文字化。プレビュー付き、2 段階で実行して失敗時は全部元に戻す、Ctrl+Z で元に戻す
