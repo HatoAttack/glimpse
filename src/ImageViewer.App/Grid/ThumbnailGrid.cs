@@ -30,7 +30,8 @@ public sealed class ThumbnailGrid : Control
     private string CellName(int cell) => IsFolder(cell) ? _folders[cell].Name : _items[cell - F].Name;
 
     // 見た目の寸法（px、DPI 反映済み）
-    private readonly int _thumb, _pad, _gap;
+    private int _thumb;
+    private readonly int _pad, _gap;
     private int TextHeight => Font.Height + _pad;
 
     /// <summary>選択が変わった</summary>
@@ -51,10 +52,24 @@ public sealed class ThumbnailGrid : Control
     /// <summary>フォルダのタイルをダブルクリックまたは Enter（そのフォルダへ移動）</summary>
     public event EventHandler<DirectoryInfo>? FolderActivated;
 
-    public ThumbnailGrid(ThumbnailService thumbnails)
+    /// <summary>サムネイルの表示サイズを変えられる範囲（論理 px。DPI は掛ける前）</summary>
+    public const int MinThumbnailSize = 64, MaxThumbnailSize = 320, ThumbnailSizeStep = 16;
+
+    /// <summary>
+    /// 作るサムネイルの大きさの段階（論理 px）。表示サイズ以上で一番小さい段階で作り、縮小して描く。
+    /// スライダーを動かしても段階をまたがない限り作り直さない
+    /// </summary>
+    private static readonly int[] GenerationSteps = { 96, 160, 256, 320 };
+
+    /// <summary>表示サイズが変わった（Ctrl+ホイールで変えたときも。引数は論理 px）</summary>
+    public event EventHandler<int>? ThumbnailSizeChanged;
+
+    /// <param name="thumbnailSize">サムネイルの表示サイズ（論理 px）</param>
+    public ThumbnailGrid(ThumbnailService thumbnails, int thumbnailSize = 160)
     {
         _thumbnails = thumbnails;
-        _thumb = thumbnails.Size;
+        _thumb = LogicalToDeviceUnits(Math.Clamp(thumbnailSize, MinThumbnailSize, MaxThumbnailSize));
+        _thumbnails.SetSize(GenerationSizeFor(_thumb));
         _pad = LogicalToDeviceUnits(6);
         _gap = LogicalToDeviceUnits(8);
 
@@ -136,6 +151,58 @@ public sealed class ThumbnailGrid : Control
     public void SelectAll()
     {
         _selection.SelectAll();
+        Invalidate();
+        SelectionChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    // ---- サムネイルの大きさ ----
+
+    /// <summary>表示サイズ（論理 px）</summary>
+    public int ThumbnailSize
+    {
+        get => DeviceToLogical(_thumb);
+        set => SetThumbnailSize(value, raiseEvent: false);
+    }
+
+    private int DeviceToLogical(int px) => (int)Math.Round(px * 96.0 / DeviceDpi);
+
+    private int GenerationSizeFor(int devicePx)
+    {
+        foreach (int step in GenerationSteps)
+        {
+            int d = LogicalToDeviceUnits(step);
+            if (d >= devicePx) return d;
+        }
+        return devicePx;
+    }
+
+    private void SetThumbnailSize(int logical, bool raiseEvent)
+    {
+        logical = Math.Clamp(logical, MinThumbnailSize, MaxThumbnailSize);
+        int device = LogicalToDeviceUnits(logical);
+        if (device == _thumb) return;
+
+        // 表示の先頭にあった項目が、大きさを変えた後も先頭に来るようにする
+        var (first, _) = CurrentLayout.VisibleRange(ScrollY, ClientSize.Height);
+        _thumb = device;
+        _thumbnails.SetSize(GenerationSizeFor(device)); // 段階が同じなら何もしない（作ってあるものを縮小して描く）
+        _folderIcon?.Dispose();
+        _folderIcon = null;
+        _folderIconLoaded = false;
+
+        UpdateScrollBar();
+        if (CellCount > 0) SetScroll(CurrentLayout.CellBounds(Math.Min(first, CellCount - 1)).Top - _gap);
+        Invalidate();
+        RequestThumbnails();
+        if (raiseEvent) ThumbnailSizeChanged?.Invoke(this, logical);
+    }
+
+    /// <summary>指定したパスの項目（フォルダのタイルも）だけを選択して見える位置へ</summary>
+    public void SelectPath(string path)
+    {
+        if (!_indexByPath.TryGetValue(path, out int i)) return;
+        _selection.Click(i);
+        EnsureVisible(i);
         Invalidate();
         SelectionChanged?.Invoke(this, EventArgs.Empty);
     }
@@ -555,6 +622,12 @@ public sealed class ThumbnailGrid : Control
     protected override void OnMouseWheel(MouseEventArgs e)
     {
         base.OnMouseWheel(e);
+        if ((ModifierKeys & Keys.Control) != 0)
+        {
+            // Ctrl+ホイールでサムネイルの大きさ（エクスプローラーと同じ）
+            SetThumbnailSize(ThumbnailSize + Math.Sign(e.Delta) * ThumbnailSizeStep, raiseEvent: true);
+            return;
+        }
         SetScroll(ScrollY - e.Delta * CurrentLayout.RowHeight / 120);
         if (_selection.IsBanding) UpdateBand();
     }

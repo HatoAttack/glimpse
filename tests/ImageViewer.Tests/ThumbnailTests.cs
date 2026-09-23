@@ -180,6 +180,34 @@ static class ThumbnailTests
         check(svc.CachedCount == 2 && svc.CachedBytes == 800, $"上限超過で古い順に破棄（{svc.CachedCount} 枚 / {svc.CachedBytes} バイト）");
         check(svc.TryGet(K("a"), out _) == ThumbnailState.None && IsDisposed(a!), "破棄されたものは Dispose 済み");
 
+        // ---- 大きさの変更: 作成中だった古い大きさの結果は捨て、以後は新しい大きさで作る ----
+        var sizes = new ConcurrentQueue<int>();
+        using var slowGate = new ManualResetEventSlim(false);
+        var ctx2 = new QueueContext();
+        var svc2 = new ThumbnailService(10, 1_000_000, ctx2, (path, size) =>
+        {
+            sizes.Enqueue(size);
+            if (path.Contains("slow")) slowGate.Wait();
+            return new Bitmap(size, size);
+        }, workers: 1);
+        var ready2 = new List<string>();
+        svc2.ThumbnailReady += k => ready2.Add(Path.GetFileName(k.Path));
+        svc2.Schedule(new[] { K("fast") });
+        ctx2.PumpUntil(() => ready2.Contains("fast"));
+        svc2.Schedule(new[] { K("slow") });
+        SpinWait.SpinUntil(() => sizes.Count == 2, 2000); // slow の生成が始まった
+        svc2.SetSize(20);
+        check(svc2.Size == 20 && svc2.CachedCount == 0 && svc2.TryGet(K("fast"), out _) == ThumbnailState.None, "大きさを変えるとキャッシュを捨てる");
+        slowGate.Set();
+        Thread.Sleep(200);
+        ctx2.PumpUntil(() => true);
+        while (ctx2.TryPumpOne()) { }
+        check(!ready2.Contains("slow") && svc2.TryGet(K("slow"), out _) == ThumbnailState.None, "作成中だった古い大きさの結果は捨てる");
+        svc2.Schedule(new[] { K("slow") });
+        ctx2.PumpUntil(() => ready2.Contains("slow"));
+        check(svc2.TryGet(K("slow"), out var slowBmp) == ThumbnailState.Ready && slowBmp!.Width == 20 && sizes.Last() == 20, "以後は新しい大きさで作る");
+        svc2.Dispose();
+
         svc.Dispose();
         check(svc.CachedCount == 0, "Dispose でキャッシュを空に");
     }
@@ -242,6 +270,14 @@ static class ThumbnailTests
         private readonly BlockingCollection<(SendOrPostCallback, object?)> _queue = new();
 
         public override void Post(SendOrPostCallback d, object? state) => _queue.Add((d, state));
+
+        /// <summary>溜まっている処理を 1 つ実行（無ければ false）</summary>
+        public bool TryPumpOne()
+        {
+            if (!_queue.TryTake(out var item)) return false;
+            item.Item1(item.Item2);
+            return true;
+        }
 
         public void PumpUntil(Func<bool> done, int timeoutMs = 5000)
         {
