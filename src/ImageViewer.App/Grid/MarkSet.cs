@@ -32,6 +32,14 @@ public sealed class MarkSet
 
     public void Clear() => _marked.Clear();
 
+    /// <summary>名前を変えたファイルのチェックを新しいパスに付け替える（入れ替えにも対応）</summary>
+    public void Remap(IReadOnlyDictionary<string, string> renamed)
+    {
+        var next = _marked.Select(p => renamed.TryGetValue(p, out var to) ? to : p).ToList();
+        _marked.Clear();
+        _marked.UnionWith(next);
+    }
+
     /// <summary>existing に含まれないもの（削除・改名されたファイル）のチェックを捨てる</summary>
     public void Retain(IEnumerable<string> existing)
     {

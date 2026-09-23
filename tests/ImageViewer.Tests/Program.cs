@@ -82,6 +82,10 @@ Directory.Delete(dir, true);
 OrderingTests.Run(Check, dir);
 Directory.Delete(dir, true);
 
+// ---- 名前の変更 ----
+RenameTests.Run(Check, dir);
+Directory.Delete(dir, true);
+
 Console.WriteLine(failed ? "\n失敗あり" : "\nすべて OK");
 return failed ? 1 : 0;
 
