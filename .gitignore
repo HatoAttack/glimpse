@@ -1,0 +1,8 @@
+# ローカル設定
+.claude/
+.vs/
+*.user
+
+# .NET build output
+**/bin/
+**/obj/

@@ -1,0 +1,44 @@
+# 画像ビューア（仮称）
+
+サムネイル一覧で画像を眺めながら、選択した画像（複数可）にメニューやショートカットキーから
+リサイズ・切り抜き・連結などの編集を行う Windows 用画像ビューア。
+
+[image-sizechange](https://github.com/HatoAttack/image-sizechange) の後継として開発中。
+
+## 構成
+
+| プロジェクト | 役割 |
+|---|---|
+| `src/ImageViewer.Core` | UI に依存しない中核（画像読み込み・対応形式・コマンドの仕組み・編集処理） |
+| `src/ImageViewer.App` | WinForms の UI（一覧・1枚表示・メニュー・ダイアログ） |
+| `tests/ImageViewer.Tests` | 動作テスト（`dotnet run --project tests/ImageViewer.Tests`） |
+
+.NET 8 + WinForms + ImageSharp。
+
+## コマンドの仕組み
+
+編集機能はすべて `IImageCommand`（`src/ImageViewer.Core/Commands`）として実装し、`MainForm.RegisterCommands` で登録する。
+メインメニュー・右クリックメニュー・ショートカットは登録済みコマンドから自動で組み立てられ、
+選択枚数に応じて実行可否（例: 連結は2枚以上、切り抜きは1枚）が切り替わる。
+
+```csharp
+public sealed class CopyPathsCommand : ImageCommandBase
+{
+    public override string Id => "file.copyPaths";
+    public override string Name => "パスをコピー";
+    public override string Category => "ファイル";          // メニューのグループ
+    public override string? DefaultShortcut => "Ctrl+Shift+C";
+    protected override int MinSelection => 1;              // 選択枚数の条件
+    public override Task ExecuteAsync(CommandContext context) { ... }
+}
+```
+
+## 現状と予定
+
+- [x] フォルダ内の画像一覧（仮想モード、フォルダのドロップ・起動引数で開く）
+- [x] コマンドの仕組み（メニュー / 右クリック / ショートカット、複数選択）
+- [ ] 読み込み層（ImageSharp の縮小デコード + WIC 経由で HEIC / AVIF / RAW をベストエフォート対応）
+- [ ] サムネイル生成（シェルのサムネイル → 縮小デコード、優先度付きキュー、メモリ LRU）
+- [ ] サムネイルグリッド（見えている分だけ生成）
+- [ ] 1枚表示（画面サイズでデコード、前後の先読み、GIF / WEBP アニメ再生）
+- [ ] image-sizechange からリサイズ・切り抜き・連結を移植
