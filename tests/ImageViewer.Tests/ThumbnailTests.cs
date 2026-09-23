@@ -223,6 +223,24 @@ static class ThumbnailTests
             check(shell != null && Math.Max(shell.Width, shell.Height) <= 128 && IsRed(shell.GetPixel(shell.Width / 2, shell.Height / 2)),
                 $"シェルのサムネイル取得（{shell?.Width}x{shell?.Height}）");
 
+        // 上下の向き: 上半分が赤・下半分が青の画像で、シェルのサムネイルも上が赤であること
+        string updown = Path.Combine(dir, "updown.jpg");
+        using (var img = new Image<Rgba32>(400, 300, new Rgba32(0, 0, 255)))
+        {
+            img.ProcessPixelRows(acc =>
+            {
+                for (int y = 0; y < 150; y++) acc.GetRowSpan(y).Fill(new Rgba32(255, 0, 0));
+            });
+            img.SaveAsJpeg(updown);
+        }
+        using (var shell = ShellThumbnail.TryGet(updown, 128))
+        {
+            var top = shell?.GetPixel(shell.Width / 2, shell.Height / 5);
+            var bottom = shell?.GetPixel(shell.Width / 2, shell.Height * 4 / 5);
+            check(shell != null && IsRed(top!.Value) && bottom!.Value.B > 200 && bottom.Value.R < 60,
+                $"シェルのサムネイルの上下の向き（上={top}, 下={bottom}）");
+        }
+
         string png = Path.Combine(dir, "alpha.png");
         // 左半分が不透明の赤、右半分が透明（全面透明だと「アルファを使わないハンドラ」と区別できないため）
         using (var img = new Image<Rgba32>(300, 300, new Rgba32(0, 0, 255, 0)))

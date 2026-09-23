@@ -21,9 +21,11 @@ public sealed class FolderTree : TreeView
     public FolderTree()
     {
         HideSelection = false;
-        ShowRootLines = false;
-        FullRowSelect = true;
-        ShowLines = false;
+        // 開閉の ＋ / － を一番上の階層にも出し、子フォルダは字下げして階層を見やすくする
+        ShowRootLines = true;
+        ShowPlusMinus = true;
+        ShowLines = true;
+        Indent = LogicalToDeviceUnits(18);
         BorderStyle = BorderStyle.None;
         _keyboardDelay.Tick += (_, _) =>
         {

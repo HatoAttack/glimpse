@@ -109,7 +109,7 @@ public class MainForm : Form, ICommandHost
         statusStrip.Items.Add(_status);
         AddThumbnailSizeSlider(statusStrip);
 
-        var split = new SplitContainer
+        var split = new NoFocusSplitContainer
         {
             Dock = DockStyle.Fill,
             FixedPanel = FixedPanel.Panel1,
@@ -172,7 +172,7 @@ public class MainForm : Form, ICommandHost
         // 設定には終了時に 1 回だけ書く（動かすたびに書かない）
         FormClosing += (_, _) =>
         {
-            if (_settings.ThumbnailSize == _grid.ThumbnailSize) return;
+            if ((_settings.ThumbnailSize ?? 160) == _grid.ThumbnailSize) return; // 変えていなければ書かない
             _settings = _settings with { ThumbnailSize = _grid.ThumbnailSize };
             try { _settingsStore.Save(_settings); }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
