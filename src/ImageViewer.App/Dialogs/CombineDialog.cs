@@ -20,7 +20,6 @@ public sealed class CombineDialog : Form
     private double _previewScale = 1;
     private Bitmap? _previewBitmap;
     private int _previewVersion;
-    private (int Width, int Height) _estimatedSize; // 仕上がりの大きさの目安（原寸）
     private bool _busy;
     private readonly List<Task> _renders = new(); // 裏で組んでいるプレビュー（閉じるときに終わるのを待ってから画像を解放する）
 
@@ -354,7 +353,6 @@ public sealed class CombineDialog : Form
         }
         _previewBitmap?.Dispose();
         _previewBitmap = bitmap;
-        _estimatedSize = (fullW, fullH);
         _preview.Invalidate();
         _info.Text = scale < 1
             ? $"{images.Count} 枚 ・ 仕上がりの大きさ: 約 {fullW} × {fullH} px"
@@ -390,7 +388,19 @@ public sealed class CombineDialog : Form
             MessageBox.Show(this, ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             return;
         }
-        if (TooLargeToSave(options)) return;
+        // プレビューの計算を待たずに、今の設定と画像のヘッダーから仕上がりの大きさを計算して確かめる
+        var paths = _paths.ToList();
+        SixLabors.ImageSharp.Size? size;
+        UseWaitCursor = true;
+        try
+        {
+            size = await Task.Run(() => Combiner.MeasureFiles(paths, options));
+        }
+        finally
+        {
+            UseWaitCursor = false;
+        }
+        if (size is { } sz && TooLargeToSave(options, sz.Width, sz.Height)) return;
         string ext = ImageSaver.ExtensionFor(options.Format == OutputFormat.Keep ? OutputFormat.Png : options.Format, ".png");
         string folder = Path.GetDirectoryName(_paths[0])!;
         using var dlg = new SaveFileDialog
@@ -404,7 +414,6 @@ public sealed class CombineDialog : Form
         };
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         string dst = dlg.FileName;
-        var paths = _paths.ToList();
 
         _busy = true;
         _save.Enabled = false;
@@ -432,10 +441,9 @@ public sealed class CombineDialog : Form
     }
 
     /// <summary>仕上がりが形式の上限を超える・とても大きいときは知らせる（true なら保存しない）</summary>
-    private bool TooLargeToSave(CombineOptions options)
+    private bool TooLargeToSave(CombineOptions options, int w, int h)
     {
-        var (w, h) = _estimatedSize;
-        int limit = options.Format switch { OutputFormat.Webp => ImageSaver.WebpMaxEdge, OutputFormat.Jpeg => 65535, _ => int.MaxValue };
+        int limit = options.Format switch { OutputFormat.Webp => ImageSaver.WebpMaxEdge, OutputFormat.Jpeg => ImageSaver.JpegMaxEdge, _ => int.MaxValue };
         if (Math.Max(w, h) > limit)
         {
             MessageBox.Show(this, $"仕上がりが約 {w} × {h} px で、この形式の上限（縦横 {limit}px）を超えます。\n並べ方・大きさを変えるか、PNG で保存してください。",

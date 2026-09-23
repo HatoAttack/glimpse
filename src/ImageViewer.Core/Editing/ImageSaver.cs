@@ -26,6 +26,17 @@ public static class ImageSaver
         new[] { ".jpg", ".jpeg", ".jfif", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".tga", ".qoi" },
         StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>JPEG で保存できる最大の縦横</summary>
+    public const int JpegMaxEdge = 65535;
+
+    /// <summary>保存先の拡張子の形式で保存できる最大の縦横（上限が無ければ int.MaxValue）</summary>
+    public static int MaxEdgeFor(string path) => Path.GetExtension(path).ToLowerInvariant() switch
+    {
+        ".webp" => WebpMaxEdge,
+        ".jpg" or ".jpeg" or ".jfif" => JpegMaxEdge,
+        _ => int.MaxValue,
+    };
+
     public static bool CanWrite(string extension) => WritableExtensions.Contains(extension);
 
     /// <summary>出力形式に対応する拡張子。Keep なら元の拡張子（書き出せない形式なら .jpg）</summary>

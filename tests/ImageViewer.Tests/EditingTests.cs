@@ -144,6 +144,17 @@ static class EditingTests
             foreach (var im in pre) im.Dispose();
         }
 
+        // 保存の前に、画像を読まずに仕上がりの大きさを計算できる（プレビューの計算を待たない）
+        var measured = Combiner.MeasureFiles(new[] { c1, c2 }, co);
+        check(measured == new Size(3000 + 1333 + 30 + 120, 2000 + 120), $"連結: ヘッダーだけから仕上がりの大きさを計算（{measured}）");
+        check(Combiner.MeasureFiles(new[] { c1, P("broken.png") }, co) == null, "連結: 大きさの分からない画像があれば計算しない");
+
+        // 形式の上限を超えるなら、大きなキャンバスを作る前にやめる（WEBP は 16383px まで）
+        bool rejected = false;
+        try { Combiner.CombineFiles(new[] { c1, c1, c1, c1, c1, c1 }, new CombineOptions(), P("wide_combined.webp")); }
+        catch (NotSupportedException) { rejected = true; }
+        check(rejected && !File.Exists(P("wide_combined.webp")), "連結: 仕上がり 18000px の WEBP は保存前にエラー");
+
         // 画素数の合計の上限: 3000x2000 + 1000x1500 = 7.5M 画素を 0.75M 画素までに → 比率 √0.1
         (pre, scale) = Combiner.LoadForPreview(new[] { c1, c2 }, 1200, 750_000);
         try

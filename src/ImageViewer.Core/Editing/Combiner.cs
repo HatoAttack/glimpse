@@ -70,7 +70,12 @@ public static class Combiner
                 ct.ThrowIfCancellationRequested();
                 images.Add(Imaging.ImageLoader.Load(p));
             }
-            using var result = Combine(images, options);
+            // 形式の上限を超える大きさなら、大きなキャンバスを作る前にやめる
+            var layout = Layout(SizesOf(images), options);
+            int limit = ImageSaver.MaxEdgeFor(dst);
+            if (Math.Max(layout.Canvas.Width, layout.Canvas.Height) > limit)
+                throw new NotSupportedException($"仕上がりが {layout.Canvas.Width} × {layout.Canvas.Height} px で、この形式の上限（縦横 {limit}px）を超えます");
+            using var result = Render(images, layout, options, maxEdge: null);
             ct.ThrowIfCancellationRequested();
             ImageSaver.Save(result, dst);
             return (result.Width, result.Height);
@@ -79,6 +84,20 @@ public static class Combiner
         {
             foreach (var im in images) im.Dispose();
         }
+    }
+
+    /// <summary>
+    /// 仕上がりの大きさ（原寸）を、画像を読まずにヘッダーだけから計算する。大きさの分からない画像があれば null
+    /// </summary>
+    public static Size? MeasureFiles(IReadOnlyList<string> paths, CombineOptions options)
+    {
+        var sizes = new List<Size>(paths.Count);
+        foreach (var p in paths)
+        {
+            if (Imaging.ImageLoader.Identify(p) is not { } h) return null;
+            sizes.Add(new Size(h.Width, h.Height));
+        }
+        return Layout(sizes, options).Canvas;
     }
 
     /// <summary>
