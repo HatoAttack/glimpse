@@ -9,6 +9,7 @@ public sealed class ThumbnailGrid : Control
 {
     private readonly VScrollBar _scroll = new() { Dock = DockStyle.Right, Enabled = false };
     private readonly SelectionModel _selection = new();
+    private readonly System.Windows.Forms.Timer _autoScroll = new() { Interval = 30 };
     private readonly ThumbnailService _thumbnails;
 
     private IReadOnlyList<FileInfo> _items = Array.Empty<FileInfo>();
@@ -45,6 +46,7 @@ public sealed class ThumbnailGrid : Control
             RequestThumbnails();
         };
         _thumbnails.ThumbnailReady += OnThumbnailReady;
+        _autoScroll.Tick += OnAutoScrollTick;
     }
 
     // ---- 公開 API ----
@@ -55,6 +57,7 @@ public sealed class ThumbnailGrid : Control
 
     public void SetItems(IReadOnlyList<FileInfo> items)
     {
+        EndBand();
         _items = items;
         _keys = items.Select(ThumbnailKey.From).ToArray();
         _indexByPath = new Dictionary<string, int>(items.Count, StringComparer.OrdinalIgnoreCase);
@@ -148,6 +151,43 @@ public sealed class ThumbnailGrid : Control
         if (r.IntersectsWith(ClientRectangle)) Invalidate(r);
     }
 
+    // ---- セル内の配置（描画と当たり判定で共通） ----
+
+    private Rectangle ThumbArea(Rectangle cell) => new(cell.X + _pad, cell.Y + _pad, _thumb, _thumb);
+
+    private Rectangle NameArea(Rectangle cell) =>
+        new(cell.X + _pad / 2, cell.Y + _pad + _thumb + _pad / 2, cell.Width - _pad, TextHeight);
+
+    /// <summary>枠内に中央寄せした画像の位置。枠より小さければ等倍（拡大しない）</summary>
+    private static Rectangle Fit(Size image, Rectangle area)
+    {
+        double scale = Math.Min(1.0, Math.Min((double)area.Width / image.Width, (double)area.Height / image.Height));
+        int w = Math.Max(1, (int)Math.Round(image.Width * scale)), h = Math.Max(1, (int)Math.Round(image.Height * scale));
+        return new Rectangle(area.X + (area.Width - w) / 2, area.Y + (area.Height - h) / 2, w, h);
+    }
+
+    /// <summary>
+    /// クリックで項目を掴める場所（画像そのものと名前の文字）。セル内でもそれ以外の余白は「空き」扱いにして、
+    /// そこからドラッグすると範囲選択になる（エクスプローラーの大アイコン表示と同じ）
+    /// </summary>
+    private int HitTest(Point client)
+    {
+        var p = new Point(client.X, client.Y + ScrollY);
+        var layout = CurrentLayout;
+        int i = layout.IndexAt(p.X, p.Y);
+        if (i < 0) return -1;
+        var cell = layout.CellBounds(i);
+
+        var image = ThumbArea(cell);
+        if (_thumbnails.TryGet(_keys[i], out var bmp) == ThumbnailState.Ready) image = Fit(bmp!.Size, image);
+        if (image.Contains(p)) return i;
+
+        var name = NameArea(cell);
+        int textWidth = Math.Min(name.Width, TextRenderer.MeasureText(_items[i].Name, Font).Width);
+        var text = new Rectangle(name.X + (name.Width - textWidth) / 2, name.Y, textWidth, name.Height);
+        return text.Contains(p) ? i : -1;
+    }
+
     // ---- 描画 ----
 
     protected override void OnPaint(PaintEventArgs e)
@@ -161,6 +201,16 @@ public sealed class ThumbnailGrid : Control
             var cell = layout.CellBounds(i);
             cell.Offset(0, -ScrollY);
             if (cell.IntersectsWith(e.ClipRectangle)) DrawCell(g, i, cell);
+        }
+
+        if (_bandVisible)
+        {
+            var band = BandRect;
+            band.Offset(0, -ScrollY);
+            using var fill = new SolidBrush(Color.FromArgb(50, SystemColors.Highlight));
+            using var border = new Pen(SystemColors.Highlight);
+            g.FillRectangle(fill, band);
+            g.DrawRectangle(border, band.X, band.Y, Math.Max(0, band.Width - 1), Math.Max(0, band.Height - 1));
         }
     }
 
@@ -177,11 +227,14 @@ public sealed class ThumbnailGrid : Control
         if (Focused && index == _selection.Focus)
             ControlPaint.DrawFocusRectangle(g, Rectangle.Inflate(cell, -2, -2));
 
-        var area = new Rectangle(cell.X + _pad, cell.Y + _pad, _thumb, _thumb);
+        var area = ThumbArea(cell);
         switch (_thumbnails.TryGet(_keys[index], out var bmp))
         {
             case ThumbnailState.Ready:
-                DrawFitted(g, bmp!, area);
+                var dest = Fit(bmp!.Size, area);
+                g.InterpolationMode = dest.Width < bmp.Width ? InterpolationMode.HighQualityBilinear : InterpolationMode.NearestNeighbor;
+                g.PixelOffsetMode = PixelOffsetMode.Half;
+                g.DrawImage(bmp, dest);
                 break;
             case ThumbnailState.Failed:
                 g.FillRectangle(SystemBrushes.ControlLight, area);
@@ -194,20 +247,8 @@ public sealed class ThumbnailGrid : Control
                 break;
         }
 
-        var textRect = new Rectangle(cell.X + _pad / 2, area.Bottom + _pad / 2, cell.Width - _pad, TextHeight);
-        TextRenderer.DrawText(g, _items[index].Name, Font, textRect, ForeColor,
+        TextRenderer.DrawText(g, _items[index].Name, Font, NameArea(cell), ForeColor,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
-    }
-
-    /// <summary>枠内に中央寄せ。枠より小さければ等倍（拡大しない）</summary>
-    private static void DrawFitted(Graphics g, Bitmap bmp, Rectangle area)
-    {
-        double scale = Math.Min(1.0, Math.Min((double)area.Width / bmp.Width, (double)area.Height / bmp.Height));
-        int w = Math.Max(1, (int)Math.Round(bmp.Width * scale)), h = Math.Max(1, (int)Math.Round(bmp.Height * scale));
-        var dest = new Rectangle(area.X + (area.Width - w) / 2, area.Y + (area.Height - h) / 2, w, h);
-        g.InterpolationMode = scale < 1.0 ? InterpolationMode.HighQualityBilinear : InterpolationMode.NearestNeighbor;
-        g.PixelOffsetMode = PixelOffsetMode.Half;
-        g.DrawImage(bmp, dest);
     }
 
     protected override void OnGotFocus(EventArgs e)
@@ -228,14 +269,15 @@ public sealed class ThumbnailGrid : Control
     {
         base.OnMouseDown(e);
         Focus();
-        int index = CurrentLayout.IndexAt(e.X, e.Y + ScrollY);
+        int index = HitTest(e.Location);
         bool ctrl = (ModifierKeys & Keys.Control) != 0, shift = (ModifierKeys & Keys.Shift) != 0;
 
         if (e.Button == MouseButtons.Left)
         {
             if (index < 0)
             {
-                if (!ctrl && !shift) _selection.Clear();
+                // 空きからのドラッグは範囲選択。動かさずに離せば、修飾キーなしなら選択解除だけになる
+                BeginBand(e.Location, ctrl ? BandMode.Toggle : shift ? BandMode.Add : BandMode.Replace);
             }
             else if (shift) _selection.ShiftClick(index, keepOthers: ctrl);
             else if (ctrl) _selection.CtrlClick(index);
@@ -254,10 +296,30 @@ public sealed class ThumbnailGrid : Control
         SelectionChanged?.Invoke(this, EventArgs.Empty);
     }
 
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        base.OnMouseMove(e);
+        if (!_selection.IsBanding) return;
+        _bandMouse = e.Location;
+        UpdateBand();
+    }
+
+    protected override void OnMouseUp(MouseEventArgs e)
+    {
+        base.OnMouseUp(e);
+        if (e.Button == MouseButtons.Left) EndBand();
+    }
+
+    protected override void OnMouseCaptureChanged(EventArgs e)
+    {
+        base.OnMouseCaptureChanged(e);
+        if (!Capture) EndBand(); // Alt+Tab 等でキャプチャを失ったら範囲選択を終える
+    }
+
     protected override void OnMouseDoubleClick(MouseEventArgs e)
     {
         base.OnMouseDoubleClick(e);
-        int index = CurrentLayout.IndexAt(e.X, e.Y + ScrollY);
+        int index = HitTest(e.Location);
         if (e.Button == MouseButtons.Left && index >= 0) ItemActivated?.Invoke(this, index);
     }
 
@@ -265,6 +327,76 @@ public sealed class ThumbnailGrid : Control
     {
         base.OnMouseWheel(e);
         SetScroll(ScrollY - e.Delta * CurrentLayout.RowHeight / 120);
+        if (_selection.IsBanding) UpdateBand();
+    }
+
+    // ---- ドラッグ範囲選択 ----
+    // 枠の始点はコンテンツ座標で持つので、ドラッグ中にスクロールしても始点は画像に張り付いたまま
+
+    private Point _bandStart;     // コンテンツ座標
+    private Point _bandMouse;     // クライアント座標（最新のマウス位置）
+    private bool _bandVisible;    // ドラッグ量がしきい値を超えて枠を出したか
+
+    private Rectangle BandRect
+    {
+        get
+        {
+            var end = BandEnd;
+            int x = Math.Min(_bandStart.X, end.X), y = Math.Min(_bandStart.Y, end.Y);
+            // 幅 0 の縦線でも当たるよう最低 1px
+            return new Rectangle(x, y, Math.Abs(end.X - _bandStart.X) + 1, Math.Abs(end.Y - _bandStart.Y) + 1);
+        }
+    }
+
+    /// <summary>枠の終点（コンテンツ座標）。画面外にはみ出た分はコンテンツの範囲に収める</summary>
+    private Point BandEnd => new(
+        Math.Clamp(_bandMouse.X, 0, ClientSize.Width - _scroll.Width - 1),
+        Math.Clamp(_bandMouse.Y + ScrollY, 0, Math.Max(0, CurrentLayout.ContentHeight - 1)));
+
+    private void BeginBand(Point client, BandMode mode)
+    {
+        _selection.BeginBand(mode);
+        _bandMouse = client;
+        _bandStart = new Point(client.X, client.Y + ScrollY);
+        _bandVisible = false;
+        Capture = true;
+        _autoScroll.Start();
+    }
+
+    private void UpdateBand()
+    {
+        if (!_bandVisible)
+        {
+            var drag = SystemInformation.DragSize;
+            var end = BandEnd;
+            if (Math.Abs(end.X - _bandStart.X) < drag.Width && Math.Abs(end.Y - _bandStart.Y) < drag.Height) return;
+            _bandVisible = true;
+        }
+        _selection.UpdateBand(CurrentLayout.IndicesIntersecting(BandRect));
+        Invalidate();
+        SelectionChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void EndBand()
+    {
+        if (!_selection.IsBanding) return;
+        _autoScroll.Stop();
+        _selection.EndBand();
+        _bandVisible = false;
+        Capture = false;
+        Invalidate();
+    }
+
+    /// <summary>ドラッグ中にマウスが上下の端を越えたら、越えた量に応じた速さでスクロール</summary>
+    private void OnAutoScrollTick(object? sender, EventArgs e)
+    {
+        if (!_selection.IsBanding) return;
+        int over = _bandMouse.Y < 0 ? _bandMouse.Y : _bandMouse.Y > ClientSize.Height ? _bandMouse.Y - ClientSize.Height : 0;
+        if (over == 0) return;
+        int step = Math.Sign(over) * Math.Clamp(Math.Abs(over), 4, CurrentLayout.RowHeight);
+        int before = ScrollY;
+        SetScroll(ScrollY + step);
+        if (ScrollY != before) UpdateBand();
     }
 
     // ---- キーボード ----
@@ -309,7 +441,11 @@ public sealed class ThumbnailGrid : Control
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) _thumbnails.ThumbnailReady -= OnThumbnailReady;
+        if (disposing)
+        {
+            _thumbnails.ThumbnailReady -= OnThumbnailReady;
+            _autoScroll.Dispose();
+        }
         base.Dispose(disposing);
     }
 }

@@ -31,6 +31,21 @@ public readonly record struct GridLayout(int ItemCount, int ClientWidth, int Cel
         return index < ItemCount ? index : -1;
     }
 
+    /// <summary>コンテンツ座標の矩形（範囲選択の枠）に少しでも掛かるセル</summary>
+    public IEnumerable<int> IndicesIntersecting(Rectangle rect)
+    {
+        if (ItemCount == 0 || rect.Width <= 0 || rect.Height <= 0) yield break;
+        int firstRow = Math.Max(0, (rect.Top - Gap) / RowHeight);
+        int lastRow = Math.Min(Rows - 1, Math.Max(0, rect.Bottom - Gap) / RowHeight);
+        for (int row = firstRow; row <= lastRow; row++)
+            for (int col = 0; col < Columns; col++)
+            {
+                int i = row * Columns + col;
+                if (i >= ItemCount) yield break;
+                if (CellBounds(i).IntersectsWith(rect)) yield return i;
+            }
+    }
+
     /// <summary>scrollY から高さ viewHeight の範囲に少しでも掛かるセルの範囲（無ければ Count=0）</summary>
     public (int First, int Count) VisibleRange(int scrollY, int viewHeight)
     {

@@ -38,6 +38,13 @@ static class ThumbnailTests
         check(l.VisibleRange(0, 5) == (0, 0), "上端の余白だけが見えるときは空");
         check(l.VisibleRange(0, 10000) == (0, 10), "全部見えるときは全件");
         check(new GridLayout(0, 345, 100, 120, 10).VisibleRange(0, 500) == (0, 0), "0 件なら空");
+
+        // 範囲選択の枠: セル 1（x122〜221）とセル 4 の上端にだけ掛かる枠
+        var band = new System.Drawing.Rectangle(150, 100, 20, 50);
+        check(l.IndicesIntersecting(band).SequenceEqual(new[] { 1, 4 }), $"枠に掛かるセル {string.Join(",", l.IndicesIntersecting(band))}");
+        check(!l.IndicesIntersecting(new System.Drawing.Rectangle(0, 0, 400, 9)).Any(), "上端の余白だけの枠は何も選ばない");
+        check(l.IndicesIntersecting(new System.Drawing.Rectangle(0, 0, 400, 2000)).Count() == 10, "全体を囲む枠は全件（存在しないセルは含まない）");
+        check(l.IndicesIntersecting(new System.Drawing.Rectangle(60, 0, 1, 2000)).SequenceEqual(new[] { 0, 3, 6, 9 }), "幅 1px の縦線でも当たる");
     }
 
     // ---- SelectionModel ----
@@ -76,6 +83,37 @@ static class ThumbnailTests
         check(s.Count == 0 && s.Focus == -1, "Reset で解除");
         s.ShiftClick(2);
         check(s.SelectedIndices.SequenceEqual(new[] { 2 }), "起点が無い Shift+クリックは通常クリック扱い");
+
+        // ---- ドラッグ範囲選択 ----
+        s.Reset(20);
+        s.Click(1);
+        s.CtrlClick(5);
+        s.BeginBand(BandMode.Replace);
+        check(s.Count == 0 && s.IsBanding, "範囲選択（修飾なし）は開始時に既存の選択を解除");
+        s.UpdateBand(new[] { 4, 5, 6 });
+        s.UpdateBand(new[] { 5, 6 }); // 枠が縮んだ
+        s.EndBand();
+        check(s.SelectedIndices.SequenceEqual(new[] { 5, 6 }) && s.Focus == 5 && !s.IsBanding, "枠が縮んだら外れた分は選択から外れる");
+
+        s.BeginBand(BandMode.Add);
+        s.UpdateBand(new[] { 10, 11 });
+        s.EndBand();
+        check(s.SelectedIndices.SequenceEqual(new[] { 5, 6, 10, 11 }), "Shift+範囲選択は既存の選択に追加");
+
+        s.BeginBand(BandMode.Toggle);
+        s.UpdateBand(new[] { 6, 7, 10 });
+        check(s.SelectedIndices.SequenceEqual(new[] { 5, 7, 11 }), "Ctrl+範囲選択は囲んだものを反転");
+        s.UpdateBand(Array.Empty<int>());
+        s.EndBand();
+        check(s.SelectedIndices.SequenceEqual(new[] { 5, 6, 10, 11 }), "枠を戻せば開始時の選択に戻る");
+
+        s.BeginBand(BandMode.Replace);
+        s.EndBand();
+        check(s.Count == 0, "空きをクリックしただけなら選択解除");
+        s.BeginBand(BandMode.Add);
+        s.UpdateBand(new[] { -1, 19, 25 });
+        s.EndBand();
+        check(s.SelectedIndices.SequenceEqual(new[] { 19 }), "範囲外の番号は無視");
     }
 
     // ---- ThumbnailService（生成処理は差し替え） ----

@@ -1,10 +1,25 @@
 // 複数選択の状態（クリック・Ctrl・Shift・キー移動）。エクスプローラーと同じ操作感に合わせる
 namespace ImageViewer.App.Grid;
 
+/// <summary>ドラッグ範囲選択での既存の選択の扱い</summary>
+public enum BandMode
+{
+    /// <summary>修飾キーなし: 囲んだものだけを選択</summary>
+    Replace,
+    /// <summary>Shift: 既存の選択に追加</summary>
+    Add,
+    /// <summary>Ctrl: 囲んだものの選択を反転</summary>
+    Toggle,
+}
+
 public sealed class SelectionModel
 {
     private readonly HashSet<int> _selected = new();
     private int _itemCount;
+
+    // ドラッグ範囲選択中: 開始時点の選択（枠が動くたびにここから計算し直す）
+    private HashSet<int>? _bandBase;
+    private BandMode _bandMode;
 
     /// <summary>Shift で範囲選択するときの起点</summary>
     public int Anchor { get; private set; } = -1;
@@ -22,6 +37,7 @@ public sealed class SelectionModel
     {
         _itemCount = itemCount;
         _selected.Clear();
+        _bandBase = null;
         Anchor = Focus = -1;
     }
 
@@ -64,6 +80,36 @@ public sealed class SelectionModel
     }
 
     public void Clear() => _selected.Clear();
+
+    // ---- ドラッグ範囲選択 ----
+
+    public bool IsBanding => _bandBase != null;
+
+    public void BeginBand(BandMode mode)
+    {
+        _bandMode = mode;
+        _bandBase = mode == BandMode.Replace ? new HashSet<int>() : new HashSet<int>(_selected);
+        if (mode == BandMode.Replace) _selected.Clear();
+    }
+
+    /// <summary>枠に掛かっている項目で選択を作り直す（枠が縮んだら外れた項目は元に戻る）</summary>
+    public void UpdateBand(IEnumerable<int> inBand)
+    {
+        if (_bandBase == null) return;
+        _selected.Clear();
+        _selected.UnionWith(_bandBase);
+        int first = -1;
+        foreach (int i in inBand)
+        {
+            if (!Valid(i)) continue;
+            if (first < 0 || i < first) first = i;
+            if (_bandMode == BandMode.Toggle && _bandBase.Contains(i)) _selected.Remove(i);
+            else _selected.Add(i);
+        }
+        if (first >= 0) Anchor = Focus = first;
+    }
+
+    public void EndBand() => _bandBase = null;
 
     /// <summary>
     /// キー移動: 現在位置から delta 進める（範囲外は端で止まる）。
