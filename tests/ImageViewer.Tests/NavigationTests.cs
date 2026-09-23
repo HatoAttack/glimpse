@@ -42,5 +42,16 @@ static class NavigationTests
         check(FolderListing.Normalize(Path.Combine(dir, "nope")) == null && FolderListing.Normalize(Path.Combine(dir, "file.jpg")) == null,
             "無いフォルダ・ファイルは null");
         check(FolderListing.Normalize("C:\\a<b") == null && FolderListing.Normalize("") == null, "不正な文字・空は null");
+
+        // ---- 設定（ホームフォルダ） ----
+        string settingsPath = Path.Combine(dir, "conf", "settings.json");
+        var store = new ImageViewer.Core.Settings.SettingsStore(settingsPath);
+        check(store.Load().HomeFolder == null, "設定ファイルが無ければ初期値（ホーム未設定）");
+        store.Save(new ImageViewer.Core.Settings.AppSettings { HomeFolder = @"D:\写真" });
+        check(store.Load().HomeFolder == @"D:\写真" && !File.Exists(settingsPath + ".tmp"), "保存して読める（一時ファイルは残らない）");
+        store.Save(new ImageViewer.Core.Settings.AppSettings { HomeFolder = @"E:\" });
+        check(store.Load().HomeFolder == @"E:\", "上書き保存");
+        File.WriteAllText(settingsPath, "{ 壊れた");
+        check(store.Load().HomeFolder == null, "壊れた設定ファイルは初期値で読む（起動できなくならない）");
     }
 }
