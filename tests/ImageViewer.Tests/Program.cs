@@ -86,6 +86,10 @@ Directory.Delete(dir, true);
 RenameTests.Run(Check, dir);
 Directory.Delete(dir, true);
 
+// ---- ファイラとしての移動 ----
+NavigationTests.Run(Check, dir);
+Directory.Delete(dir, true);
+
 Console.WriteLine(failed ? "\n失敗あり" : "\nすべて OK");
 return failed ? 1 : 0;
 

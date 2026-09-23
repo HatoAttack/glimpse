@@ -1,8 +1,10 @@
 // 画像ビューア - メイン画面
 using ImageViewer.App.Commands;
+using ImageViewer.App.Filer;
 using ImageViewer.App.Grid;
 using ImageViewer.Core.Commands;
 using ImageViewer.Core.Imaging;
+using ImageViewer.Core.Navigation;
 using ImageViewer.Core.Ordering;
 using ImageViewer.Core.Rename;
 using ImageViewer.Core.Thumbnails;
@@ -32,6 +34,26 @@ public class MainForm : Form, ICommandHost
     private string? _folder;
     private CancellationTokenSource? _loadCts;
 
+    // ---- ファイラ（移動） ----
+    private readonly NavigationHistory _history = new();
+    private readonly FolderTree _tree = new() { Dock = DockStyle.Fill };
+    private readonly TextBox _address = new()
+    {
+        Dock = DockStyle.Fill,
+        BorderStyle = BorderStyle.FixedSingle,
+        // Windows 標準のフォルダ名補完（追加の処理・索引は不要）
+        AutoCompleteMode = AutoCompleteMode.SuggestAppend,
+        AutoCompleteSource = AutoCompleteSource.FileSystemDirectories,
+    };
+    private readonly Button _backButton = new() { Text = "←" };
+    private readonly Button _forwardButton = new() { Text = "→" };
+    private readonly Button _upButton = new() { Text = "↑" };
+    private readonly ToolTip _toolTip = new();
+    private ToolStripMenuItem _backItem = null!, _forwardItem = null!, _upItem = null!;
+
+    /// <summary>移動の種類（履歴の扱いが変わる）</summary>
+    private enum NavKind { New, Back, Forward, Reload }
+
     public MainForm(string? initialFolder = null)
     {
         Text = AppTitle;
@@ -50,16 +72,31 @@ public class MainForm : Form, ICommandHost
         _grid.MarksChanged += (_, _) => UpdateCommandStates();
         _grid.OrderChanged += (_, _) => SaveManualOrder();
         _grid.FolderDropped += async (_, folder) => await LoadFolderAsync(folder);
+        _grid.FolderActivated += async (_, dir) => await LoadFolderAsync(dir.FullName);
+        _grid.MouseDown += OnMouseBackForward;
+        _tree.MouseDown += OnMouseBackForward;
+        _tree.FolderSelected += async (_, path) => await LoadFolderAsync(path);
         FormClosed += (_, _) => _thumbnails.Dispose();
 
         var statusStrip = new StatusStrip();
         _status = new ToolStripStatusLabel { Spring = true, TextAlign = ContentAlignment.MiddleLeft };
         statusStrip.Items.Add(_status);
 
-        // Dock の都合で Fill を先に追加する
-        Controls.Add(_grid);
+        var split = new SplitContainer
+        {
+            Dock = DockStyle.Fill,
+            FixedPanel = FixedPanel.Panel1,
+            SplitterWidth = LogicalToDeviceUnits(4),
+        };
+        split.Panel1.Controls.Add(_tree);
+        split.Panel2.Controls.Add(_grid);
+
+        // Dock は後から追加したものから順に場所を取るので、Fill → アドレスバー → メニュー → ステータスバー の順に追加
+        Controls.Add(split);
+        Controls.Add(BuildNavigationBar());
         Controls.Add(BuildMainMenu());
         Controls.Add(statusStrip);
+        split.SplitterDistance = LogicalToDeviceUnits(220);
         BuildContextMenu();
 
         DragEnter += (_, e) =>
@@ -70,7 +107,113 @@ public class MainForm : Form, ICommandHost
         };
 
         UpdateCommandStates();
-        if (initialFolder != null) Shown += async (_, _) => await LoadFolderAsync(initialFolder);
+        UpdateNavigationState();
+        // 起動時は指定のフォルダ、無ければピクチャを開く
+        string? start = initialFolder ?? Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
+        if (!string.IsNullOrEmpty(start) && Directory.Exists(start)) Shown += async (_, _) => await LoadFolderAsync(start);
+    }
+
+    // ---- アドレスバー・戻る / 進む / 上へ ----
+
+    private Control BuildNavigationBar()
+    {
+        var buttons = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Left, AutoSize = true, WrapContents = false, Padding = new Padding(4, 3, 0, 0),
+        };
+        foreach (var (button, tip) in new[]
+                 {
+                     (_backButton, "戻る (Alt+←)"), (_forwardButton, "進む (Alt+→)"), (_upButton, "上のフォルダへ (Alt+↑ / Backspace)"),
+                 })
+        {
+            button.Size = new Size(LogicalToDeviceUnits(30), _address.PreferredHeight + LogicalToDeviceUnits(2));
+            button.Margin = new Padding(0, 0, LogicalToDeviceUnits(2), 0);
+            button.TabStop = false;
+            _toolTip.SetToolTip(button, tip);
+            buttons.Controls.Add(button);
+        }
+        _backButton.Click += async (_, _) => await GoBackAsync();
+        _forwardButton.Click += async (_, _) => await GoForwardAsync();
+        _upButton.Click += async (_, _) => await GoUpAsync();
+
+        _address.KeyDown += async (_, e) =>
+        {
+            if (e.KeyCode == Keys.Enter)
+            {
+                e.SuppressKeyPress = true;
+                await NavigateFromAddressAsync();
+            }
+            else if (e.KeyCode == Keys.Escape)
+            {
+                e.SuppressKeyPress = true;
+                _address.Text = _folder ?? "";
+                _grid.Focus();
+            }
+        };
+        // クリックで全体を選択（すぐに上書き入力できる。エクスプローラーと同じ）
+        _address.Enter += (_, _) => BeginInvoke(_address.SelectAll);
+
+        var addressHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4, 4, 6, 4) };
+        addressHost.Controls.Add(_address);
+        var bar = new Panel { Dock = DockStyle.Top, Height = _address.PreferredHeight + LogicalToDeviceUnits(10) };
+        bar.Controls.Add(addressHost);
+        bar.Controls.Add(buttons);
+        return bar;
+    }
+
+    private async Task NavigateFromAddressAsync()
+    {
+        if (FolderListing.Normalize(_address.Text) is string folder)
+        {
+            await LoadFolderAsync(folder);
+            _grid.Focus();
+        }
+        else
+        {
+            System.Media.SystemSounds.Beep.Play();
+            Notify($"フォルダが見つかりません: {_address.Text.Trim()}");
+            _address.SelectAll();
+        }
+    }
+
+    private async Task GoBackAsync()
+    {
+        if (_history.GoBack() is string path) await LoadFolderAsync(path, NavKind.Back);
+    }
+
+    private async Task GoForwardAsync()
+    {
+        if (_history.GoForward() is string path) await LoadFolderAsync(path, NavKind.Forward);
+    }
+
+    private async Task GoUpAsync()
+    {
+        if (_folder != null && FolderListing.Parent(_folder) is string parent) await LoadFolderAsync(parent);
+    }
+
+    private void UpdateNavigationState()
+    {
+        _backButton.Enabled = _backItem.Enabled = _history.CanGoBack;
+        _forwardButton.Enabled = _forwardItem.Enabled = _history.CanGoForward;
+        _upButton.Enabled = _upItem.Enabled = _folder != null && FolderListing.Parent(_folder) != null;
+    }
+
+    /// <summary>マウスの戻る / 進むボタン</summary>
+    private async void OnMouseBackForward(object? sender, MouseEventArgs e)
+    {
+        if (e.Button == MouseButtons.XButton1) await GoBackAsync();
+        else if (e.Button == MouseButtons.XButton2) await GoForwardAsync();
+    }
+
+    /// <summary>Backspace で上のフォルダへ（アドレスバーで文字を消しているときは除く）</summary>
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if (keyData == Keys.Back && !_address.Focused)
+        {
+            _ = GoUpAsync();
+            return true;
+        }
+        return base.ProcessCmdKey(ref msg, keyData);
     }
 
     private void RegisterCommands()
@@ -106,6 +249,7 @@ public class MainForm : Form, ICommandHost
         menu.Items.Add(editMenu);
         menu.Items.Add(BuildMarkMenu());
         menu.Items.Add(BuildViewMenu());
+        menu.Items.Add(BuildGoMenu());
 
         // 登録済みコマンドをカテゴリ名のメニューに追加（同名のメニューがあればそこへ追記）
         foreach (var group in _registry.ByCategory())
@@ -132,6 +276,21 @@ public class MainForm : Form, ICommandHost
         helpMenu.DropDownItems.Add(new ToolStripMenuItem("対応形式(&F)...", null, (_, _) => ShowSupportedFormats()));
         menu.Items.Add(helpMenu);
         return menu;
+    }
+
+    /// <summary>移動メニュー</summary>
+    private ToolStripMenuItem BuildGoMenu()
+    {
+        var go = new ToolStripMenuItem("移動(&G)");
+        _backItem = new ToolStripMenuItem("戻る(&B)", null, async (_, _) => await GoBackAsync()) { ShortcutKeys = Keys.Alt | Keys.Left };
+        _forwardItem = new ToolStripMenuItem("進む(&F)", null, async (_, _) => await GoForwardAsync()) { ShortcutKeys = Keys.Alt | Keys.Right };
+        _upItem = new ToolStripMenuItem("上のフォルダへ(&U)", null, async (_, _) => await GoUpAsync()) { ShortcutKeys = Keys.Alt | Keys.Up };
+        go.DropDownItems.AddRange(new ToolStripItem[]
+        {
+            _backItem, _forwardItem, _upItem, new ToolStripSeparator(),
+            new ToolStripMenuItem("アドレスバーに入力(&A)", null, (_, _) => _address.Focus()) { ShortcutKeys = Keys.Control | Keys.L },
+        });
+        return go;
     }
 
     /// <summary>表示メニュー（並び順）</summary>
@@ -237,8 +396,8 @@ public class MainForm : Form, ICommandHost
 
     // ---- コマンド実行 ----
 
-    private IReadOnlyList<string> SelectedPaths() =>
-        _grid.SelectedIndices.Select(i => _grid.Items[i].FullName).ToList();
+    /// <summary>コマンドの対象（選択中の画像。フォルダのタイルは含まない）</summary>
+    private IReadOnlyList<string> SelectedPaths() => _grid.SelectedImages.Select(f => f.FullName).ToList();
 
     private void UpdateCommandStates()
     {
@@ -247,7 +406,9 @@ public class MainForm : Form, ICommandHost
             item.Enabled = cmd.CanExecute(paths);
 
         string where = _folder ?? "フォルダ未選択（Ctrl+O で開く / フォルダをドロップ）";
-        string text = $"{where}   {_grid.Items.Count} 枚";
+        string text = _grid.Folders.Count > 0
+            ? $"{where}   フォルダ {_grid.Folders.Count}   画像 {_grid.Items.Count} 枚"
+            : $"{where}   画像 {_grid.Items.Count} 枚";
         if (paths.Count > 0) text += $"   選択 {paths.Count} 枚";
         if (_grid.MarkedCount > 0) text += $"   チェック {_grid.MarkedCount} 枚";
         _status.Text = text;
@@ -360,24 +521,26 @@ public class MainForm : Form, ICommandHost
         if (dlg.ShowDialog(this) == DialogResult.OK) await LoadFolderAsync(dlg.SelectedPath);
     }
 
-    private async Task LoadFolderAsync(string folder)
+    private async Task LoadFolderAsync(string folder, NavKind kind = NavKind.New)
     {
         _loadCts?.Cancel();
         var cts = _loadCts = new CancellationTokenSource();
         _status.Text = $"{folder} を読み込み中...";
         bool reload = string.Equals(_folder, folder, StringComparison.OrdinalIgnoreCase);
+        List<DirectoryInfo> folders;
         List<FileInfo> files;
         SortMode mode;
         try
         {
             // 大きなフォルダでも UI を止めないよう列挙は別スレッドで行う。
             // 別のフォルダを開いたときは、手動の並び順が保存されていれば手動、無ければ名前順で始める
-            (files, mode) = await Task.Run(() =>
+            (folders, files, mode) = await Task.Run(() =>
             {
                 var listed = ImageFormats.ListImages(folder, cts.Token);
+                var subfolders = FolderListing.ListSubfolders(folder, cts.Token);
                 var saved = _orderStore.Load(folder);
                 var m = reload ? _sortMode : saved != null ? SortMode.Manual : SortMode.Name;
-                return (Arrange(listed, m, saved), m);
+                return (subfolders, Arrange(listed, m, saved), m);
             }, cts.Token);
         }
         catch (OperationCanceledException)
@@ -399,10 +562,14 @@ public class MainForm : Form, ICommandHost
         }
         _folder = folder;
         _sortMode = mode;
+        if (kind == NavKind.New) _history.Navigate(folder);
         UpdateSortChecks();
-        _grid.SetItems(files, reload);
-        _grid.Focus();
-        Text = $"{Path.GetFileName(folder.TrimEnd('\\'))} - {AppTitle}";
+        _grid.SetContents(folders, files, reload);
+        if (!_address.Focused) _address.Text = folder;
+        if (!reload) _ = _tree.RevealAsync(folder);
+        string title = Path.GetFileName(Path.TrimEndingDirectorySeparator(folder));
+        Text = $"{(title.Length > 0 ? title : folder)} - {AppTitle}";
+        UpdateNavigationState();
         UpdateCommandStates();
     }
 

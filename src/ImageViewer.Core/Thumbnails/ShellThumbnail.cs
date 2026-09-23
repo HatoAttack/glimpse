@@ -9,7 +9,12 @@ namespace ImageViewer.Core.Thumbnails;
 public static class ShellThumbnail
 {
     /// <summary>長辺 size 以下のサムネイル。サムネイルハンドラが無い・失敗したときは null（アイコンは返さない）</summary>
-    public static Bitmap? TryGet(string path, int size)
+    public static Bitmap? TryGet(string path, int size) => GetImage(path, size, SIIGBF_THUMBNAILONLY);
+
+    /// <summary>エクスプローラーと同じアイコン（フォルダのタイル用）。取れなければ null</summary>
+    public static Bitmap? TryGetIcon(string path, int size) => GetImage(path, size, SIIGBF_ICONONLY);
+
+    private static Bitmap? GetImage(string path, int size, int flags)
     {
         IShellItemImageFactory? factory = null;
         IntPtr hbmp = IntPtr.Zero;
@@ -17,7 +22,7 @@ public static class ShellThumbnail
         {
             var iid = typeof(IShellItemImageFactory).GUID;
             SHCreateItemFromParsingName(path, IntPtr.Zero, ref iid, out factory);
-            int hr = factory.GetImage(new SIZE { cx = size, cy = size }, SIIGBF_THUMBNAILONLY, out hbmp);
+            int hr = factory.GetImage(new SIZE { cx = size, cy = size }, flags, out hbmp);
             return hr == 0 && hbmp != IntPtr.Zero ? FromHBitmap(hbmp) : null;
         }
         catch (Exception ex) when (ex is COMException or FileNotFoundException or ArgumentException or UnauthorizedAccessException)
@@ -81,7 +86,7 @@ public static class ShellThumbnail
 
     // ---- Win32 / COM 定義 ----
 
-    private const int SIIGBF_THUMBNAILONLY = 0x8;
+    private const int SIIGBF_ICONONLY = 0x4, SIIGBF_THUMBNAILONLY = 0x8;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct SIZE { public int cx, cy; }
