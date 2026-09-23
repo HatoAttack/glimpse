@@ -87,6 +87,10 @@ Directory.Delete(dir, true);
 RenameTests.Run(Check, dir);
 Directory.Delete(dir, true);
 
+// ---- リサイズ・形式変換 / 切り抜き / 連結 ----
+EditingTests.Run(Check, dir);
+Directory.Delete(dir, true);
+
 // ---- ファイラとしての移動 ----
 NavigationTests.Run(Check, dir);
 Directory.Delete(dir, true);
