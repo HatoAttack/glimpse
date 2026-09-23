@@ -16,7 +16,7 @@ using ImageViewer.Core.Thumbnails;
 
 namespace ImageViewer.App;
 
-public class MainForm : Form, ICommandHost
+public class MainForm : Form, ICommandHost, ISettingsAccess
 {
     public const string AppTitle = "画像ビューア";
 
@@ -579,10 +579,12 @@ public class MainForm : Form, ICommandHost
 
     private void RegisterCommands()
     {
+        _registry.Register(new ResizeCommand(this, this));
+        _registry.Register(new CropCommand(this));
+        _registry.Register(new CombineCommand(this, this));
         _registry.Register(new RenameCommand(this));
         _registry.Register(new CopyPathsCommand());
         _registry.Register(new RevealInExplorerCommand());
-        // TODO: リサイズ・切り抜き・連結をここに追加
 
         foreach (var (shortcut, ids) in _registry.FindShortcutConflicts())
             System.Diagnostics.Debug.WriteLine($"ショートカット重複: {shortcut} → {string.Join(", ", ids)}");
@@ -804,6 +806,21 @@ public class MainForm : Form, ICommandHost
     }
 
     public void Notify(string message) => _status.Text = message;
+
+    AppSettings ISettingsAccess.Settings => _settings;
+
+    void ISettingsAccess.UpdateSettings(Func<AppSettings, AppSettings> change)
+    {
+        _settings = change(_settings);
+        try
+        {
+            _settingsStore.Save(_settings);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Notify($"設定を保存できませんでした（この起動中だけ有効）: {ex.Message}");
+        }
+    }
 
     public void FilesRenamed(IReadOnlyList<RenameOp> ops)
     {

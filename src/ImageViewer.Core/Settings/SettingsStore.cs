@@ -24,6 +24,12 @@ public sealed record AppSettings
     /// <summary>フォルダジャンプで Everything を使う（既定は使わない。起動していなければ自前の索引）</summary>
     public bool UseEverything { get; init; }
 
+    /// <summary>リサイズ・形式変換で前回使った設定（null なら既定）</summary>
+    public Editing.ConvertOptions? Resize { get; init; }
+
+    /// <summary>連結で前回使った設定（null なら既定）</summary>
+    public Editing.CombineOptions? Combine { get; init; }
+
     /// <summary>実際に使う範囲（保存はしない）</summary>
     [System.Text.Json.Serialization.JsonIgnore]
     public IReadOnlyList<string> EffectiveJumpRoots =>
