@@ -222,22 +222,16 @@ public sealed class FolderTree : TreeView
     /// </summary>
     public void FolderRenamed(string oldPath, string newPath)
     {
-        string prefix = oldPath + Path.DirectorySeparatorChar;
         void Walk(TreeNodeCollection nodes)
         {
             foreach (TreeNode node in nodes)
             {
-                if (node.Tag is string path)
+                if (node.Tag is string path && FolderListing.Retarget(path, oldPath, newPath) is string moved)
                 {
-                    if (string.Equals(path, oldPath, StringComparison.OrdinalIgnoreCase))
-                    {
-                        node.Tag = newPath;
-                        if (node.Parent != null) node.Text = Path.GetFileName(newPath);
-                    }
-                    else if (path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                    {
-                        node.Tag = newPath + path[oldPath.Length..];
-                    }
+                    // そのフォルダ自身（見出しの無い普通のノード）は表示名も変える
+                    if (node.Parent != null && string.Equals(moved, newPath, StringComparison.OrdinalIgnoreCase))
+                        node.Text = Path.GetFileName(newPath);
+                    node.Tag = moved;
                 }
                 Walk(node.Nodes);
             }

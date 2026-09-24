@@ -39,6 +39,15 @@ public sealed class NavigationHistory
         return Current;
     }
 
+    /// <summary>フォルダー名を変えた。そのフォルダ（とその中）の履歴を新しいパスに付け替える</summary>
+    public void Retarget(string oldPath, string newPath)
+    {
+        if (Current != null) Current = FolderListing.Retarget(Current, oldPath, newPath) ?? Current;
+        foreach (var stack in new[] { _back, _forward })
+            for (int i = 0; i < stack.Count; i++)
+                stack[i] = FolderListing.Retarget(stack[i], oldPath, newPath) ?? stack[i];
+    }
+
     private void Push(List<string> stack, string path)
     {
         stack.Add(path);

@@ -55,6 +55,26 @@ public sealed class FolderIndex
         return Path.Combine(parts.ToArray());
     }
 
+    /// <summary>
+    /// フォルダー名を変えた。そのフォルダの名前を 1 件書き換えるだけで、中のフォルダも親をたどって新しいパスになる。
+    /// 索引に無ければ false（次の作り直しで入る）
+    /// </summary>
+    public bool Rename(string oldPath, string newPath)
+    {
+        string oldFull = Path.TrimEndingDirectorySeparator(oldPath), newFull = Path.TrimEndingDirectorySeparator(newPath);
+        string oldName = Path.GetFileName(oldFull);
+        for (int i = 0; i < _names.Length; i++)
+        {
+            bool root = _parents[i] < 0;
+            // 名前が同じものだけ組み立てて比べる（全件のパスは作らない）
+            if (!root && !string.Equals(_names[i], oldName, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!string.Equals(Path.TrimEndingDirectorySeparator(FullPath(i)), oldFull, StringComparison.OrdinalIgnoreCase)) continue;
+            _names[i] = root ? newFull : Path.GetFileName(newFull);
+            return true;
+        }
+        return false;
+    }
+
     // ---- 作成 ----
 
     /// <summary>除外するフォルダ名（大きいのに画像を探すことは少ない、開発・システム用のもの）</summary>

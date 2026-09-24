@@ -355,20 +355,14 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             return;
         }
 
+        // 古いパスを覚えているもの（ツリー・戻る / 進む・フォルダジャンプ・ホーム）を新しいパスに付け替える
         _tree.FolderRenamed(oldPath, newPath);
-        // ホームがそのフォルダ（の中）なら付け替える
-        if (_settings.HomeFolder is string home && RenamedPath(home, oldPath, newPath) is string newHome) SetHome(newHome);
+        _history.Retarget(oldPath, newPath);
+        _jump.FolderRenamed(oldPath, newPath);
+        if (_settings.HomeFolder is string home && FolderListing.Retarget(home, oldPath, newPath) is string newHome) SetHome(newHome);
         await LoadFolderAsync(_folder, NavKind.Reload);
         _grid.SelectPath(newPath);
         Notify($"フォルダー名を変更しました: {oldName} → {dlg.Value}");
-    }
-
-    /// <summary>path が oldPath 自身かその中なら、newPath に付け替えたパス（違えば null）</summary>
-    private static string? RenamedPath(string path, string oldPath, string newPath)
-    {
-        if (string.Equals(path, oldPath, StringComparison.OrdinalIgnoreCase)) return newPath;
-        string prefix = oldPath + Path.DirectorySeparatorChar;
-        return path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ? newPath + path[oldPath.Length..] : null;
     }
 
     /// <summary>「新しいフォルダー」、あれば「新しいフォルダー (2)」…（エクスプローラーと同じ付け方）</summary>

@@ -56,6 +56,18 @@ static class JumpTests
         File.WriteAllText(indexPath, "garbage");
         check(FolderIndex.Load(indexPath) == null && FolderIndex.Load(Path.Combine(dir, "none.bin")) == null, "壊れた・無い索引は null");
 
+        // ---- フォルダー名の変更 ----
+        var renamed = FolderIndex.Build(new[] { root });
+        string photos = Path.Combine(root, "写真"), photos2 = Path.Combine(root, "写真_整理済み");
+        bool ok = renamed.Rename(photos, photos2);
+        var after = Enumerable.Range(0, renamed.Count).Select(renamed.FullPath).ToList();
+        check(ok && after.Contains(photos2) && after.Contains(Path.Combine(photos2, @"2024\旅行")) && !after.Any(p => p.StartsWith(photos + @"\"))
+              && after.Count(p => p == photos) == 0,
+            "索引: 名前を変えたフォルダを 1 件書き換えると、中のフォルダも新しいパスになる");
+        check(!renamed.Rename(Path.Combine(root, "無いフォルダ"), Path.Combine(root, "x")), "索引: 無いフォルダは false");
+        string root2 = root + "_2";
+        check(renamed.Rename(root, root2) && renamed.FullPath(0).StartsWith(root2), "索引: 対象フォルダ（ルート）自体の名前の変更");
+
         // ---- 開いた記録 ----
         var t0 = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc);
         var visits = new VisitHistory(limit: 3);
@@ -67,6 +79,15 @@ static class JumpTests
         visits.Record(@"C:\c", t0);
         visits.Record(@"C:\d", t0);
         check(visits.Count == 3 && visits.FrecencyOf(@"C:\b", t0) == 0, "上限を超えたら点数の低いものから捨てる");
+        var moves = new VisitHistory();
+        moves.Record(@"C:\写真", t0);
+        moves.Record(@"C:\写真", t0);
+        moves.Record(@"C:\写真\旅行", t0);
+        moves.Record(@"C:\写真2", t0);
+        moves.Retarget(@"C:\写真", @"C:\画像");
+        check(moves.FrecencyOf(@"C:\画像", t0) == visits.FrecencyOf(@"C:\a", t0) && moves.FrecencyOf(@"C:\画像\旅行", t0) > 0
+              && moves.FrecencyOf(@"C:\写真", t0) == 0 && moves.FrecencyOf(@"C:\写真2", t0) > 0,
+            "開いた記録: フォルダー名の変更で中も含めて付け替える（回数は引き継ぐ・似た名前は変えない）");
         string visitsPath = Path.Combine(dir, "data", "visits.json");
         visits.Save(visitsPath);
         check(VisitHistory.Load(visitsPath).Count == 3, "記録を保存して読める");
