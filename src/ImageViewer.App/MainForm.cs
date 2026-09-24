@@ -528,6 +528,12 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _jumpList.BringToFront();
         _jumpList.Picked += async (_, path) => await JumpToAsync(path);
         _jumpList.CommandPicked += (_, command) => RunCommandCandidate(command);
+        // 候補をクリックすると一覧にフォーカスが移る。その間はアドレスバーの入力を続け、一覧からも離れたら閉じる
+        _addressBox.KeepEditing = () => _jumpList.Focused;
+        _jumpList.LostFocus += (_, _) => BeginInvoke(() =>
+        {
+            if (!_jumpList.Focused && !_address.Focused) HideJumpList();
+        });
 
         // 入力が止まってから検索する（1 文字ごとに走らせない）
         _address.TextChanged += (_, _) =>
@@ -634,6 +640,12 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         {
             System.Media.SystemSounds.Beep.Play();
             Notify($"「{command.Name}」は今は実行できません（対象の画像を選んでから）");
+            // クリックで一覧にフォーカスが移っていたら、入力の続きができるようにアドレスバーへ戻す（入力した文字はそのまま）
+            if (!_address.Focused)
+            {
+                _address.Focus();
+                BeginInvoke(() => _address.Select(_address.TextLength, 0));
+            }
             return;
         }
         HideJumpList();
@@ -662,6 +674,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     {
         _jumpCts?.Cancel();
         _jumpList.Visible = false;
+        if (!_address.Focused) _addressBox.EndEdit(); // 一覧をクリックしていた: 入力もやめる
     }
 
     private async Task JumpToAsync(string path)
