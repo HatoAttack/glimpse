@@ -24,8 +24,12 @@ public sealed record LoadOptions
     public static LoadOptions Thumbnail(int maxEdge) => new() { MaxEdge = maxEdge };
 }
 
-/// <summary>画像の大きさ（回転補正後の見た目どおりの縦横）と形式</summary>
-public sealed record ImageHeader(int Width, int Height, string Format);
+/// <summary>画像の大きさ（回転補正後の見た目どおりの縦横）と形式、あれば撮影情報</summary>
+public sealed record ImageHeader(int Width, int Height, string Format)
+{
+    /// <summary>撮影情報（EXIF）。無ければ null</summary>
+    public PhotoInfo? Photo { get; init; }
+}
 
 public static class ImageLoader
 {
@@ -66,7 +70,9 @@ public static class ImageLoader
                     var info = Image.Identify(path);
                     ushort o = info.Metadata.ExifProfile?.TryGetValue(ExifTag.Orientation, out var v) == true ? v.Value : (ushort)1;
                     string format = info.Metadata.DecodedImageFormat?.Name ?? FormatFromExtension(path);
-                    return Rotated(o) ? new ImageHeader(info.Height, info.Width, format) : new ImageHeader(info.Width, info.Height, format);
+                    var photo = PhotoInfo.FromExif(info.Metadata.ExifProfile);
+                    return (Rotated(o) ? new ImageHeader(info.Height, info.Width, format) : new ImageHeader(info.Width, info.Height, format))
+                        with { Photo = photo };
                 }
                 catch (Exception ex) when (IsDecodeFailure(ex) && ImageFormats.IsWicFormat(path))
                 {
@@ -82,13 +88,36 @@ public static class ImageLoader
             // HEIF 系はデコーダが回転済みの大きさを返す（ImageLoader.Load と同じ扱い）
             ushort orientation = HeifExtensions.Contains(Path.GetExtension(path)) ? (ushort)1 : ReadOrientation(frame);
             string fmt = FormatFromExtension(path);
-            return Rotated(orientation)
+            return (Rotated(orientation)
                 ? new ImageHeader(frame.PixelHeight, frame.PixelWidth, fmt)
-                : new ImageHeader(frame.PixelWidth, frame.PixelHeight, fmt);
+                : new ImageHeader(frame.PixelWidth, frame.PixelHeight, fmt)) with { Photo = ReadWicPhoto(frame) };
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException
                                        or UnknownImageFormatException or InvalidImageContentException or FileFormatException
                                        or ArgumentException or InvalidOperationException or System.Runtime.InteropServices.COMException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// WIC で読む形式（HEIC・RAW 等）の撮影情報。形式ごとに EXIF の置き場所が違うので、
+    /// WIC が共通の形で出してくれる撮影日時・カメラだけを読む（読めなければ null）
+    /// </summary>
+    private static PhotoInfo? ReadWicPhoto(Wpf.BitmapFrame frame)
+    {
+        try
+        {
+            if (frame.Metadata is not Wpf.BitmapMetadata meta) return null;
+            var info = new PhotoInfo
+            {
+                TakenAt = DateTime.TryParse(meta.DateTaken, out var d) ? d : null,
+                Camera = PhotoInfo.CameraName(meta.CameraManufacturer, meta.CameraModel),
+            };
+            return info.IsEmpty ? null : info;
+        }
+        catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException or ArgumentException
+                                       or System.Runtime.InteropServices.COMException)
         {
             return null;
         }

@@ -47,6 +47,12 @@ public sealed record AppSettings
     /// <summary>左のサイドバー（フォルダツリー）を表示する（null は既定 = 表示）</summary>
     public bool? SidebarVisible { get; init; }
 
+    /// <summary>一覧の右側の詳細パネル（インスペクタ）を表示する（null は既定 = 表示）</summary>
+    public bool? InspectorVisible { get; init; }
+
+    /// <summary>1 枚表示で詳細パネルを表示する（null は既定 = 表示しない。I キーで切り替え）</summary>
+    public bool? QuickLookDetailsVisible { get; init; }
+
     /// <summary>最近の移動先の先頭に追加した設定（同じものは前から外す。件数に上限）</summary>
     public AppSettings WithRecentDestination(string folder) => this with
     {

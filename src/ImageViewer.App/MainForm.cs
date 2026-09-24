@@ -28,6 +28,10 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     private readonly ThumbnailGrid _grid;
     private readonly QuickLookView _quickLook = new() { Dock = DockStyle.Fill };
     private readonly FooterBar _footer = new();
+    private readonly DetailsPanel _inspector = new() { Dock = DockStyle.Right };
+    private readonly IconButton _inspectorButton = new() { Icon = Icons.Info, AccessibleName = "詳細パネル" };
+    private ToolStripMenuItem _inspectorItem = null!;
+    private string _selectionText = ""; // フッターに出す選択中の情報（詳細パネルを出している間は出さない）
     private readonly System.Windows.Forms.Timer _infoDelay = new() { Interval = 100 };
     private readonly Dictionary<ThumbnailKey, ImageHeader?> _infoCache = new();
     private CancellationTokenSource? _infoCts;
@@ -179,11 +183,25 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _split.Panel2.Controls.Add(_quickLook);
         SetUpQuickLook();
 
-        // Dock は後から追加したものから順に場所を取るので、Fill → ツールバー → フッター の順に追加
+        // Dock は後から追加したものから順に場所を取るので、Fill → 右の詳細パネル → ツールバー → フッター の順に追加
         _mainMenu = BuildMainMenu();
         Controls.Add(_split);
+        Controls.Add(_inspector);
         Controls.Add(BuildToolBar());
         Controls.Add(_footer);
+        _inspector.Visible = _inspectorButton.Active = _settings.InspectorVisible ?? true;
+        // 1 枚表示の間は一覧の右の詳細パネルを隠す（1 枚表示には I で出す自分の詳細パネルがある。画像を広く見せる）
+        _quickLook.VisibleChanged += (_, _) =>
+        {
+            _inspector.Visible = _inspectorItem.Checked && !_quickLook.Visible;
+            _inspectorButton.Active = _quickLook.Visible ? _quickLook.Details.Visible : _inspectorItem.Checked;
+        };
+        _quickLook.Details.Visible = _settings.QuickLookDetailsVisible ?? false;
+        _quickLook.DetailsToggled += (_, _) =>
+        {
+            _inspectorButton.Active = _quickLook.Details.Visible;
+            ((ISettingsAccess)this).UpdateSettings(s => s with { QuickLookDetailsVisible = _quickLook.Details.Visible ? true : null });
+        };
         _split.SplitterDistance = LogicalToDeviceUnits(220);
         _split.Panel1Collapsed = !(_settings.SidebarVisible ?? true);
         BuildContextMenu();
@@ -262,20 +280,28 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
     // ---- 選択中の画像の情報（フッター） ----
 
+    /// <summary>選択中の画像の情報を、フッター（詳細パネルを閉じているとき）と詳細パネル（一覧の右・1 枚表示）に出す</summary>
     private async Task UpdateSelectionInfoAsync()
     {
         _infoCts?.Cancel();
         var images = _grid.SelectedImages;
         var folders = _grid.SelectedFolders;
+        DetailsPanel[] panels = { _inspector, _quickLook.Details };
 
         if (images.Count == 0 && folders.Count == 1)
         {
-            _footer.SelectionInfo = $"フォルダー ・ {folders[0].LastWriteTime:yyyy/MM/dd HH:mm}";
+            SetSelectionText($"フォルダー ・ {folders[0].LastWriteTime:yyyy/MM/dd HH:mm}");
+            foreach (var panel in panels) panel.ShowFolder(folders[0]);
             return;
         }
         if (images.Count != 1)
         {
-            _footer.SelectionInfo = images.Count == 0 ? "" : $"{images.Count} 枚 ・ 合計 {FormatBytes(images.Sum(SafeLength))}";
+            SetSelectionText(images.Count == 0 ? "" : $"{images.Count} 枚 ・ 合計 {FormatBytes(images.Sum(SafeLength))}");
+            foreach (var panel in panels)
+            {
+                if (images.Count == 0) panel.ShowNothing();
+                else panel.ShowMultiple(images);
+            }
             return;
         }
 
@@ -284,7 +310,9 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         var key = ThumbnailKey.From(file);
         if (!_infoCache.TryGetValue(key, out var info))
         {
-            _footer.SelectionInfo = rest; // 大きさを読んでいる間も、サイズと日時は先に出す
+            // 大きさ・撮影情報を読んでいる間も、サイズと日時は先に出す
+            SetSelectionText(rest);
+            foreach (var panel in panels) panel.ShowImage(file, null, loading: true);
             var cts = _infoCts = new CancellationTokenSource();
             try
             {
@@ -298,7 +326,14 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             if (_infoCache.Count >= 2000) _infoCache.Clear(); // 覚えておく数に上限
             _infoCache[key] = info;
         }
-        _footer.SelectionInfo = info != null ? $"{info.Width} × {info.Height} ・ {info.Format} ・ {rest}" : rest;
+        SetSelectionText(info != null ? $"{info.Width} × {info.Height} ・ {info.Format} ・ {rest}" : rest);
+        foreach (var panel in panels) panel.ShowImage(file, info, loading: false);
+    }
+
+    private void SetSelectionText(string text)
+    {
+        _selectionText = text;
+        _footer.SelectionInfo = _inspectorItem.Checked ? "" : text;
     }
 
     private static long SafeLength(FileInfo f)
@@ -413,12 +448,13 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
                  {
                      (_menuButton, "メニュー (Alt)"), (_sidebarButton, "サイドバーの表示 / 非表示"),
                      (_backButton, "戻る (Alt+←)"), (_forwardButton, "進む (Alt+→)"), (_upButton, "上のフォルダへ (Alt+↑ / Backspace)"),
-                     (_sortButton, "並び順"),
+                     (_sortButton, "並び順"), (_inspectorButton, "詳細パネル (Ctrl+I)"),
                  })
             _toolTip.SetToolTip(button, tip);
         _toolbar.AddLeft(_menuButton, _sidebarButton, ToolBar.Separator, _backButton, _forwardButton, _upButton);
         _toolbar.SetFill(_addressBox);
-        _toolbar.AddRight(_sortButton);
+        _toolbar.AddRight(_sortButton, _inspectorButton);
+        _inspectorButton.Click += (_, _) => ToggleDetails();
         _toolbar.MouseDown += OnMouseBackForward;
 
         _menuButton.Click += (_, _) => ShowMainMenu(selectFirst: false);
@@ -917,6 +953,21 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         ((ISettingsAccess)this).UpdateSettings(s => s with { SidebarVisible = visible ? null : false });
     }
 
+    /// <summary>ⓘ / Ctrl+I: 1 枚表示の間はその詳細パネル、それ以外は一覧の右の詳細パネルを出す / 閉じる</summary>
+    private void ToggleDetails()
+    {
+        if (_quickLook.Visible) _quickLook.ToggleDetails();
+        else SetInspectorVisible(!_inspectorItem.Checked);
+    }
+
+    private void SetInspectorVisible(bool visible)
+    {
+        _inspectorItem.Checked = _inspectorButton.Active = visible;
+        _inspector.Visible = visible && !_quickLook.Visible;
+        _footer.SelectionInfo = visible ? "" : _selectionText;
+        ((ISettingsAccess)this).UpdateSettings(s => s with { InspectorVisible = visible ? null : false });
+    }
+
     private void SetThemeMode(ThemeMode mode)
     {
         ((ISettingsAccess)this).UpdateSettings(s => s with { Theme = Theme.ToSetting(mode) });
@@ -940,6 +991,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _tree.ApplyTheme();
         _grid.ApplyTheme();
         _jumpList.ApplyTheme();
+        _inspector.Invalidate();
         Theme.ApplyTitleBar(this);
     }
 
@@ -1072,6 +1124,9 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _sidebarItem = new ToolStripMenuItem("サイドバー(&B)", null, (_, _) => SetSidebarVisible(_split.Panel1Collapsed))
             { Checked = _settings.SidebarVisible ?? true };
         viewMenu.DropDownItems.Add(_sidebarItem);
+        _inspectorItem = new ToolStripMenuItem("詳細パネル(&I)", null, (_, _) => ToggleDetails())
+            { Checked = _settings.InspectorVisible ?? true, ShortcutKeys = Keys.Control | Keys.I };
+        viewMenu.DropDownItems.Add(_inspectorItem);
         var themeMenu = new ToolStripMenuItem("テーマ(&T)");
         foreach (var (label, mode) in new[] { ("システムに合わせる(&S)", ThemeMode.System), ("ライト(&L)", ThemeMode.Light), ("ダーク(&D)", ThemeMode.Dark) })
         {

@@ -52,6 +52,30 @@ static class LoaderTests
         info = ImageLoader.Identify(small);
         check(info == new ImageHeader(300, 100, "PNG"), $"Identify: PNG（{info}）");
 
+        // ---- 撮影情報（EXIF） ----
+        string photo = Path.Combine(dir, "photo.jpg");
+        using (var img = SplitImage(120, 80))
+        {
+            var exif = img.Metadata.ExifProfile = new ExifProfile();
+            exif.SetValue(ExifTag.DateTimeOriginal, "2026:09:10 10:21:05");
+            exif.SetValue(ExifTag.Make, "Canon");
+            exif.SetValue(ExifTag.Model, "Canon EOS R5");
+            exif.SetValue(ExifTag.LensModel, "RF24-70mm F2.8 L IS USM");
+            exif.SetValue(ExifTag.FNumber, new Rational(28, 10));
+            exif.SetValue(ExifTag.ExposureTime, new Rational(1, 250));
+            exif.SetValue(ExifTag.ISOSpeedRatings, new ushort[] { 200 });
+            img.SaveAsJpeg(photo);
+        }
+        var shot = ImageLoader.Identify(photo)?.Photo;
+        check(shot?.TakenAt == new DateTime(2026, 9, 10, 10, 21, 5), $"EXIF: 撮影日時（{shot?.TakenAt}）");
+        check(shot?.Camera == "Canon EOS R5", $"EXIF: 機種名がメーカー名で始まれば機種名だけ（{shot?.Camera}）");
+        check(shot?.Lens == "RF24-70mm F2.8 L IS USM", "EXIF: レンズ");
+        check(shot?.SettingsText == "f/2.8 · 1/250 · ISO 200", $"EXIF: 撮影設定（{shot?.SettingsText}）");
+        check(ImageLoader.Identify(small)?.Photo == null, "EXIF が無ければ撮影情報は null");
+        check(PhotoInfo.CameraName("NIKON CORPORATION", "NIKON Z 6") == "NIKON Z 6", "カメラ名: メーカー名の最初の語で始まる機種名");
+        check(PhotoInfo.CameraName("FUJIFILM", "X-T5") == "FUJIFILM X-T5", "カメラ名: 機種名にメーカー名が無ければ前に付ける");
+        check(PhotoInfo.FormatExposure(2) == "2s" && PhotoInfo.FormatExposure(0.5) == "1/2", "シャッター速度の表示");
+
         string gif = Path.Combine(dir, "anim.gif");
         using (var img = new Image<Rgba32>(40, 40, Red))
         {
