@@ -35,6 +35,20 @@ static class EditingTests
         plan = Converter.Plan(new[] { P("b.png") }, new ConvertOptions { OutputMode = OutputFolderMode.Custom, CustomFolder = P("out") });
         check(plan[0].Target == P(Path.Combine("out", "b.png")), "計画: 指定のフォルダ");
 
+        // ---- 前回の設定のまま実行してよいか（新しいファイルを作るだけのときだけ） ----
+        var quick = new ConvertOptions();
+        check(Converter.QuickRunBlocker(Converter.Plan(new[] { P("a.png") }, quick), quick) == null, "そのまま実行: resized に新しく作るだけなら実行できる");
+        check(Converter.QuickRunBlocker(Converter.Plan(new[] { P("b.png") }, quick), quick)?.Contains("変換する画像がありません") == true,
+            "そのまま実行: 全部飛ばすなら設定画面へ");
+        var replace = new ConvertOptions { OutputMode = OutputFolderMode.Same, Overwrite = true };
+        check(Converter.QuickRunBlocker(Converter.Plan(new[] { P("b.png") }, replace), replace)?.Contains("置き換える") == true, "そのまま実行: 元の画像を置き換えるなら設定画面へ");
+        var overwrite = new ConvertOptions { Overwrite = true };
+        check(Converter.QuickRunBlocker(Converter.Plan(new[] { P("b.png") }, overwrite), overwrite)?.Contains("上書き") == true, "そのまま実行: 上書きになるなら設定画面へ");
+        var clash = new ConvertOptions { Format = OutputFormat.Png };
+        check(Converter.QuickRunBlocker(Converter.Plan(new[] { P("a.png"), P("a.jpg") }, clash), clash) != null, "そのまま実行: 出力名が重なるなら設定画面へ");
+        var noFolder = new ConvertOptions { OutputMode = OutputFolderMode.Custom };
+        check(Converter.QuickRunBlocker(Converter.Plan(new[] { P("a.png") }, noFolder), noFolder) != null, "そのまま実行: 出力先の指定が無いなら設定画面へ");
+
         // ---- 変換 ----
         string src = P("photo.jpg");
         using (var img = SplitImage(2000, 1000))

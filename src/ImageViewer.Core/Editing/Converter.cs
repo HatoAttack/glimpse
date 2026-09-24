@@ -99,6 +99,30 @@ public static class Converter
         _ => Path.Combine(sourceFolder, options.SubfolderName),
     };
 
+    /// <summary>出力先の指定の誤り（無ければ null）</summary>
+    public static string? ValidateOutput(ConvertOptions o) => o.OutputMode switch
+    {
+        OutputFolderMode.Subfolder when Rename.RenamePlanner.ValidateName(o.SubfolderName) is string e => $"中のフォルダの名前: {e}",
+        OutputFolderMode.Custom when o.CustomFolder == null => "出力先のフォルダを指定してください",
+        OutputFolderMode.Custom when !Path.IsPathFullyQualified(o.CustomFolder!) => "出力先のフォルダは C:\\… の形で指定してください",
+        _ => null,
+    };
+
+    /// <summary>
+    /// 設定画面を出さずに「前回の設定のまま」実行してよいか。新しいファイルを作るだけ（同名のファイルは飛ばす）なら null、
+    /// 元の画像を置き換える・上書きする・名前に問題がある・変換するものが無いときは、設定画面で確かめてもらう理由
+    /// </summary>
+    public static string? QuickRunBlocker(IReadOnlyList<ConvertPlanItem> plan, ConvertOptions options)
+    {
+        if (ValidateOutput(options) is string output) return output;
+        if (plan.Any(p => p.Status == ConvertStatus.Error)) return "出力先の名前に問題がある画像があります";
+        var ok = plan.Where(p => p.Status == ConvertStatus.Ok).ToList();
+        if (ok.Any(p => p.ReplacesSource)) return "元の画像を置き換える設定です";
+        if (ok.Any(p => File.Exists(p.Target))) return "上書きになる画像があります";
+        if (ok.Count == 0) return "変換する画像がありません（同名のファイルがあるので全部飛ばします）";
+        return null;
+    }
+
     /// <summary>出力先の名前を決めて検査する（ファイルには触らない）</summary>
     public static List<ConvertPlanItem> Plan(IReadOnlyList<string> sources, ConvertOptions options)
     {
@@ -201,4 +225,12 @@ public static class Converter
         };
         return $"{size} ・ {format} ・ {options.Algorithm}";
     }
+
+    /// <summary>出力先の説明（「resized フォルダへ」など）</summary>
+    public static string DescribeOutput(ConvertOptions options) => options.OutputMode switch
+    {
+        OutputFolderMode.Same => "同じフォルダへ",
+        OutputFolderMode.Custom => $"{options.CustomFolder} へ",
+        _ => $"{options.SubfolderName} フォルダへ",
+    };
 }
