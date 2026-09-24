@@ -4,6 +4,9 @@ namespace ImageViewer.Core.Commands;
 /// <summary>コマンドがビューア本体に依頼できること（UI 技術に依存しない）</summary>
 public interface ICommandHost
 {
+    /// <summary>表示中のフォルダ（未選択なら null）。貼り付け先</summary>
+    string? CurrentFolder { get; }
+
     /// <summary>ステータスバー等への通知</summary>
     void Notify(string message);
 
@@ -18,6 +21,9 @@ public interface ICommandHost
 
     /// <summary>コマンドがファイルを削除した。本体は一覧から外し、消した位置の次の画像を選択する</summary>
     void FilesDeleted(IReadOnlyList<string> paths);
+
+    /// <summary>コマンドが表示中のフォルダにファイル・フォルダを追加した。本体は読み直して、追加したものを選択する</summary>
+    void FilesAdded(string folder, IReadOnlyList<string> paths);
 }
 
 /// <summary>コマンド実行時に渡される情報</summary>
