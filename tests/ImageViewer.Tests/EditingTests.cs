@@ -35,6 +35,30 @@ static class EditingTests
         plan = Converter.Plan(new[] { P("b.png") }, new ConvertOptions { OutputMode = OutputFolderMode.Custom, CustomFolder = P("out") });
         check(plan[0].Target == P(Path.Combine("out", "b.png")), "計画: 指定のフォルダ");
 
+        // ---- 前回の設定のまま実行してよいか（新しいファイルを作るだけのときだけ） ----
+        var quick = new ConvertOptions();
+        check(Converter.QuickRunBlocker(Converter.Plan(new[] { P("a.png") }, quick), quick) == null, "そのまま実行: resized に新しく作るだけなら実行できる");
+        check(Converter.QuickRunBlocker(Converter.Plan(new[] { P("b.png") }, quick), quick)?.Contains("変換する画像がありません") == true,
+            "そのまま実行: 全部飛ばすなら設定画面へ");
+        var replace = new ConvertOptions { OutputMode = OutputFolderMode.Same, Overwrite = true };
+        check(Converter.QuickRunBlocker(Converter.Plan(new[] { P("b.png") }, replace), replace)?.Contains("置き換える") == true, "そのまま実行: 元の画像を置き換えるなら設定画面へ");
+        var overwrite = new ConvertOptions { Overwrite = true };
+        check(Converter.QuickRunBlocker(Converter.Plan(new[] { P("b.png") }, overwrite), overwrite)?.Contains("上書き") == true, "そのまま実行: 上書きになるなら設定画面へ");
+        var clash = new ConvertOptions { Format = OutputFormat.Png };
+        check(Converter.QuickRunBlocker(Converter.Plan(new[] { P("a.png"), P("a.jpg") }, clash), clash) != null, "そのまま実行: 出力名が重なるなら設定画面へ");
+        // 確かめた後に保存先ができたら上書きしない（ほかの処理が同時に作った等）
+        var racePlan = Converter.Plan(new[] { P("a.png") }, quick with { Suffix = "_race" });
+        string raced = racePlan[0].Target;
+        File.WriteAllText(raced, "other");
+        var raceResult = Converter.Run(racePlan, quick with { Suffix = "_race", Overwrite = true }, createOnly: true);
+        check(raceResult.Converted == 0 && raceResult.Skipped == 1 && raceResult.Errors.Count == 0 && File.ReadAllText(raced) == "other",
+            "そのまま実行: 実行中に保存先ができたら上書きせずに飛ばす");
+        raceResult = Converter.Run(racePlan, quick with { Suffix = "_race" });
+        check(raceResult.Skipped == 1 && File.ReadAllText(raced) == "other", "上書きしない設定: 実行中に保存先ができたら飛ばす");
+        check(!Directory.GetFiles(P("resized"), "*.tmp").Any(), "飛ばしたときも一時ファイルが残らない");
+        var noFolder = new ConvertOptions { OutputMode = OutputFolderMode.Custom };
+        check(Converter.QuickRunBlocker(Converter.Plan(new[] { P("a.png") }, noFolder), noFolder) != null, "そのまま実行: 出力先の指定が無いなら設定画面へ");
+
         // ---- 変換 ----
         string src = P("photo.jpg");
         using (var img = SplitImage(2000, 1000))

@@ -33,6 +33,46 @@ public sealed class ResizeCommand(Form owner, ISettingsAccess settings) : ImageC
     }
 }
 
+/// <summary>
+/// 前回の設定のままリサイズ・形式変換（設定画面を出さない）。新しいファイルを作るだけのときに限り、
+/// 元の画像の置き換え・上書き・名前の問題があるときや前回の設定が無いときは、理由を出して設定画面を開く
+/// </summary>
+public sealed class QuickResizeCommand(Form owner, ISettingsAccess settings, ResizeCommand dialog) : ImageCommandBase
+{
+    public override string Id => "image.resizeQuick";
+    public override string Name => "前回の設定でリサイズ";
+    public override string? DefaultShortcut => "Ctrl+Shift+R";
+
+    public override async Task ExecuteAsync(CommandContext context)
+    {
+        if (settings.Settings.Resize is not { } options)
+        {
+            context.Host.Notify("前回の設定がまだないので、設定画面を開きます");
+            await dialog.ExecuteAsync(context);
+            return;
+        }
+        var plan = Converter.Plan(context.Paths, options);
+        if (Converter.QuickRunBlocker(plan, options) is string reason)
+        {
+            context.Host.Notify($"{reason}。設定画面で確かめてください");
+            await dialog.ExecuteAsync(context);
+            return;
+        }
+
+        var progress = new Progress<ConvertProgress>(p =>
+        {
+            if (p.Done < p.Total) context.Host.Notify($"リサイズ中 {p.Done + 1} / {p.Total}: {p.Name}");
+        });
+        // 新しいファイルを作るだけ（確かめた後に保存先ができても上書きしない）
+        var result = await Task.Run(() => Converter.Run(plan, options, progress, createOnly: true));
+        if (result.Converted > 0) context.Host.RequestRefresh();
+        context.Host.Notify($"{ResizeDialog.Summarize(result)}（{Converter.Describe(options)}・{Converter.DescribeOutput(options)}）");
+        if (result.Errors.Count > 0)
+            MessageBox.Show(owner, string.Join("\n", result.Errors.Take(15)) + (result.Errors.Count > 15 ? $"\n…ほか {result.Errors.Count - 15} 件" : ""),
+                $"変換できなかった画像（{result.Errors.Count} 枚）", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+    }
+}
+
 public sealed class CropCommand(Form owner) : ImageCommandBase
 {
     public override string Id => "image.crop";

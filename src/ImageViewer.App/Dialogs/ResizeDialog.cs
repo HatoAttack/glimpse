@@ -205,13 +205,7 @@ public sealed class ResizeDialog : ThemedForm
     };
 
     /// <summary>出力先の指定の誤り（無ければ null）</summary>
-    private string? OutputError(ConvertOptions o) => o.OutputMode switch
-    {
-        OutputFolderMode.Subfolder when Core.Rename.RenamePlanner.ValidateName(o.SubfolderName) is string e => $"中のフォルダの名前: {e}",
-        OutputFolderMode.Custom when o.CustomFolder == null => "出力先のフォルダを指定してください",
-        OutputFolderMode.Custom when !Path.IsPathFullyQualified(o.CustomFolder!) => "出力先のフォルダは C:\\… の形で指定してください",
-        _ => null,
-    };
+    private static string? OutputError(ConvertOptions o) => Converter.ValidateOutput(o);
 
     private void UpdatePreview()
     {

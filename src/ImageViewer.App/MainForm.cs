@@ -160,6 +160,12 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         };
 
         _footer.UpdateClicked += (_, _) => ShowUpdateDialog();
+        _noticeTimer.Tick += (_, _) =>
+        {
+            _noticeTimer.Stop();
+            _noticeActive = false;
+            UpdateCommandStates();
+        };
         SetUpActionBar();
         // フッター右端のボタンはライト ↔ ダークだけ（システムに合わせるは ☰ → 表示 → テーマ）
         _footer.ThemeButton.Click += (_, _) => SetThemeMode(Theme.Current.IsDark ? ThemeMode.Light : ThemeMode.Dark);
@@ -843,13 +849,19 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             return button;
         }
 
+        // リサイズ ▾: 本体は設定画面、▾ は前回の設定のまま実行
+        var resizeMenu = new ContextMenuStrip();
+        var resizeMore = new IconButton { DropDown = true, AccessibleName = "リサイズのその他" };
+        _toolTip.SetToolTip(resizeMore, "前回の設定のまま実行");
+        resizeMore.Click += (_, _) => ShowFooterMenu(resizeMore, resizeMenu, () => BuildResizeMenu(resizeMenu));
+
         var move = new IconButton { Text = "移動", Icon = Icons.Move, DropDown = true, AccessibleName = "移動" };
         _toolTip.SetToolTip(move, "最近の移動先へ移動（Ctrl を押しながら選ぶとコピー）");
         move.Click += (_, _) => ShowFooterMenu(move, _moveMenu, BuildMoveMenu);
         var more = new IconButton { Icon = Icons.More, AccessibleName = "その他の操作" };
         _toolTip.SetToolTip(more, "その他の操作");
         more.Click += (_, _) => ShowFooterMenu(more, _moreMenu, null);
-        bar.AddActions(Action("image.resize", "リサイズ", Icons.Resize), Action("image.crop", "切り抜き", Icons.Crop),
+        bar.AddActions(Action("image.resize", "リサイズ", Icons.Resize), resizeMore, Action("image.crop", "切り抜き", Icons.Crop),
             Action("image.combine", "連結", Icons.Combine), Action("file.rename", "名前", Icons.Rename), move, more);
 
         var clear = new IconButton { Icon = Icons.Close, AccessibleName = "選択を解除" };
@@ -911,6 +923,29 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         }
         menu.Closed += Closed;
         menu.Show(button, new Point(0, 0), ToolStripDropDownDirection.AboveRight);
+    }
+
+    /// <summary>リサイズ ▾: 前回の設定のまま実行（設定の説明付き）と、設定を開く</summary>
+    private void BuildResizeMenu(ContextMenuStrip menu)
+    {
+        menu.Items.Clear();
+        if (_registry.Find("image.resizeQuick") is not { } quick || _registry.Find("image.resize") is not { } dialog) return;
+        var options = _settings.Resize;
+        var paths = TargetPaths();
+        menu.Items.Add(new ToolStripMenuItem(quick.Name, null, async (_, _) => await ExecuteAsync(quick))
+        {
+            ShortcutKeyDisplayString = ShortcutText(quick),
+            Enabled = quick.CanExecute(paths),
+            ToolTipText = options == null ? "前回の設定がまだありません（設定画面を開きます）" : null,
+        });
+        menu.Items.Add(new ToolStripMenuItem(options == null ? "（前回の設定なし）"
+            : $"{Core.Editing.Converter.Describe(options)}・{Core.Editing.Converter.DescribeOutput(options)}") { Enabled = false });
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add(new ToolStripMenuItem("設定を開く...", null, async (_, _) => await ExecuteAsync(dialog))
+        {
+            ShortcutKeyDisplayString = ShortcutText(dialog),
+            Enabled = dialog.CanExecute(paths),
+        });
     }
 
     /// <summary>移動 ▾: 最近の移動先（数字キーで選べる。Ctrl を押しながらでコピー）と、探して移動 / コピー</summary>
@@ -1084,7 +1119,9 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _registry.Register(new CutFilesCommand());
         _registry.Register(new CopyFilesCommand());
         _registry.Register(new PasteFilesCommand(this));
-        _registry.Register(new ResizeCommand(this, this));
+        var resize = new ResizeCommand(this, this);
+        _registry.Register(resize);
+        _registry.Register(new QuickResizeCommand(this, this, resize));
         _registry.Register(new CropCommand(this));
         _registry.Register(new CombineCommand(this, this));
         _registry.Register(new RenameCommand(this));
@@ -1417,7 +1454,8 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         UpdateActionBar();
 
         // 場所はアドレスバーとタイトルに出ているので、ここは件数だけ（選択中の枚数は右側の情報に出る）
-        _footer.Status = _folder == null ? "フォルダを開いてください（Ctrl+O / フォルダをドロップ）"
+        if (!_noticeActive)
+            _footer.Status = _folder == null ? "フォルダを開いてください（Ctrl+O / フォルダをドロップ）"
             : _grid.Folders.Count > 0 ? $"画像 {_grid.Items.Count} · フォルダ {_grid.Folders.Count}"
             : $"画像 {_grid.Items.Count}";
         _footer.CheckCount = _grid.MarkedCount;
@@ -1454,7 +1492,19 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         UpdateCommandEnabled(); // コピー・切り取りで貼り付けができるようになる
     }
 
-    public void Notify(string message) => _footer.Status = message;
+    /// <summary>
+    /// フッターにお知らせを出す。少しの間は件数の表示で上書きしない（実行後の読み直しで、結果のお知らせがすぐ消えないように）
+    /// </summary>
+    public void Notify(string message)
+    {
+        _footer.Status = message;
+        _noticeActive = true;
+        _noticeTimer.Stop();
+        _noticeTimer.Start();
+    }
+
+    private bool _noticeActive;
+    private readonly System.Windows.Forms.Timer _noticeTimer = new() { Interval = 6000 };
 
     public string? CurrentFolder => _folder;
 
@@ -1614,8 +1664,9 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     {
         _loadCts?.Cancel();
         var cts = _loadCts = new CancellationTokenSource();
-        _footer.Status = "読み込み中…";
         bool reload = string.Equals(_folder, folder, StringComparison.OrdinalIgnoreCase);
+        if (!reload) _noticeActive = false; // 別のフォルダへ移ったら、前のフォルダでのお知らせは消す
+        if (!_noticeActive) _footer.Status = "読み込み中…";
         List<DirectoryInfo> folders;
         List<FileInfo> files;
         SortMode mode;

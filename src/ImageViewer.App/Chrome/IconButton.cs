@@ -87,6 +87,7 @@ public sealed class IconButton : Control
     public override Size GetPreferredSize(Size proposedSize)
     {
         int h = Height > 0 ? Height : LogicalToDeviceUnits(28);
+        if (!TextVisible && _icon == null && _dropDown) return new Size(LogicalToDeviceUnits(18), h); // ▾ だけ（分割ボタンの右側）
         if (!TextVisible) return new Size(h + (_dropDown ? LogicalToDeviceUnits(10) : 0), h);
         int w = TextRenderer.MeasureText(Text, Font, Size.Empty, Flags).Width;
         if (_icon != null) w += LogicalToDeviceUnits(16 + 6);
@@ -160,9 +161,9 @@ public sealed class IconButton : Control
         int chevron = LogicalToDeviceUnits(10);
         if (!TextVisible)
         {
-            float left = (Width - iconSize - (_dropDown ? chevron : 0)) / 2f;
+            float left = (Width - (_icon != null ? iconSize : 0) - (_dropDown ? chevron : 0)) / 2f;
             _icon?.Invoke(g, new RectangleF(left, (Height - iconSize) / 2f, iconSize, iconSize), color);
-            if (_dropDown) Icons.ChevronDown(g, new RectangleF(left + iconSize, (Height - chevron) / 2f, chevron, chevron), color);
+            if (_dropDown) Icons.ChevronDown(g, new RectangleF(left + (_icon != null ? iconSize : 0), (Height - chevron) / 2f, chevron, chevron), color);
             return;
         }
 

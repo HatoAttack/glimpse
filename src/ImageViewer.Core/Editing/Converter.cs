@@ -99,6 +99,30 @@ public static class Converter
         _ => Path.Combine(sourceFolder, options.SubfolderName),
     };
 
+    /// <summary>出力先の指定の誤り（無ければ null）</summary>
+    public static string? ValidateOutput(ConvertOptions o) => o.OutputMode switch
+    {
+        OutputFolderMode.Subfolder when Rename.RenamePlanner.ValidateName(o.SubfolderName) is string e => $"中のフォルダの名前: {e}",
+        OutputFolderMode.Custom when o.CustomFolder == null => "出力先のフォルダを指定してください",
+        OutputFolderMode.Custom when !Path.IsPathFullyQualified(o.CustomFolder!) => "出力先のフォルダは C:\\… の形で指定してください",
+        _ => null,
+    };
+
+    /// <summary>
+    /// 設定画面を出さずに「前回の設定のまま」実行してよいか。新しいファイルを作るだけ（同名のファイルは飛ばす）なら null、
+    /// 元の画像を置き換える・上書きする・名前に問題がある・変換するものが無いときは、設定画面で確かめてもらう理由
+    /// </summary>
+    public static string? QuickRunBlocker(IReadOnlyList<ConvertPlanItem> plan, ConvertOptions options)
+    {
+        if (ValidateOutput(options) is string output) return output;
+        if (plan.Any(p => p.Status == ConvertStatus.Error)) return "出力先の名前に問題がある画像があります";
+        var ok = plan.Where(p => p.Status == ConvertStatus.Ok).ToList();
+        if (ok.Any(p => p.ReplacesSource)) return "元の画像を置き換える設定です";
+        if (ok.Any(p => File.Exists(p.Target))) return "上書きになる画像があります";
+        if (ok.Count == 0) return "変換する画像がありません（同名のファイルがあるので全部飛ばします）";
+        return null;
+    }
+
     /// <summary>出力先の名前を決めて検査する（ファイルには触らない）</summary>
     public static List<ConvertPlanItem> Plan(IReadOnlyList<string> sources, ConvertOptions options)
     {
@@ -139,9 +163,14 @@ public static class Converter
     public static bool KeepsMetadata(string path) => ImageFormats.IsImageSharpFormat(path);
 
     /// <summary>計画の Ok のものを 1 枚ずつ変換する（重い処理なので呼び出し側で別スレッドへ）</summary>
+    /// <param name="createOnly">
+    /// 新しいファイルを作るだけにする（設定の「上書き」に関わらず上書きしない）。上書きしないときは、
+    /// 計画の後に保存先ができていたら（ほかの処理が作った等）その画像は飛ばす
+    /// </param>
     public static ConvertResult Run(IReadOnlyList<ConvertPlanItem> plan, ConvertOptions options,
-        IProgress<ConvertProgress>? progress = null, CancellationToken ct = default)
+        IProgress<ConvertProgress>? progress = null, CancellationToken ct = default, bool createOnly = false)
     {
+        bool overwrite = options.Overwrite && !createOnly;
         var todo = plan.Where(p => p.Status == ConvertStatus.Ok).ToList();
         int converted = 0, skipped = plan.Count(p => p.Status == ConvertStatus.Skip);
         var errors = new List<string>();
@@ -152,8 +181,12 @@ public static class Converter
             progress?.Report(new(i, todo.Count, item.SourceName));
             try
             {
-                ConvertOne(item.Source, item.Target, options);
+                ConvertOne(item.Source, item.Target, options, overwrite);
                 converted++;
+            }
+            catch (DestinationExistsException)
+            {
+                skipped++;
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
@@ -165,7 +198,7 @@ public static class Converter
     }
 
     /// <summary>1 枚を変換して保存する（上書きの判断は済んでいる前提）</summary>
-    public static void ConvertOne(string src, string dst, ConvertOptions options)
+    public static void ConvertOne(string src, string dst, ConvertOptions options, bool overwrite = true)
     {
         // 回転補正済み・先頭フレームだけ（アニメーションは静止画になる）
         using var image = ImageLoader.Load(src);
@@ -188,7 +221,7 @@ public static class Converter
             image.Metadata.IptcProfile = null;
             image.Metadata.GetPngMetadata().TextData.Clear();
         }
-        ImageSaver.Save(image, dst);
+        ImageSaver.Save(image, dst, overwrite);
     }
 
     /// <summary>設定の説明（1 行）</summary>
@@ -201,4 +234,12 @@ public static class Converter
         };
         return $"{size} ・ {format} ・ {options.Algorithm}";
     }
+
+    /// <summary>出力先の説明（「resized フォルダへ」など）</summary>
+    public static string DescribeOutput(ConvertOptions options) => options.OutputMode switch
+    {
+        OutputFolderMode.Same => "同じフォルダへ",
+        OutputFolderMode.Custom => $"{options.CustomFolder} へ",
+        _ => $"{options.SubfolderName} フォルダへ",
+    };
 }
