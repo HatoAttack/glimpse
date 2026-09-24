@@ -1,9 +1,10 @@
 // リサイズ・形式変換ダイアログ。設定を変えるたびに「元 → 出力」を一覧で確認でき、実行中は進み具合を表示する
 using ImageViewer.Core.Editing;
+using ImageViewer.App.Theming;
 
 namespace ImageViewer.App.Dialogs;
 
-public sealed class ResizeDialog : Form
+public sealed class ResizeDialog : ThemedForm
 {
     private readonly IReadOnlyList<string> _paths;
     private List<ConvertPlanItem> _plan = new();
@@ -227,7 +228,7 @@ public sealed class ResizeDialog : Form
         _summary.Text = outputError
             ?? (errors > 0 ? $"エラーが {errors} 件あります。直すまで実行できません"
                 : $"{ok} 枚を変換します" + (skip > 0 ? $"（{skip} 枚は飛ばします）" : "") + (replaces > 0 ? $"　元の画像 {replaces} 枚を置き換えます" : ""));
-        _summary.ForeColor = outputError != null || errors > 0 ? Color.Firebrick : replaces > 0 ? Color.DarkOrange : SystemColors.ControlText;
+        _summary.ForeColor = outputError != null || errors > 0 ? Theme.Current.Danger : replaces > 0 ? Theme.Current.Warning : Theme.Current.Text;
         _run.Enabled = outputError == null && errors == 0 && ok > 0;
 
         int firstError = _plan.FindIndex(p => p.Status == ConvertStatus.Error);
@@ -242,10 +243,10 @@ public sealed class ResizeDialog : Form
         e.Item = new ListViewItem(new[] { p.SourceName, where, p.Note ?? "" });
         e.Item.ForeColor = p.Status switch
         {
-            ConvertStatus.Error => Color.Firebrick,
-            ConvertStatus.Skip => SystemColors.GrayText,
-            _ when p.Note != null => Color.DarkOrange,
-            _ => SystemColors.ControlText,
+            ConvertStatus.Error => Theme.Current.Danger,
+            ConvertStatus.Skip => Theme.Current.TextMuted,
+            _ when p.Note != null => Theme.Current.Warning,
+            _ => Theme.Current.Text,
         };
     }
 
@@ -272,7 +273,7 @@ public sealed class ResizeDialog : Form
         {
             _progress.Maximum = Math.Max(1, p.Total);
             _progress.Value = Math.Min(p.Done, _progress.Maximum);
-            _summary.ForeColor = SystemColors.ControlText;
+            _summary.ForeColor = Theme.Current.Text;
             _summary.Text = p.Done < p.Total ? $"変換中 {p.Done + 1} / {p.Total}: {p.Name}" : "仕上げ中…";
         });
         ConvertResult result;
@@ -290,7 +291,7 @@ public sealed class ResizeDialog : Form
         _progress.Visible = false;
         _close.Text = "閉じる";
         _summary.Text = Summarize(result);
-        _summary.ForeColor = result.Errors.Count > 0 ? Color.Firebrick : SystemColors.ControlText;
+        _summary.ForeColor = result.Errors.Count > 0 ? Theme.Current.Danger : Theme.Current.Text;
         if (_closeAfterCancel)
         {
             Close();
@@ -339,5 +340,5 @@ public sealed class ResizeDialog : Form
 
     private static Label Caption(string text) => new() { Text = text, AutoSize = true, Margin = new Padding(3, 7, 3, 3) };
 
-    private static Label Hint(string text) => new() { Text = text, AutoSize = true, ForeColor = SystemColors.GrayText, Margin = new Padding(8, 7, 3, 3) };
+    private static Label Hint(string text) => new() { Text = text, AutoSize = true, ForeColor = Theme.Current.TextMuted, Margin = new Padding(8, 7, 3, 3) };
 }

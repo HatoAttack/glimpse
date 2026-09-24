@@ -1,14 +1,15 @@
 // フォルダジャンプの設定: 索引を作る範囲・索引の状態と作り直し・Everything を使うか（任意）
 using ImageViewer.Core.Jump;
+using ImageViewer.App.Theming;
 
 namespace ImageViewer.App.Jump;
 
-public sealed class JumpSettingsDialog : Form
+public sealed class JumpSettingsDialog : ThemedForm
 {
     private readonly ListBox _roots = new() { Dock = DockStyle.Fill, IntegralHeight = false };
     private readonly Label _status = new() { AutoSize = true, Padding = new Padding(0, 6, 0, 0) };
     private readonly CheckBox _useEverything = new() { AutoSize = true, Text = "Everything が起動していれば Everything で検索する" };
-    private readonly Label _everythingState = new() { AutoSize = true, ForeColor = SystemColors.GrayText };
+    private readonly Label _everythingState = new() { AutoSize = true, ForeColor = Theme.Current.TextMuted };
     private readonly FolderJumpService _service;
     private readonly System.Windows.Forms.Timer _refresh = new() { Interval = 1000 };
 
@@ -85,7 +86,7 @@ public sealed class JumpSettingsDialog : Form
         everything.Controls.Add(_useEverything);
         everything.Controls.Add(new Label
         {
-            AutoSize = true, ForeColor = SystemColors.GrayText, MaximumSize = new Size(520, 0),
+            AutoSize = true, ForeColor = Theme.Current.TextMuted, MaximumSize = new Size(520, 0),
             Text = "Everything（voidtools）を自分でインストールして起動している場合だけ使われます。" +
                    "起動していないときは、これまでどおり上の索引で検索します。このアプリには同梱していません。",
         });

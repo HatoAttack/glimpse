@@ -38,6 +38,8 @@ public sealed record Palette
     /// <summary>チェックの数などの文字</summary>
     public required Color CheckText { get; init; }
     public required Color Danger { get; init; }
+    /// <summary>注意（上書きになる など）</summary>
+    public required Color Warning { get; init; }
     /// <summary>サムネイルを読み込み中・読めないときの枠</summary>
     public required Color Placeholder { get; init; }
 
@@ -48,7 +50,7 @@ public sealed record Palette
         Text = Hex(0x1C1C1A), TextStrong = Hex(0x3A3A37), TextSecondary = Hex(0x5F5F5A), TextMuted = Hex(0x8A8A84),
         Disabled = Hex(0xB5B5B0), Hover = Hex(0xEDEDE9), Pressed = Hex(0xE2E2DD),
         SelectionFill = Hex(0xE6ECF7), SelectionBorder = Hex(0x2F6BD8), SelectionText = Hex(0x1D4FA3),
-        Check = Hex(0xE87000), CheckText = Hex(0xB35600), Danger = Hex(0xB42318), Placeholder = Hex(0xECECE8),
+        Check = Hex(0xE87000), CheckText = Hex(0xB35600), Danger = Hex(0xB42318), Warning = Hex(0xB54708), Placeholder = Hex(0xECECE8),
     };
 
     public static readonly Palette Dark = new()
@@ -58,7 +60,7 @@ public sealed record Palette
         Text = Hex(0xEDEDEA), TextStrong = Hex(0xD6D6D1), TextSecondary = Hex(0xA8A8A2), TextMuted = Hex(0x8F8F89),
         Disabled = Hex(0x5A5A56), Hover = Hex(0x333331), Pressed = Hex(0x3C3C39),
         SelectionFill = Hex(0x1F3354), SelectionBorder = Hex(0x5B8FEA), SelectionText = Hex(0xA9C5F5),
-        Check = Hex(0xE87000), CheckText = Hex(0xFFB066), Danger = Hex(0xFF8A7A), Placeholder = Hex(0x2C2C2A),
+        Check = Hex(0xE87000), CheckText = Hex(0xFFB066), Danger = Hex(0xFF8A7A), Warning = Hex(0xFDB022), Placeholder = Hex(0x2C2C2A),
     };
 
     private static Color Hex(int rgb) => Color.FromArgb(rgb >> 16 & 0xFF, rgb >> 8 & 0xFF, rgb & 0xFF);

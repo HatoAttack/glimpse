@@ -9,10 +9,11 @@ using ImageViewer.Core.Imaging;
 using ImageViewer.Core.Thumbnails;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
+using ImageViewer.App.Theming;
 
 namespace ImageViewer.App.Dialogs;
 
-public sealed class CropDialog : Form
+public sealed class CropDialog : ThemedForm
 {
     private const int MinSizePx = 8; // 切り抜き枠の最小（画像の px）
 
@@ -169,7 +170,7 @@ public sealed class CropDialog : Form
         outStack.Controls.AddRange(new Control[]
         {
             _toSame, _toCustom, _folder, browse,
-            new Label { Text = "名前は「元の名前_crop」。同名があれば (2) などを付けます", AutoSize = true, MaximumSize = new Size(190, 0), ForeColor = SystemColors.GrayText },
+            new Label { Text = "名前は「元の名前_crop」。同名があれば (2) などを付けます", AutoSize = true, MaximumSize = new Size(190, 0), ForeColor = Theme.Current.TextMuted },
         });
         var outBox = new GroupBox { Text = "保存先", AutoSize = true, Width = 210, Padding = new Padding(8), Margin = new Padding(3, 8, 3, 3) };
         outBox.Controls.Add(outStack);
@@ -470,12 +471,12 @@ public sealed class CropDialog : Form
                 return d;
             });
             SavedCount++;
-            _status.ForeColor = SystemColors.ControlText;
+            _status.ForeColor = Theme.Current.Text;
             _status.Text = $"保存しました: {Path.GetFileName(dst)}（{box.Width} × {box.Height}）";
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
-            _status.ForeColor = Color.Firebrick;
+            _status.ForeColor = Theme.Current.Danger;
             _status.Text = $"保存できませんでした: {ex.Message}";
             return;
         }
@@ -503,7 +504,7 @@ public sealed class CropDialog : Form
             for (int i = 0; i < targets.Count; i++)
             {
                 var (src, folder) = targets[i];
-                _status.ForeColor = SystemColors.ControlText;
+                _status.ForeColor = Theme.Current.Text;
                 _status.Text = $"切り抜き中 {i + 1} / {targets.Count}: {Path.GetFileName(src)}";
                 try
                 {
@@ -521,7 +522,7 @@ public sealed class CropDialog : Form
             SavedCount += ok;
             SetBusy(false);
         }
-        _status.ForeColor = errors.Count > 0 ? Color.Firebrick : SystemColors.ControlText;
+        _status.ForeColor = errors.Count > 0 ? Theme.Current.Danger : Theme.Current.Text;
         _status.Text = $"{ok} 枚を保存しました" + (errors.Count > 0 ? $"・{errors.Count} 枚は失敗しました" : "");
         if (errors.Count > 0)
             MessageBox.Show(this, string.Join("\n", errors.Take(15)), $"切り抜けなかった画像（{errors.Count} 枚）", MessageBoxButtons.OK, MessageBoxIcon.Warning);

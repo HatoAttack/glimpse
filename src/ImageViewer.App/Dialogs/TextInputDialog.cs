@@ -1,10 +1,12 @@
 // 1 行の文字を入力してもらう小さなダイアログ（新しいフォルダーの名前など）。入力のたびに検査し、エラーがあれば OK を押せない
+using ImageViewer.App.Theming;
+
 namespace ImageViewer.App.Dialogs;
 
-public sealed class TextInputDialog : Form
+public sealed class TextInputDialog : ThemedForm
 {
     private readonly TextBox _input = new() { Dock = DockStyle.Top };
-    private readonly Label _error = new() { AutoSize = true, ForeColor = Color.Firebrick, Dock = DockStyle.Top, Padding = new Padding(0, 4, 0, 0) };
+    private readonly Label _error = new() { AutoSize = true, ForeColor = Theme.Current.Danger, Dock = DockStyle.Top, Padding = new Padding(0, 4, 0, 0) };
     private readonly Button _ok = new() { Text = "OK", DialogResult = DialogResult.OK, AutoSize = true };
     private readonly Func<string, string?> _validate;
 
