@@ -13,6 +13,7 @@ using ImageViewer.Core.Ordering;
 using ImageViewer.Core.Rename;
 using ImageViewer.Core.Settings;
 using ImageViewer.Core.Thumbnails;
+using ImageViewer.Core.Updates;
 
 namespace ImageViewer.App;
 
@@ -71,6 +72,12 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     private CancellationTokenSource? _jumpCts;
     private int _visitsSinceSave;
 
+    // ---- 更新の確認 ----
+    private readonly ToolStripStatusLabel _updateLabel = new() { IsLink = true, Visible = false, ToolTipText = "クリックすると変更内容を表示して更新できます" };
+    private ToolStripMenuItem _updateItem = null!;
+    private HttpClient? _http;
+    private ReleaseInfo? _available;
+
     private readonly SettingsStore _settingsStore = SettingsStore.CreateDefault();
     private AppSettings _settings;
 
@@ -111,6 +118,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _grid.FilesMovedOut += (_, paths) => FilesRemoved(paths);
         FormClosed += (_, _) =>
         {
+            _http?.Dispose();
             _thumbnails.Dispose();
             _jump.SaveVisits();
             _everything?.Dispose();
@@ -119,7 +127,9 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         var statusStrip = new StatusStrip();
         _status = new ToolStripStatusLabel { Spring = true, TextAlign = ContentAlignment.MiddleLeft };
         statusStrip.Items.Add(_status);
+        statusStrip.Items.Add(_updateLabel);
         statusStrip.Items.Add(_selectionInfo);
+        _updateLabel.Click += (_, _) => ShowUpdateDialog();
         AddThumbnailSizeSlider(statusStrip);
         _grid.SelectionChanged += (_, _) =>
         {
@@ -169,6 +179,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         if (_settings.HomeFolder != null && !Directory.Exists(_settings.HomeFolder) && initialFolder == null)
             Shown += (_, _) => Notify($"ホームフォルダが見つからないのでピクチャを開きました: {_settings.HomeFolder}");
         if (Directory.Exists(start)) Shown += async (_, _) => await LoadFolderAsync(start);
+        SetUpUpdateCheck();
     }
 
     // ---- Quick Look（Space / ダブルクリックで大きく表示） ----
@@ -715,7 +726,15 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         fileMenu.DropDownItems.Add(new ToolStripMenuItem("終了(&X)", null, (_, _) => Close()));
 
         var helpMenu = new ToolStripMenuItem("ヘルプ(&H)");
+        _updateItem = new ToolStripMenuItem("更新(&N)...", null, (_, _) => ShowUpdateDialog()) { Visible = false };
+        var checkOnStartup = new ToolStripMenuItem("起動時に更新を確認(&S)") { CheckOnClick = true, Checked = _settings.CheckUpdatesOnStartup ?? true };
+        checkOnStartup.CheckedChanged += (_, _) =>
+            ((ISettingsAccess)this).UpdateSettings(s => s with { CheckUpdatesOnStartup = checkOnStartup.Checked });
+        helpMenu.DropDownItems.Add(_updateItem);
         helpMenu.DropDownItems.Add(new ToolStripMenuItem("対応形式(&F)...", null, (_, _) => ShowSupportedFormats()));
+        helpMenu.DropDownItems.Add(new ToolStripSeparator());
+        helpMenu.DropDownItems.Add(new ToolStripMenuItem("更新を確認(&U)...", null, async (_, _) => await CheckForUpdatesAsync(manual: true)));
+        helpMenu.DropDownItems.Add(checkOnStartup);
         menu.Items.Add(helpMenu);
         return menu;
     }
@@ -792,6 +811,80 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
                 { ShortcutKeys = Keys.Control | Keys.Shift | Keys.Oem5, ShortcutKeyDisplayString = "Ctrl+Shift+¥" },
         });
         return markMenu;
+    }
+
+    // ---- 更新の確認（起動時に 1 回。新しければステータスバーとヘルプメニューに出すだけで、更新はユーザーが選んだときだけ） ----
+
+    private static Version CurrentVersion => typeof(MainForm).Assembly.GetName().Version ?? new Version(0, 0, 0);
+
+    /// <summary>
+    /// 自分で入れ替えられる exe（リリース用の単一ファイル）のパス。
+    /// 開発用のビルド（横に ImageViewer.dll がある）では null（確認はするが入れ替えない）
+    /// </summary>
+    private static string? UpdatableExe =>
+        Environment.ProcessPath is string exe && !File.Exists(Path.Combine(Path.GetDirectoryName(exe) ?? "", "ImageViewer.dll")) ? exe : null;
+
+    private void SetUpUpdateCheck()
+    {
+        if (UpdatableExe is not string exe) return; // 開発用のビルドでは起動時に確認しない（手動の確認はできる）
+        SelfUpdate.CleanUp(exe); // 前回の更新で残った古い exe を消す
+        if (_settings.CheckUpdatesOnStartup ?? true) Shown += async (_, _) => await CheckForUpdatesAsync(manual: false);
+    }
+
+    private async Task CheckForUpdatesAsync(bool manual)
+    {
+        _http ??= UpdateChecker.CreateClient(CurrentVersion);
+        // 起動時は短めに打ち切る（つながらなければ何も出さない）
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(manual ? 15 : 5));
+        var latest = await UpdateChecker.GetLatestAsync(_http, cts.Token);
+        if (latest == null)
+        {
+            if (manual)
+                MessageBox.Show(this, "新しいバージョンを確認できませんでした。インターネットにつながっているか確かめてください。", "更新を確認",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return;
+        }
+        if (!UpdateChecker.IsNewer(latest, CurrentVersion))
+        {
+            if (manual)
+                MessageBox.Show(this, $"最新のバージョンです（v{UpdateChecker.Normalize(CurrentVersion)}）。", "更新を確認",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        if (!manual && latest.Tag == _settings.SkippedVersion) return; // 「このバージョンは飛ばす」を選んだもの
+
+        _available = latest;
+        _updateLabel.Text = $"新しいバージョン {latest.Tag} があります（クリックで更新）";
+        _updateLabel.Visible = true;
+        _updateItem.Text = $"{latest.Tag} に更新(&N)...";
+        _updateItem.Visible = true;
+        if (manual) ShowUpdateDialog();
+    }
+
+    private void ShowUpdateDialog()
+    {
+        if (_available is not { } release || _http == null) return;
+        UpdateDialog.Outcome outcome;
+        using (var dlg = new UpdateDialog(release, CurrentVersion, _http, UpdatableExe))
+        {
+            dlg.ShowDialog(this);
+            outcome = dlg.Result;
+        }
+        switch (outcome)
+        {
+            case UpdateDialog.Outcome.Skip:
+                ((ISettingsAccess)this).UpdateSettings(s => s with { SkippedVersion = release.Tag });
+                _updateLabel.Visible = _updateItem.Visible = false;
+                Notify($"{release.Tag} は飛ばします（ヘルプ →「更新を確認」からいつでも更新できます）");
+                break;
+            case UpdateDialog.Outcome.Updated when UpdatableExe is string exe:
+                // 新しい exe で、今のフォルダを開いた状態で起動し直す
+                var start = new System.Diagnostics.ProcessStartInfo(exe) { UseShellExecute = false };
+                if (_folder != null) start.ArgumentList.Add(_folder);
+                System.Diagnostics.Process.Start(start);
+                Close();
+                break;
+        }
     }
 
     /// <summary>ImageSharp で常に読める形式と、この PC の WIC 拡張機能で読める形式を表示</summary>

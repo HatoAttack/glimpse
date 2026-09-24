@@ -99,6 +99,10 @@ Directory.Delete(dir, true);
 JumpTests.Run(Check, dir);
 Directory.Delete(dir, true);
 
+// ---- 更新の確認・exe の入れ替え ----
+UpdateTests.Run(Check, dir);
+Directory.Delete(dir, true);
+
 Console.WriteLine(failed ? "\n失敗あり" : "\nすべて OK");
 return failed ? 1 : 0;
 

@@ -1,4 +1,5 @@
-# リリースの自動化: GitHub でリリースを公開すると、テストしてから ImageViewer.exe（単一ファイル・インストール不要）を作って添付する。
+# リリースの自動化: GitHub でリリースを公開すると、テストしてから ImageViewer.exe（単一ファイル・インストール不要）と
+# そのチェックサム（ImageViewer.exe.sha256。アプリの自動更新が使う）を作って添付する。
 # 手順は README の「リリースの手順」を参照。
 # このファイルを変える PR でも同じ処理を試しに走らせる（exe は添付せず、Actions の成果物に置く）
 name: リリース
@@ -40,16 +41,28 @@ jobs:
           -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true
           -p:Version=${{ steps.version.outputs.version }} -o publish
 
+      - name: チェックサム（アプリの自動更新で、ダウンロードした exe が壊れていないか確かめるのに使う）
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash publish/ImageViewer.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  ImageViewer.exe" | Set-Content -Encoding ascii -NoNewline publish/ImageViewer.exe.sha256
+          Get-Content publish/ImageViewer.exe.sha256
+
       - name: リリースに添付
         if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ github.event.release.tag_name }}" publish/ImageViewer.exe --clobber
+        # チェックサムを先に置く（exe があれば必ずチェックサムもある状態にして、途中で確認したアプリが更新できないと判断しないように）
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" publish/ImageViewer.exe.sha256 --clobber
+          gh release upload "${{ github.event.release.tag_name }}" publish/ImageViewer.exe --clobber
 
       - name: 成果物に置く（試しの実行）
         if: github.event_name != 'release'
         uses: actions/upload-artifact@v4
         with:
           name: ImageViewer
-          path: publish/ImageViewer.exe
+          path: |
+            publish/ImageViewer.exe
+            publish/ImageViewer.exe.sha256
           retention-days: 3
