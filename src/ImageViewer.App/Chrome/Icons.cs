@@ -125,6 +125,16 @@ public static class Icons
         g.SmoothingMode = old;
     }
 
+    /// <summary>ⓘ（詳細パネル）</summary>
+    public static readonly IconPainter Info = (g, r, c) => Stroke(g, r, c, 1.4f, p =>
+    {
+        p.AddEllipse(2, 2, 12, 12);
+        p.StartFigure();
+        p.AddLine(8, 7.2f, 8, 11.5f);
+        p.StartFigure();
+        p.AddLine(8, 4.8f, 8, 4.9f);
+    });
+
     /// <summary>ライト（今の配色がライトのときにテーマのボタンに出す）</summary>
     public static readonly IconPainter Sun = (g, r, c) => Stroke(g, r, c, 1.4f, p =>
     {

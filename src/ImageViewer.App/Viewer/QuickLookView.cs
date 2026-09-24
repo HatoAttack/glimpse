@@ -3,8 +3,11 @@
 // - ← → で前後の画像、¥（MarkKey）でチェックの付け外し、^（MarkNextKey）で付け外しして次へ
 // - 表示は画面の大きさに縮小して読む。持つのは今の画像と前後 1 枚ずつの最大 3 枚、閉じたら全部解放する
 // - 開いた直後はサムネイルを引き伸ばして先に見せ、裏で本来の画像を読む（待ち時間を増やさない）
+// - I で右側に詳細パネル（画像には重ねず、画像は残りの幅に合わせる）
 using System.Diagnostics;
 using System.Drawing.Drawing2D;
+using ImageViewer.App.Chrome;
+using ImageViewer.App.Theming;
 using ImageViewer.Core.Imaging;
 using ImageViewer.Core.Thumbnails;
 
@@ -42,6 +45,23 @@ public sealed class QuickLookView : Control
 
     public event EventHandler? Closed;
 
+    /// <summary>右側の詳細パネル（中身は本体が入れる）。1 枚表示は常に暗い地なのでダークの配色で描く</summary>
+    public DetailsPanel Details { get; } = new() { Dock = DockStyle.Right, FixedPalette = Palette.Dark, Visible = false };
+
+    /// <summary>I キーで詳細パネルを出した / 閉じた（本体が設定に保存する）</summary>
+    public event EventHandler? DetailsToggled;
+
+    /// <summary>詳細パネルを出す / 閉じる（I キー・本体の ⓘ / Ctrl+I）</summary>
+    public void ToggleDetails()
+    {
+        Details.Visible = !Details.Visible;
+        Invalidate();
+        DetailsToggled?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>画像を描ける幅（詳細パネルを出していればその分を除く）</summary>
+    private int ContentWidth => Math.Max(1, ClientSize.Width - (Details.Visible ? Details.Width : 0));
+
     public bool IsOpen => Visible;
     public int CurrentIndex => _index;
 
@@ -54,6 +74,7 @@ public sealed class QuickLookView : Control
         ImeMode = ImeMode.Disable;
         TabStop = true;
         Visible = false;
+        Controls.Add(Details);
     }
 
     /// <param name="byKey">Space で開いた（押し続けたかどうかを離したときに判定する）</param>
@@ -121,7 +142,7 @@ public sealed class QuickLookView : Control
             _cache.Remove(key);
         }
 
-        int maxEdge = Math.Max(1, Math.Max(ClientSize.Width, ClientSize.Height));
+        int maxEdge = Math.Max(1, Math.Max(ContentWidth, ClientSize.Height));
         foreach (var path in wanted)
         {
             if (cts.IsCancellationRequested) return;
@@ -174,7 +195,7 @@ public sealed class QuickLookView : Control
         if (_index < 0 || _index >= _items.Count) return;
         var file = _items[_index];
         int bar = Font.Height * 2;
-        var area = new Rectangle(16, bar, Math.Max(1, ClientSize.Width - 32), Math.Max(1, ClientSize.Height - bar * 2));
+        var area = new Rectangle(16, bar, Math.Max(1, ContentWidth - 32), Math.Max(1, ClientSize.Height - bar * 2));
 
         Rectangle imageRect = Rectangle.Empty;
         if (_cache.TryGetValue(file.FullName, out var bmp))
@@ -200,7 +221,7 @@ public sealed class QuickLookView : Control
         if (IsMarked?.Invoke(_index) == true && !imageRect.IsEmpty) DrawCheck(g, imageRect);
 
         // 上: ファイル名と位置、チェック数
-        var top = new Rectangle(16, 0, ClientSize.Width - 32, bar);
+        var top = new Rectangle(16, 0, ContentWidth - 32, bar);
         TextRenderer.DrawText(g, $"{file.Name}    {_index + 1} / {_items.Count}", Font, top, Color.White,
             TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         int marked = MarkedCount?.Invoke() ?? 0;
@@ -209,8 +230,8 @@ public sealed class QuickLookView : Control
                 TextFormatFlags.VerticalCenter | TextFormatFlags.Right);
 
         // 下: 操作の案内
-        var bottom = new Rectangle(16, ClientSize.Height - bar, ClientSize.Width - 32, bar);
-        TextRenderer.DrawText(g, $"← → 前後    {KeyName(MarkKey)} チェック    {KeyName(MarkNextKey)} チェックして次へ    Space / Esc 閉じる",
+        var bottom = new Rectangle(16, ClientSize.Height - bar, ContentWidth - 32, bar);
+        TextRenderer.DrawText(g, $"← → 前後    {KeyName(MarkKey)} チェック    {KeyName(MarkNextKey)} チェックして次へ    I 詳細    Space / Esc 閉じる",
             Font, bottom, Color.Gray, TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPrefix);
     }
 
@@ -285,6 +306,7 @@ public sealed class QuickLookView : Control
                 case Keys.Home: ShowIndex(0); break;
                 case Keys.End: ShowIndex(_items.Count - 1); break;
                 case Keys.Escape: Close(); break;
+                case Keys.I when !e.Control && !e.Alt: ToggleDetails(); break;
                 // 開いたときの Space を押し続けている間（キーリピート）は閉じない
                 case Keys.Space when _spaceReleased: Close(); break;
                 default: return;
