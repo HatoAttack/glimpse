@@ -216,6 +216,31 @@ public sealed class FolderTree : TreeView
         }
     }
 
+    /// <summary>
+    /// フォルダー名を変えた。読み込み済みのノードのパスを付け替える（そのフォルダ自身は表示名も変える。
+    /// よく使うフォルダ・ドライブ・ホームの見出しはそのまま）
+    /// </summary>
+    public void FolderRenamed(string oldPath, string newPath)
+    {
+        void Walk(TreeNodeCollection nodes)
+        {
+            foreach (TreeNode node in nodes)
+            {
+                if (node.Tag is string path && FolderListing.Retarget(path, oldPath, newPath) is string moved)
+                {
+                    // そのフォルダ自身（見出しの無い普通のノード）は表示名も変える
+                    if (node.Parent != null && string.Equals(moved, newPath, StringComparison.OrdinalIgnoreCase))
+                        node.Text = Path.GetFileName(newPath);
+                    node.Tag = moved;
+                }
+                Walk(node.Nodes);
+            }
+        }
+        BeginUpdate();
+        Walk(Nodes);
+        EndUpdate();
+    }
+
     // ---- ドロップ（フォルダへ移動 / コピー） ----
     // ドロップ先の強調は選択とは別の「ドロップ先」の表示を使う（選択を変えるとそのフォルダへ移動してしまうため）
 

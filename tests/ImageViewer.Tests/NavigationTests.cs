@@ -21,6 +21,14 @@ static class NavigationTests
         while (h.GoBack() != null) backs++;
         check(backs == 3, $"履歴は上限（3）まで。古いものから捨てる（戻れた回数 {backs}）");
 
+        var hr = new NavigationHistory();
+        foreach (var p in new[] { @"C:\写真\旅行", @"C:\写真", @"C:\写真2", @"C:\写真\家族" }) hr.Navigate(p);
+        hr.GoBack(); // 進む に C:\写真\家族
+        hr.Retarget(@"C:\写真", @"C:\画像");
+        check(hr.Current == @"C:\写真2" && hr.GoBack() == @"C:\画像" && hr.GoBack() == @"C:\画像\旅行", "フォルダー名の変更で戻るの履歴を付け替える");
+        hr.GoForward();
+        check(hr.GoForward() == @"C:\写真2" && hr.GoForward() == @"C:\画像\家族", "進むの履歴も付け替える（似た名前の「写真2」は変えない）");
+
         // ---- サブフォルダの一覧 ----
         Directory.CreateDirectory(dir);
         foreach (var name in new[] { "img10", "img2", "Album" }) Directory.CreateDirectory(Path.Combine(dir, name));
@@ -53,6 +61,13 @@ static class NavigationTests
         check(store.Load().HomeFolder == @"E:\", "上書き保存");
         File.WriteAllText(settingsPath, "{ 壊れた");
         check(store.Load().HomeFolder == null, "壊れた設定ファイルは初期値で読む（起動できなくならない）");
+
+        // ---- フォルダー名の変更に合わせたパスの付け替え ----
+        check(FolderListing.Retarget(@"C:\写真", @"c:\写真\", @"C:\画像") == @"C:\画像"
+              && FolderListing.Retarget(@"C:\写真\2024\旅行", @"C:\写真", @"C:\画像\") == @"C:\画像\2024\旅行",
+            "付け替え: 自分自身と中（大文字小文字・末尾の区切りは無視）");
+        check(FolderListing.Retarget(@"C:\写真2", @"C:\写真", @"C:\画像") == null && FolderListing.Retarget(@"D:\x", @"C:\写真", @"C:\画像") == null,
+            "付け替え: 名前の前方一致だけのもの・関係ないものは null");
 
         // ---- 移動 / コピー先の判定 ----
         check(FolderListing.IsDirectlyIn(@"C:\写真\a.jpg", @"c:\写真\") && !FolderListing.IsDirectlyIn(@"C:\写真\sub\a.jpg", @"C:\写真"),

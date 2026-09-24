@@ -121,6 +121,20 @@ public sealed class FolderJumpService
 
     public void RecordVisit(string folder) => Visits.Record(folder);
 
+    /// <summary>
+    /// フォルダー名を変えた。索引（該当の 1 件だけ）と開いた記録を付け替え、索引の保存は裏で行う（作り直しはしない）
+    /// </summary>
+    public void FolderRenamed(string oldPath, string newPath)
+    {
+        Visits.Retarget(oldPath, newPath);
+        if (_index is not { } index || !index.Rename(oldPath, newPath)) return;
+        Task.Run(() =>
+        {
+            try { index.Save(_indexPath); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* 次の作り直しで直る */ }
+        });
+    }
+
     public void SaveVisits()
     {
         try { Visits.Save(_visitsPath); }

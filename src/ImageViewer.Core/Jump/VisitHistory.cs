@@ -34,6 +34,20 @@ public sealed class VisitHistory
         }
     }
 
+    /// <summary>フォルダー名を変えた。そのフォルダ（とその中）の記録を新しいパスに付け替える（回数・日時は引き継ぐ）</summary>
+    public void Retarget(string oldPath, string newPath)
+    {
+        lock (_lock)
+        {
+            foreach (var v in _visits.Values.ToList())
+            {
+                if (Navigation.FolderListing.Retarget(v.Path, oldPath, newPath) is not string moved) continue;
+                _visits.Remove(v.Path);
+                _visits[moved] = v with { Path = moved };
+            }
+        }
+    }
+
     /// <summary>よく開く × 最近開いた の点数（0 なら記録なし）</summary>
     public double FrecencyOf(string path, DateTime? nowUtc = null)
     {

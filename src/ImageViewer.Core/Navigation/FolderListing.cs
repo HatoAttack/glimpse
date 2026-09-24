@@ -60,6 +60,19 @@ public static class FolderListing
                || f.StartsWith(p + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// フォルダー名の変更に合わせてパスを付け替える。path が oldPath 自身かその中なら newPath に置き換えたパス、
+    /// 関係なければ null（大文字小文字・末尾の区切りは無視）
+    /// </summary>
+    public static string? Retarget(string path, string oldPath, string newPath)
+    {
+        string p = Path.TrimEndingDirectorySeparator(path), o = Path.TrimEndingDirectorySeparator(oldPath);
+        if (string.Equals(p, o, StringComparison.OrdinalIgnoreCase)) return newPath;
+        return p.StartsWith(o + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            ? Path.TrimEndingDirectorySeparator(newPath) + p[o.Length..]
+            : null;
+    }
+
     /// <summary>同じドライブか（ドラッグ＆ドロップの既定を、エクスプローラーと同じく 同じドライブ = 移動 / 別 = コピー にする）</summary>
     public static bool SameVolume(string a, string b) =>
         string.Equals(Path.GetPathRoot(Path.GetFullPath(a)), Path.GetPathRoot(Path.GetFullPath(b)), StringComparison.OrdinalIgnoreCase);

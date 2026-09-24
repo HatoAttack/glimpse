@@ -40,6 +40,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     // 直前の名前の変更（元に戻す用）。変更前の手動の並び順と並び順の種類も一緒に覚えておく
     private (IReadOnlyList<RenameOp> Ops, IReadOnlyList<string>? SavedOrder, SortMode Mode)? _lastRename;
     private ToolStripMenuItem _undoItem = null!;
+    private readonly List<ToolStripMenuItem> _renameFolderItems = new();
 
     private string? _folder;
     private CancellationTokenSource? _loadCts;
@@ -313,6 +314,57 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         Notify($"フォルダーを作りました: {dlg.Value}");
     }
 
+    // ---- フォルダー名の変更 ----
+
+    /// <summary>
+    /// ショートカット（F2）は画像の名前の変更コマンドと共有なので ProcessCmdKey で振り分け、メニューには表示だけする
+    /// </summary>
+    private ToolStripMenuItem RenameFolderItem(string text)
+    {
+        var item = new ToolStripMenuItem(text, null, async (_, _) => await RenameFolderAsync()) { ShortcutKeyDisplayString = "F2", Enabled = false };
+        _renameFolderItems.Add(item);
+        return item;
+    }
+
+    /// <summary>フォルダのタイルだけを 1 つ選んでいるとき、そのフォルダ</summary>
+    private DirectoryInfo? SelectedSingleFolder() =>
+        _grid.SelectedImages.Count == 0 && _grid.SelectedFolders is [var folder] ? folder : null;
+
+    private async Task RenameFolderAsync()
+    {
+        if (SelectedSingleFolder() is not { Parent: { } parentDir } dir || _folder == null) return;
+        string parent = parentDir.FullName, oldName = dir.Name, oldPath = dir.FullName;
+        string? Validate(string name) =>
+            RenamePlanner.ValidateName(name)
+            ?? (!string.Equals(name, oldName, StringComparison.OrdinalIgnoreCase)
+                && (Directory.Exists(Path.Combine(parent, name)) || File.Exists(Path.Combine(parent, name)))
+                ? "同じ名前のフォルダーまたはファイルがすでにあります" : null);
+
+        using var dlg = new TextInputDialog("フォルダー名の変更", $"「{oldName}」の新しい名前:", oldName, Validate);
+        if (dlg.ShowDialog(this) != DialogResult.OK || dlg.Value == oldName) return;
+
+        string newPath = Path.Combine(parent, dlg.Value);
+        try
+        {
+            Directory.Move(oldPath, newPath); // 大文字小文字だけの変更もこれでできる
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(this, ex.Message + "\n\nフォルダーの中のファイルを開いているアプリがあると変更できません。",
+                "フォルダー名を変更できませんでした", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        // 古いパスを覚えているもの（ツリー・戻る / 進む・フォルダジャンプ・ホーム）を新しいパスに付け替える
+        _tree.FolderRenamed(oldPath, newPath);
+        _history.Retarget(oldPath, newPath);
+        _jump.FolderRenamed(oldPath, newPath);
+        if (_settings.HomeFolder is string home && FolderListing.Retarget(home, oldPath, newPath) is string newHome) SetHome(newHome);
+        await LoadFolderAsync(_folder, NavKind.Reload);
+        _grid.SelectPath(newPath);
+        Notify($"フォルダー名を変更しました: {oldName} → {dlg.Value}");
+    }
+
     /// <summary>「新しいフォルダー」、あれば「新しいフォルダー (2)」…（エクスプローラーと同じ付け方）</summary>
     private static string UniqueFolderName(string parent)
     {
@@ -581,6 +633,12 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             _ = GoUpAsync();
             return true;
         }
+        // F2: フォルダのタイルを 1 つだけ選んでいればフォルダー名の変更（画像を選んでいれば画像の名前の変更コマンド）
+        if (keyData == Keys.F2 && !_address.Focused && SelectedSingleFolder() != null)
+        {
+            _ = RenameFolderAsync();
+            return true;
+        }
         // アドレスバーでは文字の編集を優先（画像のコピー・削除などにしない）
         if (_address.Focused && keyData is Keys.Delete or (Keys.Control | Keys.C) or (Keys.Control | Keys.X)
                 or (Keys.Control | Keys.V) or (Keys.Control | Keys.A) or (Keys.Control | Keys.Z))
@@ -617,6 +675,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             async (_, _) => await ChooseFolderAsync()) { ShortcutKeys = Keys.Control | Keys.O });
         fileMenu.DropDownItems.Add(new ToolStripMenuItem("新しいフォルダー(&N)...", null,
             async (_, _) => await CreateFolderAsync()) { ShortcutKeys = Keys.Control | Keys.N });
+        fileMenu.DropDownItems.Add(RenameFolderItem("フォルダー名の変更(&M)..."));
         fileMenu.DropDownItems.Add(new ToolStripMenuItem("再読み込み(&R)", null,
             (_, _) => RequestRefresh()) { ShortcutKeys = Keys.F5 });
         menu.Items.Add(fileMenu);
@@ -758,6 +817,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _contextMenu.Opening += (_, _) => UpdateCommandEnabled();
         _contextMenu.Items.Add(new ToolStripMenuItem("新しいフォルダー...", null, async (_, _) => await CreateFolderAsync())
             { ShortcutKeyDisplayString = "Ctrl+N" });
+        _contextMenu.Items.Add(RenameFolderItem("フォルダー名の変更..."));
         _contextMenu.Items.Add(new ToolStripSeparator());
         _contextMenu.Items.Add(new ToolStripMenuItem("チェックを付ける", null, (_, _) => _grid.SetMarkOnSelected(true))
             { ShortcutKeyDisplayString = "Shift+¥" });
@@ -817,6 +877,8 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         paths ??= SelectedPaths();
         foreach (var (item, cmd) in _commandItems)
             item.Enabled = cmd.CanExecute(paths);
+        bool oneFolder = SelectedSingleFolder() != null;
+        foreach (var item in _renameFolderItems) item.Enabled = oneFolder;
     }
 
     private async Task ExecuteAsync(IImageCommand cmd)
