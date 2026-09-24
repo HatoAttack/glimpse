@@ -35,6 +35,12 @@ public sealed record AppSettings
 
     public const int MaxRecentDestinations = 10;
 
+    /// <summary>起動時に新しいバージョンを確認する（null は既定 = 確認する）</summary>
+    public bool? CheckUpdatesOnStartup { get; init; }
+
+    /// <summary>「このバージョンは飛ばす」を選んだバージョンのタグ（起動時の確認では知らせない）</summary>
+    public string? SkippedVersion { get; init; }
+
     /// <summary>最近の移動先の先頭に追加した設定（同じものは前から外す。件数に上限）</summary>
     public AppSettings WithRecentDestination(string folder) => this with
     {
