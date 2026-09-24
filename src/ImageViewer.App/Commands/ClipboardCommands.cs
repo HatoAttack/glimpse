@@ -128,7 +128,7 @@ public sealed class PasteFilesCommand(Form owner) : IImageCommand
         }
         // 切り取りは貼り付けたら終わり（エクスプローラーと同じく、もう一度は貼り付けない）
         if (cut && sources.Any(p => !File.Exists(p) && !Directory.Exists(p))) Clipboard.Clear();
-        context.Host.FilesAdded(folder, added.ToList());
+        await context.Host.FilesAddedAsync(folder, added.ToList());
         context.Host.Notify(added.Count == 0 ? "貼り付けませんでした"
             : $"{added.Count} 件を{(cut ? "移動" : "コピー")}しました");
     }

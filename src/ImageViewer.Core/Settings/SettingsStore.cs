@@ -30,6 +30,19 @@ public sealed record AppSettings
     /// <summary>連結で前回使った設定（null なら既定）</summary>
     public Editing.CombineOptions? Combine { get; init; }
 
+    /// <summary>「フォルダーへ移動 / コピー」で最近選んだフォルダ（新しい順、最大 MaxRecentDestinations 件）</summary>
+    public IReadOnlyList<string>? RecentDestinations { get; init; }
+
+    public const int MaxRecentDestinations = 10;
+
+    /// <summary>最近の移動先の先頭に追加した設定（同じものは前から外す。件数に上限）</summary>
+    public AppSettings WithRecentDestination(string folder) => this with
+    {
+        RecentDestinations = new[] { folder }
+            .Concat((RecentDestinations ?? Array.Empty<string>()).Where(f => !string.Equals(f, folder, StringComparison.OrdinalIgnoreCase)))
+            .Take(MaxRecentDestinations).ToList(),
+    };
+
     /// <summary>実際に使う範囲（保存はしない）</summary>
     [System.Text.Json.Serialization.JsonIgnore]
     public IReadOnlyList<string> EffectiveJumpRoots =>

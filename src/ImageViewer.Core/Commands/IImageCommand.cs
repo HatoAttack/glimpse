@@ -19,11 +19,11 @@ public interface ICommandHost
     /// </summary>
     void FilesRenamed(IReadOnlyList<Rename.RenameOp> ops);
 
-    /// <summary>コマンドがファイルを削除した。本体は一覧から外し、消した位置の次の画像を選択する</summary>
-    void FilesDeleted(IReadOnlyList<string> paths);
+    /// <summary>コマンドがファイルを削除した・別のフォルダへ移動した。本体は一覧から外し、消えた位置の次の画像を選択する</summary>
+    void FilesRemoved(IReadOnlyList<string> paths);
 
     /// <summary>コマンドが表示中のフォルダにファイル・フォルダを追加した。本体は読み直して、追加したものを選択する</summary>
-    void FilesAdded(string folder, IReadOnlyList<string> paths);
+    Task FilesAddedAsync(string folder, IReadOnlyList<string> paths);
 }
 
 /// <summary>コマンド実行時に渡される情報</summary>

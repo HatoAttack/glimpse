@@ -22,7 +22,7 @@ public sealed class DeleteCommand(Form owner) : ImageCommandBase
         ShellFileOps.Recycle(paths, owner.Handle);
         // 途中で失敗・キャンセルされた分は残っているので、実際に無くなったものだけを反映する
         var deleted = paths.Where(p => !File.Exists(p)).ToList();
-        if (deleted.Count > 0) context.Host.FilesDeleted(deleted);
+        if (deleted.Count > 0) context.Host.FilesRemoved(deleted);
         context.Host.Notify(deleted.Count == paths.Count
             ? $"{deleted.Count} 枚をごみ箱に移動しました"
             : $"{deleted.Count} / {paths.Count} 枚をごみ箱に移動しました（残りは削除できませんでした）");
