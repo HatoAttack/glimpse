@@ -92,6 +92,25 @@ public static class UpdateChecker
 
     public static bool IsNewer(ReleaseInfo release, Version current) => release.Version > Normalize(current);
 
+    /// <summary>
+    /// リリースの説明文（GitHub の Markdown）を、アプリの文字欄で読みやすい形にする。
+    /// 見出し「## 追加」→「【追加】」、太字・コードの記号（** と `）は外す。改行は Windows の形に
+    /// </summary>
+    public static string NotesToPlainText(string markdown)
+    {
+        var lines = markdown.Replace("\r\n", "\n").Split('\n').Select(line =>
+        {
+            string trimmed = line.TrimStart();
+            if (trimmed.StartsWith('#'))
+            {
+                string heading = trimmed.TrimStart('#').Trim();
+                line = heading.Length > 0 ? $"【{heading}】" : "";
+            }
+            return line.Replace("**", "").Replace("`", "");
+        });
+        return string.Join(Environment.NewLine, lines);
+    }
+
     /// <summary>チェックサムのファイル（sha256sum 形式・値だけのどちらでも）から 64 桁の 16 進を取り出す</summary>
     public static string? ParseSha256(string text)
     {

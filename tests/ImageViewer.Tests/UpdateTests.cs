@@ -36,6 +36,11 @@ static class UpdateTests
         const string abc = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
         check(UpdateChecker.ParseSha256($"{abc.ToUpperInvariant()}  ImageViewer.exe") == abc && UpdateChecker.ParseSha256(abc + "\n") == abc
               && UpdateChecker.ParseSha256("not a hash") == null, "チェックサムのファイルを読む（sha256sum 形式・値だけ・大文字）");
+
+        // ---- 説明文の表示 ----
+        string plain = UpdateChecker.NotesToPlainText("はじめに `ImageViewer.exe` を\r\n\r\n## 追加\n- **F2**: 名前の変更\n#");
+        check(plain == string.Join(Environment.NewLine, "はじめに ImageViewer.exe を", "", "【追加】", "- F2: 名前の変更", ""),
+            "説明文: 見出しは【】、** と ` は外す（中身の無い # は消す）");
         string upd = Path.Combine(dir, "update");
         Directory.CreateDirectory(upd);
         string abcFile = Path.Combine(upd, "abc.txt");

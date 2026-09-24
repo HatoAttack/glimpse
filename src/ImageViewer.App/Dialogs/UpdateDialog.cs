@@ -44,7 +44,8 @@ public sealed class UpdateDialog : Form
         var notes = new TextBox
         {
             Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Dock = DockStyle.Fill,
-            Text = release.Notes.Replace("\r\n", "\n").Replace("\n", Environment.NewLine), BackColor = SystemColors.Window,
+            Text = UpdateChecker.NotesToPlainText(release.Notes), BackColor = SystemColors.Window,
+            TabStop = false, // 最初にフォーカスが入ると全体が選択された状態で開いてしまう
         };
         var pageLink = new LinkLabel { Text = "リリースのページを開く", AutoSize = true, Dock = DockStyle.Bottom, Padding = new Padding(0, 6, 0, 0) };
         pageLink.LinkClicked += (_, _) => OpenPage();
@@ -64,6 +65,7 @@ public sealed class UpdateDialog : Form
         Controls.Add(buttons);
         AcceptButton = _update;
         CancelButton = _later;
+        Shown += (_, _) => _update.Focus();
 
         if (exePath == null || release.ExeUrl == null || release.Sha256Url == null)
         {
