@@ -1,4 +1,4 @@
-// 削除（ごみ箱へ移動）。選択中の画像をまとめて 1 回のシェル操作で送る（ごみ箱から元に戻せる）
+// 削除（ごみ箱へ移動）。選択中の画像をまとめて 1 回のシェル操作で送る（ごみ箱から元に戻せる）。確認は複数枚のときだけ
 using ImageViewer.Core.Commands;
 
 namespace ImageViewer.App.Commands;
@@ -13,10 +13,9 @@ public sealed class DeleteCommand(Form owner) : ImageCommandBase
     public override Task ExecuteAsync(CommandContext context)
     {
         var paths = context.Paths;
-        string question = paths.Count == 1
-            ? $"「{Path.GetFileName(paths[0])}」をごみ箱に移動しますか？"
-            : $"選択中の {paths.Count} 枚の画像をごみ箱に移動しますか？";
-        if (MessageBox.Show(owner, question, "削除", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+        // 1 枚はすぐにごみ箱へ（ごみ箱から戻せる）。まとめて消すときだけ確認する
+        if (paths.Count > 1 && MessageBox.Show(owner, $"選択中の {paths.Count} 枚の画像をごみ箱に移動しますか？", "削除",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
             return Task.CompletedTask;
 
         ShellFileOps.Recycle(paths, owner.Handle);
