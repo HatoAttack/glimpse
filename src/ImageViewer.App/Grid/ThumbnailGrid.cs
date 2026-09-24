@@ -243,6 +243,15 @@ public sealed class ThumbnailGrid : Control
         SelectionChanged?.Invoke(this, EventArgs.Empty);
     }
 
+    /// <summary>指定したパスの項目（フォルダのタイルも）を選択して、先頭を見える位置へ。貼り付けたものの選択に使う</summary>
+    public void SelectPaths(IEnumerable<string> paths)
+    {
+        _selection.Select(paths.Where(_indexByPath.ContainsKey).Select(p => _indexByPath[p]));
+        if (_selection.Count > 0) EnsureVisible(_selection.Focus);
+        Invalidate();
+        SelectionChanged?.Invoke(this, EventArgs.Empty);
+    }
+
     // ---- チェック ----
 
     public int MarkedCount => _marks.Count;

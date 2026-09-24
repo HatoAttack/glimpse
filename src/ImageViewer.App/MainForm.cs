@@ -155,6 +155,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
         UpdateCommandStates();
         UpdateNavigationState();
+        Activated += (_, _) => UpdateCommandEnabled(); // エクスプローラーでコピーしてから戻ってきたら貼り付けられるように
         _tree.SetHome(HomeFolder);
         SetUpJump();
         // 起動時は指定のフォルダ、無ければホーム（未設定・見つからなければピクチャ）を開く
@@ -574,15 +575,23 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             _ = GoUpAsync();
             return true;
         }
+        // アドレスバーでは文字の編集を優先（画像のコピー・削除などにしない）
+        if (_address.Focused && keyData is Keys.Delete or (Keys.Control | Keys.C) or (Keys.Control | Keys.X)
+                or (Keys.Control | Keys.V) or (Keys.Control | Keys.A) or (Keys.Control | Keys.Z))
+            return false;
         return base.ProcessCmdKey(ref msg, keyData);
     }
 
     private void RegisterCommands()
     {
+        _registry.Register(new CutFilesCommand());
+        _registry.Register(new CopyFilesCommand());
+        _registry.Register(new PasteFilesCommand(this));
         _registry.Register(new ResizeCommand(this, this));
         _registry.Register(new CropCommand(this));
         _registry.Register(new CombineCommand(this, this));
         _registry.Register(new RenameCommand(this));
+        _registry.Register(new DeleteCommand(this));
         _registry.Register(new CopyPathsCommand());
         _registry.Register(new RevealInExplorerCommand());
 
@@ -611,6 +620,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         editMenu.DropDownItems.Add(new ToolStripSeparator());
         editMenu.DropDownItems.Add(new ToolStripMenuItem("すべて選択(&A)", null,
             (_, _) => _grid.SelectAll()) { ShortcutKeys = Keys.Control | Keys.A });
+        editMenu.DropDownOpening += (_, _) => UpdateCommandEnabled();
         menu.Items.Add(editMenu);
         menu.Items.Add(BuildMarkMenu());
         menu.Items.Add(BuildViewMenu());
@@ -737,6 +747,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
     private void BuildContextMenu()
     {
+        _contextMenu.Opening += (_, _) => UpdateCommandEnabled();
         _contextMenu.Items.Add(new ToolStripMenuItem("新しいフォルダー...", null, async (_, _) => await CreateFolderAsync())
             { ShortcutKeyDisplayString = "Ctrl+N" });
         _contextMenu.Items.Add(new ToolStripSeparator());
@@ -778,8 +789,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     private void UpdateCommandStates()
     {
         var paths = SelectedPaths();
-        foreach (var (item, cmd) in _commandItems)
-            item.Enabled = cmd.CanExecute(paths);
+        UpdateCommandEnabled(paths);
 
         string where = _folder ?? "フォルダ未選択（Ctrl+O で開く / フォルダをドロップ）";
         string text = _grid.Folders.Count > 0
@@ -788,6 +798,17 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         if (paths.Count > 0) text += $"   選択 {paths.Count} 枚";
         if (_grid.MarkedCount > 0) text += $"   チェック {_grid.MarkedCount} 枚";
         _status.Text = text;
+    }
+
+    /// <summary>
+    /// メニューの有効 / 無効（無効のままだとショートカットも効かない）。貼り付けはクリップボード次第なので、
+    /// メニューを開いたとき・ほかのアプリから戻ったときにも更新する
+    /// </summary>
+    private void UpdateCommandEnabled(IReadOnlyList<string>? paths = null)
+    {
+        paths ??= SelectedPaths();
+        foreach (var (item, cmd) in _commandItems)
+            item.Enabled = cmd.CanExecute(paths);
     }
 
     private async Task ExecuteAsync(IImageCommand cmd)
@@ -803,9 +824,20 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             MessageBox.Show(this, ex.Message, $"{cmd.Name} に失敗しました",
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+        UpdateCommandEnabled(); // コピー・切り取りで貼り付けができるようになる
     }
 
     public void Notify(string message) => _status.Text = message;
+
+    public string? CurrentFolder => _folder;
+
+    public async void FilesAdded(string folder, IReadOnlyList<string> paths)
+    {
+        // 貼り付けている間に別のフォルダへ移っていたら何もしない
+        if (!string.Equals(folder, _folder, StringComparison.OrdinalIgnoreCase)) return;
+        await LoadFolderAsync(folder, NavKind.Reload);
+        if (paths.Count > 0 && string.Equals(folder, _folder, StringComparison.OrdinalIgnoreCase)) _grid.SelectPaths(paths);
+    }
 
     AppSettings ISettingsAccess.Settings => _settings;
 
@@ -874,6 +906,33 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _grid.SetItems(Arrange(items, _sortMode, saved), reload: true, renamed: map);
         _undoItem.Enabled = _lastRename != null;
         _undoItem.Text = _lastRename != null ? "元に戻す: 名前の変更(&U)" : "元に戻す(&U)";
+    }
+
+    private void ClearUndo()
+    {
+        _lastRename = null;
+        _undoItem.Enabled = false;
+        _undoItem.Text = "元に戻す(&U)";
+    }
+
+    public void FilesDeleted(IReadOnlyList<string> paths)
+    {
+        if (_folder == null || paths.Count == 0) return;
+        var gone = new HashSet<string>(paths, StringComparer.OrdinalIgnoreCase);
+        int first = _grid.Items.ToList().FindIndex(f => gone.Contains(f.FullName));
+        if (first < 0) return; // 別のフォルダへ移っていた
+        var items = _grid.Items.Where(f => !gone.Contains(f.FullName)).ToList();
+        // 消したファイルの名前の変更は元に戻せない
+        if (_lastRename is { } last && last.Ops.Any(o => gone.Contains(o.To))) ClearUndo();
+        if (_sortMode == SortMode.Manual) SaveManualOrder(items);
+
+        bool peeking = _quickLook.Visible;
+        _grid.SetItems(items, reload: true); // 表示中の画像が消えるので Quick Look は一度閉じる
+        if (items.Count == 0) return;
+        // エクスプローラーと同じく、消した位置にある次の画像を選ぶ（Quick Look ならそのまま次を表示）
+        int next = Math.Clamp(first, 0, items.Count - 1);
+        _grid.SelectImage(next);
+        if (peeking) _quickLook.Open(_grid.Items, next, byKey: false);
     }
 
     private async Task UndoRenameAsync()
@@ -945,12 +1004,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             return;
         }
 
-        if (!reload)
-        {
-            _lastRename = null;
-            _undoItem.Enabled = false;
-            _undoItem.Text = "元に戻す(&U)";
-        }
+        if (!reload) ClearUndo();
         _folder = folder;
         _sortMode = mode;
         if (kind == NavKind.New) _history.Navigate(folder);
@@ -993,14 +1047,16 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     }
 
     /// <summary>ドラッグで並べ替えた: 手動に切り替えて今の並びを保存</summary>
-    private void SaveManualOrder()
+    private void SaveManualOrder() => SaveManualOrder(_grid.Items);
+
+    private void SaveManualOrder(IReadOnlyList<FileInfo> items)
     {
         if (_folder == null) return;
         _sortMode = SortMode.Manual;
         UpdateSortChecks();
         try
         {
-            _orderStore.Save(_folder, _grid.Items.Select(f => f.Name).ToList());
+            _orderStore.Save(_folder, items.Select(f => f.Name).ToList());
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
