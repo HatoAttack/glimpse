@@ -574,6 +574,8 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             _ = GoUpAsync();
             return true;
         }
+        // アドレスバーでの Del は文字の削除（画像の削除にしない）
+        if (keyData == Keys.Delete && _address.Focused) return false;
         return base.ProcessCmdKey(ref msg, keyData);
     }
 
@@ -583,6 +585,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _registry.Register(new CropCommand(this));
         _registry.Register(new CombineCommand(this, this));
         _registry.Register(new RenameCommand(this));
+        _registry.Register(new DeleteCommand(this));
         _registry.Register(new CopyPathsCommand());
         _registry.Register(new RevealInExplorerCommand());
 
@@ -876,6 +879,32 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _undoItem.Text = _lastRename != null ? "元に戻す: 名前の変更(&U)" : "元に戻す(&U)";
     }
 
+    private void ClearUndo()
+    {
+        _lastRename = null;
+        _undoItem.Enabled = false;
+        _undoItem.Text = "元に戻す(&U)";
+    }
+
+    public void FilesDeleted(IReadOnlyList<string> paths)
+    {
+        if (_folder == null || paths.Count == 0) return;
+        var gone = new HashSet<string>(paths, StringComparer.OrdinalIgnoreCase);
+        int first = _grid.Items.ToList().FindIndex(f => gone.Contains(f.FullName));
+        var items = _grid.Items.Where(f => !gone.Contains(f.FullName)).ToList();
+        // 消したファイルの名前の変更は元に戻せない
+        if (_lastRename is { } last && last.Ops.Any(o => gone.Contains(o.To))) ClearUndo();
+        if (_sortMode == SortMode.Manual) SaveManualOrder(items);
+
+        bool peeking = _quickLook.Visible;
+        _grid.SetItems(items, reload: true); // 表示中の画像が消えるので Quick Look は一度閉じる
+        if (items.Count == 0) return;
+        // エクスプローラーと同じく、消した位置にある次の画像を選ぶ（Quick Look ならそのまま次を表示）
+        int next = Math.Clamp(first, 0, items.Count - 1);
+        _grid.SelectImage(next);
+        if (peeking) _quickLook.Open(_grid.Items, next, byKey: false);
+    }
+
     private async Task UndoRenameAsync()
     {
         if (_lastRename is not { } last) return;
@@ -945,12 +974,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             return;
         }
 
-        if (!reload)
-        {
-            _lastRename = null;
-            _undoItem.Enabled = false;
-            _undoItem.Text = "元に戻す(&U)";
-        }
+        if (!reload) ClearUndo();
         _folder = folder;
         _sortMode = mode;
         if (kind == NavKind.New) _history.Navigate(folder);
@@ -993,14 +1017,16 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     }
 
     /// <summary>ドラッグで並べ替えた: 手動に切り替えて今の並びを保存</summary>
-    private void SaveManualOrder()
+    private void SaveManualOrder() => SaveManualOrder(_grid.Items);
+
+    private void SaveManualOrder(IReadOnlyList<FileInfo> items)
     {
         if (_folder == null) return;
         _sortMode = SortMode.Manual;
         UpdateSortChecks();
         try
         {
-            _orderStore.Save(_folder, _grid.Items.Select(f => f.Name).ToList());
+            _orderStore.Save(_folder, items.Select(f => f.Name).ToList());
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

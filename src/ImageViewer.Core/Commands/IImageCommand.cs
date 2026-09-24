@@ -15,6 +15,9 @@ public interface ICommandHost
     /// 「元に戻す」に登録する
     /// </summary>
     void FilesRenamed(IReadOnlyList<Rename.RenameOp> ops);
+
+    /// <summary>コマンドがファイルを削除した。本体は一覧から外し、消した位置の次の画像を選択する</summary>
+    void FilesDeleted(IReadOnlyList<string> paths);
 }
 
 /// <summary>コマンド実行時に渡される情報</summary>
