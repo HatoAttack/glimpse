@@ -3,17 +3,18 @@
 using ImageViewer.App.Jump;
 using ImageViewer.Core.Jump;
 using ImageViewer.Core.Navigation;
+using ImageViewer.App.Theming;
 
 namespace ImageViewer.App.Dialogs;
 
 /// <summary>フォルダ名で検索する（結果と、見つからないときのお知らせ）</summary>
 public delegate Task<(IReadOnlyList<JumpResult> Results, string? Message)> FolderSearch(string query, CancellationToken ct);
 
-public sealed class FolderPickDialog : Form
+public sealed class FolderPickDialog : ThemedForm
 {
     private readonly TextBox _input = new() { Dock = DockStyle.Top };
     private readonly JumpList _list = new() { Dock = DockStyle.Fill, Visible = true, TabStop = false };
-    private readonly Label _error = new() { AutoSize = true, ForeColor = Color.Firebrick, Dock = DockStyle.Bottom, Padding = new Padding(0, 4, 0, 0) };
+    private readonly Label _error = new() { AutoSize = true, ForeColor = Theme.Current.Danger, Dock = DockStyle.Bottom, Padding = new Padding(0, 4, 0, 0) };
     private readonly System.Windows.Forms.Timer _delay = new() { Interval = 120 };
     private readonly IReadOnlyList<string> _recent;
     private readonly FolderSearch _search;

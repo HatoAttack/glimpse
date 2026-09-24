@@ -5,10 +5,11 @@ using ImageViewer.Core.Thumbnails;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
 using ISImage = SixLabors.ImageSharp.Image<SixLabors.ImageSharp.PixelFormats.Rgba32>;
+using ImageViewer.App.Theming;
 
 namespace ImageViewer.App.Dialogs;
 
-public sealed class CombineDialog : Form
+public sealed class CombineDialog : ThemedForm
 {
     private const int PreviewSourceEdge = 1200;                  // プレビュー用に読む画像の長辺の上限
     private const long PreviewSourcePixels = 16L * 1024 * 1024;  // プレビュー用に読む画像の画素数の合計の上限（約 64MB）

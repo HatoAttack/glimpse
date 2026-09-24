@@ -2,10 +2,11 @@
 // チェックサムが合えば exe を入れ替える（再起動は呼び出し側）。合わない・書き込めないときは入れ替えない
 using System.Diagnostics;
 using ImageViewer.Core.Updates;
+using ImageViewer.App.Theming;
 
 namespace ImageViewer.App.Dialogs;
 
-public sealed class UpdateDialog : Form
+public sealed class UpdateDialog : ThemedForm
 {
     public enum Outcome { Later, Skip, Updated }
 

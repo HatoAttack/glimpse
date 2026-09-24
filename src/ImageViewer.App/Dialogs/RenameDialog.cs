@@ -1,9 +1,10 @@
 // 名前の変更ダイアログ（連番 / 元の名前を元に置換・付け足し）。入力のたびに変更前 → 変更後を一覧で確認できる
 using ImageViewer.Core.Rename;
+using ImageViewer.App.Theming;
 
 namespace ImageViewer.App.Dialogs;
 
-public sealed class RenameDialog : Form
+public sealed class RenameDialog : ThemedForm
 {
     private readonly IReadOnlyList<string> _paths;
     private List<RenamePlanItem> _plan = new();
@@ -86,7 +87,7 @@ public sealed class RenameDialog : Form
         var hint = new Label
         {
             Text = "画面の並び順（手動で並べ替えた順）に番号を振ります。拡張子はそのまま残ります。",
-            AutoSize = true, Dock = DockStyle.Top, ForeColor = SystemColors.GrayText, Padding = new Padding(8, 4, 0, 4),
+            AutoSize = true, Dock = DockStyle.Top, ForeColor = Theme.Current.TextMuted, Padding = new Padding(8, 4, 0, 4),
         };
         var previewHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(10, 0, 10, 0) };
         previewHost.Controls.Add(_preview);
@@ -145,7 +146,7 @@ public sealed class RenameDialog : Form
         _summary.Text = errors > 0
             ? $"エラーが {errors} 件あります。直すまで実行できません"
             : $"{_plan.Count} 件中 {changes} 件の名前を変更します";
-        _summary.ForeColor = errors > 0 ? Color.Firebrick : SystemColors.ControlText;
+        _summary.ForeColor = errors > 0 ? Theme.Current.Danger : Theme.Current.Text;
         _ok.Enabled = errors == 0 && changes > 0;
 
         // 最初のエラーが見えるようにする
@@ -163,8 +164,8 @@ public sealed class RenameDialog : Form
             _ => "",
         };
         e.Item = new ListViewItem(new[] { p.SourceName, p.TargetName, state });
-        if (p.Status == RenameStatus.Error) e.Item.ForeColor = Color.Firebrick;
-        else if (p.Status == RenameStatus.Unchanged) e.Item.ForeColor = SystemColors.GrayText;
+        if (p.Status == RenameStatus.Error) e.Item.ForeColor = Theme.Current.Danger;
+        else if (p.Status == RenameStatus.Unchanged) e.Item.ForeColor = Theme.Current.TextMuted;
     }
 
     private static Panel Row(params Control[] items)
