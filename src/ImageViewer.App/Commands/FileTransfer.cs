@@ -57,31 +57,49 @@ internal static class FileTransfer
         }
 
         bool renameOnCollision = !move && sources.Any(p => FolderListing.IsDirectlyIn(p, folder)); // 同じフォルダへのコピーは「- コピー」
+        // 実際に増えた・置き換わったものは、前後のフォルダの中身（名前・更新日時・サイズ）を比べて調べる。
+        // 同じ名前が前からあるだけでは成功と見なさない（上書きを断った・キャンセルしたとき）
+        Dictionary<string, (DateTime, long)> before = new(), after = new();
         await ShellFileOps.RunInBackground(() =>
         {
+            before = Snapshot(folder);
             if (move) ShellFileOps.Move(sources, folder, owner);
             else ShellFileOps.Copy(sources, folder, renameOnCollision, owner);
+            after = Snapshot(folder);
         });
+        var arrived = after.Where(kv => !before.TryGetValue(kv.Key, out var old) || old != kv.Value).Select(kv => kv.Key).ToList();
 
-        // 途中で失敗・キャンセルされた分は残っているので、実際の結果をファイルの有無で確かめる
-        var done = sources.Where(p => move
-            ? !File.Exists(p) && !Directory.Exists(p)
-            : FolderListing.IsDirectlyIn(p, folder) || Exists(Path.Combine(folder, Path.GetFileName(p)))).ToList();
+        // 移動は元の場所から無くなったものが成功。途中で失敗・キャンセルされた分は残っている
+        var moved = move ? sources.Where(p => !File.Exists(p) && !Directory.Exists(p)).ToList() : new List<string>();
+        int done = move ? moved.Count : Math.Min(arrived.Count, sources.Count);
 
-        if (move && done.Count > 0) host.FilesRemoved(done);
+        if (moved.Count > 0) host.FilesRemoved(moved);
         if (host.CurrentFolder is string current && string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(current)),
                 Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder)), StringComparison.OrdinalIgnoreCase))
-            await host.FilesAddedAsync(folder, done.Select(p => Path.Combine(folder, Path.GetFileName(p))).ToList());
+            await host.FilesAddedAsync(folder, arrived);
 
         string name = Path.GetFileName(Path.TrimEndingDirectorySeparator(folder));
         string verb = move ? "移動" : "コピー";
-        host.Notify(done.Count == sources.Count
-            ? $"{done.Count} 件を「{(name.Length > 0 ? name : folder)}」へ{verb}しました"
-            : $"{done.Count} / {sources.Count} 件を「{(name.Length > 0 ? name : folder)}」へ{verb}しました（残りはできませんでした）");
-        return done.Count;
+        host.Notify(done == sources.Count
+            ? $"{done} 件を「{(name.Length > 0 ? name : folder)}」へ{verb}しました"
+            : $"{done} / {sources.Count} 件を「{(name.Length > 0 ? name : folder)}」へ{verb}しました（残りはできませんでした）");
+        return done;
     }
 
-    private static bool Exists(string path) => File.Exists(path) || Directory.Exists(path);
+    /// <summary>フォルダ直下の項目と、その更新日時・サイズ（読めなければ空）</summary>
+    private static Dictionary<string, (DateTime, long)> Snapshot(string folder)
+    {
+        var map = new Dictionary<string, (DateTime, long)>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            foreach (var info in new DirectoryInfo(folder).EnumerateFileSystemInfos())
+                map[info.FullName] = (info.LastWriteTimeUtc, info is FileInfo f ? f.Length : 0);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
+        return map;
+    }
 }
 
 /// <summary>フォルダへドロップされた（Move = false ならコピー）</summary>

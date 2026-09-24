@@ -90,58 +90,16 @@ public sealed class PasteFilesCommand(Form owner) : IImageCommand
     public async Task ExecuteAsync(CommandContext context)
     {
         if (context.Host.CurrentFolder is not string folder) return;
-        // 無いフォルダを貼り付け先にすると、その名前のファイルとして移動・コピーされてしまう
-        if (!Directory.Exists(folder))
-        {
-            context.Host.Notify($"貼り付け先のフォルダが見つかりません: {folder}");
-            return;
-        }
         var (sources, cut) = FileClipboard.Get();
         sources = sources.Where(p => File.Exists(p) || Directory.Exists(p)).ToList();
-        string target = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder));
-        bool SameFolder(string p) =>
-            string.Equals(Path.GetDirectoryName(Path.GetFullPath(p)) is string d ? Path.TrimEndingDirectorySeparator(d) : null,
-                target, StringComparison.OrdinalIgnoreCase);
-        // 同じフォルダへの移動は何もしない（エクスプローラーと同じ）
-        if (cut) sources = sources.Where(p => !SameFolder(p)).ToList();
         if (sources.Count == 0)
         {
-            context.Host.Notify(cut ? "切り取ったファイルは既にこのフォルダにあります" : "貼り付けるファイルが見つかりません");
+            context.Host.Notify("貼り付けるファイルが見つかりません");
             return;
         }
-
-        var before = Entries(folder);
-        IntPtr handle = owner.Handle;
-        bool renameOnCollision = sources.Any(SameFolder); // 同じフォルダへのコピーは「- コピー」を付けて複製
-        await ShellFileOps.RunInBackground(() =>
-        {
-            if (cut) ShellFileOps.Move(sources, folder, handle);
-            else ShellFileOps.Copy(sources, folder, renameOnCollision, handle);
-        });
-
-        // 増えたもの＋同じ名前で上書きしたものを選択する
-        var added = Entries(folder).Where(p => !before.Contains(p)).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var src in sources)
-        {
-            string dest = Path.Combine(folder, Path.GetFileName(src));
-            if (!added.Contains(dest) && !SameFolder(src) && (File.Exists(dest) || Directory.Exists(dest))) added.Add(dest);
-        }
+        // 移動 / コピー・画面への反映・結果の表示はドラッグ＆ドロップと共通（増えたもの・置き換わったものを選択）
+        int done = await FileTransfer.RunAsync(context.Host, sources, folder, cut, owner.Handle);
         // 切り取りは貼り付けたら終わり（エクスプローラーと同じく、もう一度は貼り付けない）
-        if (cut && sources.Any(p => !File.Exists(p) && !Directory.Exists(p))) Clipboard.Clear();
-        await context.Host.FilesAddedAsync(folder, added.ToList());
-        context.Host.Notify(added.Count == 0 ? "貼り付けませんでした"
-            : $"{added.Count} 件を{(cut ? "移動" : "コピー")}しました");
-    }
-
-    private static HashSet<string> Entries(string folder)
-    {
-        try
-        {
-            return Directory.EnumerateFileSystemEntries(folder).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        }
+        if (cut && done > 0) Clipboard.Clear();
     }
 }
