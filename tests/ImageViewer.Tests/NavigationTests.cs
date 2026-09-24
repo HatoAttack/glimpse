@@ -53,5 +53,24 @@ static class NavigationTests
         check(store.Load().HomeFolder == @"E:\", "上書き保存");
         File.WriteAllText(settingsPath, "{ 壊れた");
         check(store.Load().HomeFolder == null, "壊れた設定ファイルは初期値で読む（起動できなくならない）");
+
+        // ---- 移動 / コピー先の判定 ----
+        check(FolderListing.IsDirectlyIn(@"C:\写真\a.jpg", @"c:\写真\") && !FolderListing.IsDirectlyIn(@"C:\写真\sub\a.jpg", @"C:\写真"),
+            "直下にあるか（大文字小文字・末尾の区切りは無視、孫は含まない）");
+        check(FolderListing.IsDirectlyIn(@"C:\a.jpg", @"C:\"), "ドライブのルート直下");
+        check(FolderListing.IsSameOrInside(@"C:\写真\sub", @"C:\写真") && FolderListing.IsSameOrInside(@"C:\写真", @"C:\写真\")
+              && !FolderListing.IsSameOrInside(@"C:\写真2", @"C:\写真"), "自分自身・自分の中か（名前の前方一致だけでは中と見なさない）");
+        check(FolderListing.SameVolume(@"C:\a\b.jpg", @"c:\x") && !FolderListing.SameVolume(@"C:\a.jpg", @"D:\x"), "同じドライブか");
+        check(FolderListing.LooksLikePath(@"C:\x") && FolderListing.LooksLikePath(@"\\server\share") && !FolderListing.LooksLikePath("旅行"),
+            "パスらしい入力か");
+
+        // ---- 最近の移動先 ----
+        var recent = new ImageViewer.Core.Settings.AppSettings();
+        for (int i = 0; i < 12; i++) recent = recent.WithRecentDestination($@"C:\f{i}");
+        recent = recent.WithRecentDestination(@"c:\F5");
+        check(recent.RecentDestinations!.Count == ImageViewer.Core.Settings.AppSettings.MaxRecentDestinations
+              && recent.RecentDestinations[0] == @"c:\F5" && recent.RecentDestinations.Count(f => f.Equals(@"C:\f5", StringComparison.OrdinalIgnoreCase)) == 1
+              && recent.RecentDestinations[1] == @"C:\f11",
+            "最近の移動先: 新しい順・同じものは 1 つ・上限 10 件");
     }
 }

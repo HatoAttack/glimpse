@@ -103,6 +103,11 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _grid.MouseDown += OnMouseBackForward;
         _tree.MouseDown += OnMouseBackForward;
         _tree.FolderSelected += async (_, path) => await LoadFolderAsync(path);
+        // フォルダのタイル・ツリーのフォルダへのドロップで移動 / コピー（エクスプローラーからのドロップも）
+        _grid.FilesDroppedOnFolder += async (_, drop) => await TransferDroppedAsync(drop);
+        _tree.FilesDroppedOnFolder += async (_, drop) => await TransferDroppedAsync(drop);
+        // グリッドからエクスプローラー等へドラッグして移動された画像は一覧から外す
+        _grid.FilesMovedOut += (_, paths) => FilesRemoved(paths);
         FormClosed += (_, _) =>
         {
             _thumbnails.Dispose();
@@ -413,17 +418,10 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         Shown += (_, _) => _ = _jump.StartAsync(_settings.EffectiveJumpRoots);
     }
 
-    /// <summary>パスらしい入力（C:\… \\server %VAR% など）はフォルダジャンプではなくパスとして扱う</summary>
-    private static bool LooksLikePath(string text)
-    {
-        string t = text.Trim().Trim('"');
-        return t.Length >= 2 && t[1] == ':' || t.StartsWith(@"\\") || t.StartsWith('%') || t.StartsWith('/') || t.StartsWith('\\');
-    }
-
     private async Task UpdateJumpListAsync()
     {
         string query = _address.Text.Trim();
-        if (!_address.Focused || query.Length == 0 || LooksLikePath(query) || string.Equals(query, _folder, StringComparison.OrdinalIgnoreCase))
+        if (!_address.Focused || query.Length == 0 || FolderListing.LooksLikePath(query) || string.Equals(query, _folder, StringComparison.OrdinalIgnoreCase))
         {
             HideJumpList();
             return;
@@ -431,16 +429,11 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
         _jumpCts?.Cancel();
         var cts = _jumpCts = new CancellationTokenSource();
-        IReadOnlyList<string>? extra = null;
-        if (_settings.UseEverything && EverythingClient.IsRunning)
-        {
-            _everything ??= new EverythingClient();
-            extra = await _everything.QueryFoldersAsync(query, 300, TimeSpan.FromSeconds(1)); // 応答が無ければ null → 自前の索引
-        }
-        List<JumpResult> results;
+        IReadOnlyList<JumpResult> results;
+        string? message;
         try
         {
-            results = await Task.Run(() => _jump.Search(query, 30, extra, cts.Token), cts.Token);
+            (results, message) = await SearchFoldersAsync(query, cts.Token);
         }
         catch (OperationCanceledException)
         {
@@ -448,14 +441,27 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         }
         if (cts.IsCancellationRequested || !_address.Focused) return;
 
-        string? message = results.Count > 0 ? null
-            : _jump.Index == null && _jump.IsBuilding ? "フォルダの索引を作成中です…（少し待ってから入力し直してください）"
-            : "見つかりません";
         _jumpList.SetResults(results, message);
         var below = PointToClient(_address.Parent!.PointToScreen(new Point(_address.Left, _address.Bottom)));
         _jumpList.SetBounds(below.X, below.Y + 1, _address.Width, _jumpList.Height);
         _jumpList.Visible = true;
         _jumpList.BringToFront();
+    }
+
+    /// <summary>フォルダ名で検索（アドレスバーのフォルダジャンプと「フォルダーへ移動 / コピー」で共通）</summary>
+    private async Task<(IReadOnlyList<JumpResult> Results, string? Message)> SearchFoldersAsync(string query, CancellationToken ct)
+    {
+        IReadOnlyList<string>? extra = null;
+        if (_settings.UseEverything && EverythingClient.IsRunning)
+        {
+            _everything ??= new EverythingClient();
+            extra = await _everything.QueryFoldersAsync(query, 300, TimeSpan.FromSeconds(1)); // 応答が無ければ null → 自前の索引
+        }
+        var results = await Task.Run(() => _jump.Search(query, 30, extra, ct), ct);
+        string? message = results.Count > 0 ? null
+            : _jump.Index == null && _jump.IsBuilding ? "フォルダの索引を作成中です…（少し待ってから入力し直してください）"
+            : "見つかりません";
+        return (results, message);
     }
 
     private void HideJumpList()
@@ -591,6 +597,8 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _registry.Register(new CropCommand(this));
         _registry.Register(new CombineCommand(this, this));
         _registry.Register(new RenameCommand(this));
+        _registry.Register(new MoveToFolderCommand(this, this, SearchFoldersAsync));
+        _registry.Register(new CopyToFolderCommand(this, this, SearchFoldersAsync));
         _registry.Register(new DeleteCommand(this));
         _registry.Register(new CopyPathsCommand());
         _registry.Register(new RevealInExplorerCommand());
@@ -831,7 +839,19 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
     public string? CurrentFolder => _folder;
 
-    public async void FilesAdded(string folder, IReadOnlyList<string> paths)
+    private async Task TransferDroppedAsync(FileDrop drop)
+    {
+        try
+        {
+            await FileTransfer.RunAsync(this, drop.Paths, drop.Folder, drop.Move, Handle);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, drop.Move ? "移動できませんでした" : "コピーできませんでした", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    public async Task FilesAddedAsync(string folder, IReadOnlyList<string> paths)
     {
         // 貼り付けている間に別のフォルダへ移っていたら何もしない
         if (!string.Equals(folder, _folder, StringComparison.OrdinalIgnoreCase)) return;
@@ -915,7 +935,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _undoItem.Text = "元に戻す(&U)";
     }
 
-    public void FilesDeleted(IReadOnlyList<string> paths)
+    public void FilesRemoved(IReadOnlyList<string> paths)
     {
         if (_folder == null || paths.Count == 0) return;
         var gone = new HashSet<string>(paths, StringComparer.OrdinalIgnoreCase);

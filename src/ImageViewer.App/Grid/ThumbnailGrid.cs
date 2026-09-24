@@ -3,6 +3,7 @@
 // 並びは「サブフォルダのタイル（先頭）＋画像」。セル番号 i < FolderCount がフォルダ、それ以降が画像（画像番号 = i - FolderCount）。
 // チェック・手動の並べ替え・コマンドの対象は画像だけ
 using System.Drawing.Drawing2D;
+using ImageViewer.App.Commands;
 using ImageViewer.Core.Ordering;
 using ImageViewer.Core.Thumbnails;
 
@@ -43,8 +44,14 @@ public sealed class ThumbnailGrid : Control
     /// <summary>ドラッグで並べ替えた（新しい並びは Items）</summary>
     public event EventHandler? OrderChanged;
 
-    /// <summary>エクスプローラー等からフォルダがドロップされた</summary>
+    /// <summary>エクスプローラー等からフォルダが（フォルダのタイル以外の場所に）ドロップされた</summary>
     public event EventHandler<string>? FolderDropped;
+
+    /// <summary>フォルダのタイルに画像・ファイルがドロップされた（移動 / コピーは本体が行う）</summary>
+    public event EventHandler<FileDrop>? FilesDroppedOnFolder;
+
+    /// <summary>エクスプローラー等へドラッグして、画像が移動された（元の場所から無くなった）</summary>
+    public event EventHandler<IReadOnlyList<string>>? FilesMovedOut;
 
     /// <summary>画像をダブルクリックまたは Enter（1 枚表示を開く用）。引数は画像番号</summary>
     public event EventHandler<int>? ItemActivated;
@@ -478,7 +485,7 @@ public sealed class ThumbnailGrid : Control
 
     private void DrawCell(Graphics g, int index, Rectangle cell)
     {
-        bool selected = _selection.IsSelected(index);
+        bool selected = _selection.IsSelected(index) || index == _dropFolder; // ドロップ先のフォルダも選択と同じ色で示す
         if (selected)
         {
             using var fill = new SolidBrush(Color.FromArgb(Focused ? 70 : 40, SystemColors.Highlight));
@@ -695,9 +702,9 @@ public sealed class ThumbnailGrid : Control
         if (_selection.IsBanding) UpdateBand();
     }
 
-    // ---- ドラッグ＆ドロップ（並べ替え・ほかのアプリへファイルを渡す） ----
-    // グリッド内に落とせば並べ替え、エクスプローラー等に落とせばファイルのコピー。
-    // 移動は許可しない（うっかり別フォルダへ移ってしまうのを防ぐ）
+    // ---- ドラッグ＆ドロップ（並べ替え・フォルダへの移動 / コピー・ほかのアプリへファイルを渡す） ----
+    // 画像どうしの間に落とせば並べ替え、フォルダのタイルに落とせばそのフォルダへ移動 / コピー、
+    // エクスプローラー等に落とせばそちらで移動 / コピー（どちらもエクスプローラーと同じく、同じドライブなら移動・Ctrl でコピー）
 
     private const string ReorderFormat = "ImaGeViewer.Reorder";
     private readonly string _dragToken = Guid.NewGuid().ToString("N"); // 自分から出たドラッグかの判定用
@@ -707,6 +714,8 @@ public sealed class ThumbnailGrid : Control
     private int _dropIndex = -1;
     private Rectangle _dropMarker;
     private bool _dragOverSelf;
+    private int _dropFolder = -1;   // ドロップ先として強調しているフォルダのタイル
+    private bool _droppedInside;    // 自分から出たドラッグをこのグリッドに落とした
 
     private void StartDrag()
     {
@@ -718,15 +727,39 @@ public sealed class ThumbnailGrid : Control
         var data = new DataObject();
         data.SetData(DataFormats.FileDrop, paths);
         data.SetData(ReorderFormat, _dragToken);
+        _droppedInside = false;
         try
         {
-            DoDragDrop(data, DragDropEffects.Copy);
+            DoDragDrop(data, DragDropEffects.Copy | DragDropEffects.Move);
         }
         finally
         {
             _dragOverSelf = false;
             SetDropIndex(-1, Rectangle.Empty);
+            SetDropFolder(-1);
         }
+        // エクスプローラー等が移動した分は一覧から外す。移動したかは戻り値では分からない（移動を自分で行った相手は
+        // 「何もしていない」を返す）ので、ファイルが残っているかで確かめる。
+        // このグリッドのフォルダ・ツリーへ落とした分は、ドロップを終えてから本体が移動して反映する
+        if (!_droppedInside)
+        {
+            var gone = paths.Where(p => !File.Exists(p)).ToList();
+            if (gone.Count > 0) FilesMovedOut?.Invoke(this, gone);
+        }
+    }
+
+    /// <summary>ドラッグ中のマウスの下にあるフォルダのタイル（無ければ -1）。タイルのどこでも受け付ける</summary>
+    private int FolderCellAt(Point client)
+    {
+        int i = CurrentLayout.IndexAt(client.X, client.Y + ScrollY);
+        return i >= 0 && IsFolder(i) ? i : -1;
+    }
+
+    private void SetDropFolder(int cell)
+    {
+        if (cell == _dropFolder) return;
+        _dropFolder = cell;
+        Invalidate();
     }
 
     private bool IsOwnDrag(DragEventArgs e) =>
@@ -744,19 +777,33 @@ public sealed class ThumbnailGrid : Control
     protected override void OnDragOver(DragEventArgs e)
     {
         base.OnDragOver(e);
-        if (!IsOwnDrag(e))
+        var client = PointToClient(new Point(e.X, e.Y));
+        bool own = IsOwnDrag(e);
+
+        // 上下の端に近づいたら自動スクロール（DragOver はマウスを止めていても繰り返し来る）
+        int edge = Math.Max(_thumb / 3, LogicalToDeviceUnits(24));
+        if (client.Y < edge) SetScroll(ScrollY - Math.Max(4, (edge - client.Y) / 2));
+        else if (client.Y > ClientSize.Height - edge) SetScroll(ScrollY + Math.Max(4, (client.Y - ClientSize.Height + edge) / 2));
+
+        // フォルダのタイルの上: そのフォルダへ移動 / コピー
+        int folderCell = FolderCellAt(client);
+        if (folderCell >= 0)
+        {
+            e.Effect = FileTransfer.ChooseEffect(e, FileTransfer.DraggedPaths(e), _folders[folderCell].FullName);
+            SetDropFolder(e.Effect != DragDropEffects.None ? folderCell : -1);
+            SetDropIndex(-1, Rectangle.Empty);
+            _dragOverSelf = false; // 移動 / コピーのカーソルを出す
+            return;
+        }
+        SetDropFolder(-1);
+
+        if (!own)
         {
             e.Effect = DroppedFolder(e) != null ? DragDropEffects.Copy : DragDropEffects.None;
             return;
         }
         _dragOverSelf = true;
         e.Effect = DragDropEffects.Copy;
-        var client = PointToClient(new Point(e.X, e.Y));
-
-        // 上下の端に近づいたら自動スクロール（DragOver はマウスを止めていても繰り返し来る）
-        int edge = Math.Max(_thumb / 3, LogicalToDeviceUnits(24));
-        if (client.Y < edge) SetScroll(ScrollY - Math.Max(4, (edge - client.Y) / 2));
-        else if (client.Y > ClientSize.Height - edge) SetScroll(ScrollY + Math.Max(4, (client.Y - ClientSize.Height + edge) / 2));
 
         var (index, marker) = CurrentLayout.InsertionAt(client.X, client.Y + ScrollY, Math.Max(2, LogicalToDeviceUnits(3)));
         // フォルダのタイルの間には入れられない（並べ替えは画像どうしだけ）
@@ -769,12 +816,33 @@ public sealed class ThumbnailGrid : Control
         base.OnDragLeave(e);
         _dragOverSelf = false;
         SetDropIndex(-1, Rectangle.Empty);
+        SetDropFolder(-1);
     }
 
     protected override void OnDragDrop(DragEventArgs e)
     {
         base.OnDragDrop(e);
-        if (!IsOwnDrag(e))
+        bool own = IsOwnDrag(e);
+        if (own) _droppedInside = true;
+        int folderCell = _dropFolder;
+        SetDropFolder(-1);
+        if (folderCell >= 0 && folderCell < _folders.Count)
+        {
+            SetDropIndex(-1, Rectangle.Empty);
+            var paths = FileTransfer.DraggedPaths(e);
+            string target = _folders[folderCell].FullName;
+            var effect = FileTransfer.ChooseEffect(e, paths, target);
+            if (effect != DragDropEffects.None)
+            {
+                // ドラッグ元（エクスプローラー等）を待たせないよう、実際の移動 / コピーはドロップを終えてから
+                var drop = new FileDrop(paths.ToList(), target, effect == DragDropEffects.Move);
+                BeginInvoke(() => FilesDroppedOnFolder?.Invoke(this, drop));
+            }
+            // 移動はこちらで行うので、ドラッグ元には「移動した」を返さない（返すとドラッグ元が元のファイルを消すことがある）
+            e.Effect = effect == DragDropEffects.Move ? DragDropEffects.None : effect;
+            return;
+        }
+        if (!own)
         {
             if (DroppedFolder(e) is string folder) FolderDropped?.Invoke(this, folder);
             return;

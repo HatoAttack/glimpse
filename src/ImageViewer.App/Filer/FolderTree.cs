@@ -3,6 +3,7 @@
 // - ルートは よく使うフォルダ（デスクトップ・ピクチャ等）＋ ローカルのドライブ。
 //   ネットワークドライブは応答待ちで固まる原因になるので出さない（アドレスバーからは開ける）
 using System.Runtime.InteropServices;
+using ImageViewer.App.Commands;
 using ImageViewer.Core.Navigation;
 
 namespace ImageViewer.App.Filer;
@@ -18,9 +19,13 @@ public sealed class FolderTree : TreeView
     /// <summary>ユーザーがツリーでフォルダを選んだ（マウスは即時、キー操作は少し待ってから）</summary>
     public event EventHandler<string>? FolderSelected;
 
+    /// <summary>フォルダに画像・ファイルがドロップされた（移動 / コピーは本体が行う）</summary>
+    public event EventHandler<FileDrop>? FilesDroppedOnFolder;
+
     public FolderTree()
     {
         HideSelection = false;
+        AllowDrop = true;
         // 開閉の ＋ / － を一番上の階層にも出し、子フォルダは字下げして階層を見やすくする
         ShowRootLines = true;
         ShowPlusMinus = true;
@@ -210,6 +215,91 @@ public sealed class FolderTree : TreeView
             _suppressSelect = false;
         }
     }
+
+    // ---- ドロップ（フォルダへ移動 / コピー） ----
+    // ドロップ先の強調は選択とは別の「ドロップ先」の表示を使う（選択を変えるとそのフォルダへ移動してしまうため）
+
+    private TreeNode? _dropNode;
+    private TreeNode? _hoverNode;
+    private readonly System.Diagnostics.Stopwatch _hoverTime = new();
+
+    protected override void OnDragEnter(DragEventArgs e)
+    {
+        base.OnDragEnter(e);
+        OnDragOver(e);
+    }
+
+    protected override void OnDragOver(DragEventArgs e)
+    {
+        base.OnDragOver(e);
+        var client = PointToClient(new Point(e.X, e.Y));
+        var node = GetNodeAt(client);
+
+        // 上下の端では少しずつスクロール、同じフォルダの上で止まっていたら開く（エクスプローラーと同じ）
+        int edge = ItemHeight;
+        if (client.Y < edge) TopNode?.PrevVisibleNode?.EnsureVisible();
+        else if (client.Y > ClientSize.Height - edge) VisibleBottomNode()?.NextVisibleNode?.EnsureVisible();
+        if (node != _hoverNode)
+        {
+            _hoverNode = node;
+            _hoverTime.Restart();
+        }
+        else if (node is { IsExpanded: false } && _hoverTime.ElapsedMilliseconds > 800)
+        {
+            node.Expand();
+        }
+
+        e.Effect = node?.Tag is string path && Directory.Exists(path)
+            ? FileTransfer.ChooseEffect(e, FileTransfer.DraggedPaths(e), path)
+            : DragDropEffects.None;
+        SetDropNode(e.Effect != DragDropEffects.None ? node : null);
+    }
+
+    protected override void OnDragLeave(EventArgs e)
+    {
+        base.OnDragLeave(e);
+        _hoverNode = null;
+        SetDropNode(null);
+    }
+
+    protected override void OnDragDrop(DragEventArgs e)
+    {
+        base.OnDragDrop(e);
+        var node = _dropNode;
+        _hoverNode = null;
+        SetDropNode(null);
+        if (node?.Tag is not string path) return;
+        var paths = FileTransfer.DraggedPaths(e);
+        var effect = FileTransfer.ChooseEffect(e, paths, path);
+        if (effect != DragDropEffects.None)
+        {
+            // ドラッグ元（エクスプローラー等）を待たせないよう、実際の移動 / コピーはドロップを終えてから
+            var drop = new FileDrop(paths.ToList(), path, effect == DragDropEffects.Move);
+            BeginInvoke(() => FilesDroppedOnFolder?.Invoke(this, drop));
+        }
+        // 移動はこちらで行うので、ドラッグ元には「移動した」を返さない（返すとドラッグ元が元のファイルを消すことがある）
+        e.Effect = effect == DragDropEffects.Move ? DragDropEffects.None : effect;
+    }
+
+    private TreeNode? VisibleBottomNode()
+    {
+        var node = TopNode;
+        for (int i = 1; node != null && i < VisibleCount; i++) node = node.NextVisibleNode;
+        return node;
+    }
+
+    private void SetDropNode(TreeNode? node)
+    {
+        if (node == _dropNode) return;
+        _dropNode = node;
+        if (IsHandleCreated) SendMessage(Handle, TVM_SELECTITEM, TVGN_DROPHILITE, node?.Handle ?? IntPtr.Zero);
+    }
+
+    private const int TVM_SELECTITEM = 0x110B;
+    private static readonly IntPtr TVGN_DROPHILITE = 8;
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
     protected override void Dispose(bool disposing)
     {
