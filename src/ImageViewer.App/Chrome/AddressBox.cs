@@ -26,12 +26,11 @@ public sealed class AddressBox : Control
         TextBox.Visible = false;
         Controls.Add(TextBox);
         TextBox.GotFocus += (_, _) => Invalidate();
-        // 入力をやめたらパンくずに戻す
-        TextBox.LostFocus += (_, _) =>
+        // 入力をやめたらパンくずに戻す（候補の一覧をクリックしてフォーカスが移っただけなら入力を続ける）
+        TextBox.LostFocus += (_, _) => BeginInvoke(() =>
         {
-            TextBox.Visible = false;
-            Invalidate();
-        };
+            if (!TextBox.Focused && KeepEditing?.Invoke() != true) EndEdit();
+        });
         ApplyTheme();
     }
 
@@ -46,6 +45,18 @@ public sealed class AddressBox : Control
             _hover = -1;
             Invalidate();
         }
+    }
+
+    /// <summary>フォーカスが離れても入力を続けるとき（候補の一覧にフォーカスがある間など）</summary>
+    public Func<bool>? KeepEditing { get; set; }
+
+    /// <summary>入力をやめてパンくずに戻す。途中まで入力した文字は捨てて今のフォルダに戻す（次の Ctrl+L で古い入力が出ないように）</summary>
+    public void EndEdit()
+    {
+        if (!TextBox.Visible) return;
+        TextBox.Visible = false;
+        TextBox.Text = _path ?? "";
+        Invalidate();
     }
 
     /// <summary>入力を始める（Ctrl+L・空いている所のクリック）。入っている文字は全体を選択</summary>
