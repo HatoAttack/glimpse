@@ -1,11 +1,11 @@
-// ツールバーのボタン（線のアイコン、または文字＋▾）。フォーカスは取らない（キー操作はショートカットで行う）
+// ツールバー・フッターのボタン（線のアイコン、文字、ショートカットの表示、▾）。フォーカスは取らない（キー操作はショートカットで行う）
 namespace ImageViewer.App.Chrome;
 
 public sealed class IconButton : Control
 {
-    private bool _hover, _down, _active;
+    private bool _hover, _down, _active, _dropDown, _danger, _showText = true, _showHint = true;
     private IconPainter? _icon;
-    private bool _dropDown;
+    private string _hint = "";
 
     public IconButton()
     {
@@ -30,7 +30,7 @@ public sealed class IconButton : Control
         set { _dropDown = value; Invalidate(); }
     }
 
-    /// <summary>押された状態で表示する（メニューを開いている間など）</summary>
+    /// <summary>押された状態で表示する（メニューを開いている間・選んでいる方など）</summary>
     public bool Active
     {
         get => _active;
@@ -42,23 +42,67 @@ public sealed class IconButton : Control
         }
     }
 
+    /// <summary>文字の後ろに控えめに出すショートカット（"Ctrl+R" など）</summary>
+    public string Hint
+    {
+        get => _hint;
+        set { _hint = value ?? ""; Invalidate(); }
+    }
+
+    /// <summary>削除など取り消しにくい操作（危険の色で描く）</summary>
+    public bool Danger
+    {
+        get => _danger;
+        set { _danger = value; Invalidate(); }
+    }
+
+    /// <summary>幅が足りないときに文字 / ショートカットの表示を省く（アイコンがあるときだけ文字を省ける）</summary>
+    public bool ShowText
+    {
+        get => _showText;
+        set { _showText = value; Invalidate(); }
+    }
+
+    public bool ShowHint
+    {
+        get => _showHint;
+        set { _showHint = value; Invalidate(); }
+    }
+
+    /// <summary>左右の余白（論理 px）</summary>
+    public int HorizontalPadding { get; set; } = 10;
+
+    private bool TextVisible => !string.IsNullOrEmpty(Text) && (_showText || _icon == null);
+    private bool HintVisible => TextVisible && _showHint && _hint.Length > 0;
+
     protected override void OnTextChanged(EventArgs e)
     {
         base.OnTextChanged(e);
-        AccessibleName ??= Text;
         Invalidate();
     }
 
-    /// <summary>アイコンだけなら正方形、文字があれば文字の幅（＋▾）</summary>
+    private const TextFormatFlags Flags = TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix | TextFormatFlags.SingleLine;
+
+    /// <summary>アイコンだけなら正方形、文字があれば文字の幅（＋ショートカット・▾）</summary>
     public override Size GetPreferredSize(Size proposedSize)
     {
         int h = Height > 0 ? Height : LogicalToDeviceUnits(28);
-        if (string.IsNullOrEmpty(Text)) return new Size(h, h);
-        int w = TextRenderer.MeasureText(Text, Font, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix).Width;
-        int pad = LogicalToDeviceUnits(10);
+        if (!TextVisible) return new Size(h + (_dropDown ? LogicalToDeviceUnits(10) : 0), h);
+        int w = TextRenderer.MeasureText(Text, Font, Size.Empty, Flags).Width;
         if (_icon != null) w += LogicalToDeviceUnits(16 + 6);
+        if (HintVisible) w += LogicalToDeviceUnits(6) + TextRenderer.MeasureText(_hint, HintFont, Size.Empty, Flags).Width;
         if (_dropDown) w += LogicalToDeviceUnits(4 + 10);
-        return new Size(w + pad * 2, h);
+        return new Size(w + LogicalToDeviceUnits(HorizontalPadding) * 2, h);
+    }
+
+    private Font? _hintFont;
+    private Font HintFont => _hintFont ??= new Font(Font.FontFamily, Font.Size * 0.9f);
+
+    protected override void OnFontChanged(EventArgs e)
+    {
+        base.OnFontChanged(e);
+        _hintFont?.Dispose();
+        _hintFont = null;
     }
 
     protected override void OnMouseEnter(EventArgs e)
@@ -111,26 +155,40 @@ public sealed class IconButton : Control
         if (Enabled && (_down || _active)) Icons.FillRounded(g, bounds, LogicalToDeviceUnits(6), p.Pressed);
         else if (Enabled && _hover) Icons.FillRounded(g, bounds, LogicalToDeviceUnits(6), p.Hover);
 
-        var color = Enabled ? p.TextStrong : p.Disabled;
+        var color = !Enabled ? p.Disabled : _danger ? p.Danger : p.TextStrong;
         int iconSize = LogicalToDeviceUnits(16);
-        if (string.IsNullOrEmpty(Text))
+        int chevron = LogicalToDeviceUnits(10);
+        if (!TextVisible)
         {
-            _icon?.Invoke(g, new RectangleF((Width - iconSize) / 2f, (Height - iconSize) / 2f, iconSize, iconSize), color);
+            float left = (Width - iconSize - (_dropDown ? chevron : 0)) / 2f;
+            _icon?.Invoke(g, new RectangleF(left, (Height - iconSize) / 2f, iconSize, iconSize), color);
+            if (_dropDown) Icons.ChevronDown(g, new RectangleF(left + iconSize, (Height - chevron) / 2f, chevron, chevron), color);
             return;
         }
 
-        int x = LogicalToDeviceUnits(10);
+        int x = LogicalToDeviceUnits(HorizontalPadding);
         if (_icon != null)
         {
             _icon(g, new RectangleF(x, (Height - iconSize) / 2f, iconSize, iconSize), color);
             x += iconSize + LogicalToDeviceUnits(6);
         }
-        var textSize = TextRenderer.MeasureText(g, Text, Font, Size.Empty, TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
-        TextRenderer.DrawText(g, Text, Font, new Point(x, (Height - textSize.Height) / 2), color, TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
-        if (_dropDown)
+        var textSize = TextRenderer.MeasureText(g, Text, Font, Size.Empty, Flags);
+        TextRenderer.DrawText(g, Text, Font, new Point(x, (Height - textSize.Height) / 2), color, Flags);
+        x += textSize.Width;
+        if (HintVisible)
         {
-            int chevron = LogicalToDeviceUnits(10);
-            Icons.ChevronDown(g, new RectangleF(x + textSize.Width + LogicalToDeviceUnits(4), (Height - chevron) / 2f, chevron, chevron), color);
+            x += LogicalToDeviceUnits(6);
+            var hintSize = TextRenderer.MeasureText(g, _hint, HintFont, Size.Empty, Flags);
+            TextRenderer.DrawText(g, _hint, HintFont, new Point(x, (Height - hintSize.Height) / 2 + 1), Enabled ? p.TextMuted : p.Disabled, Flags);
+            x += hintSize.Width;
         }
+        if (_dropDown)
+            Icons.ChevronDown(g, new RectangleF(x + LogicalToDeviceUnits(4), (Height - chevron) / 2f, chevron, chevron), color);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing) _hintFont?.Dispose();
+        base.Dispose(disposing);
     }
 }

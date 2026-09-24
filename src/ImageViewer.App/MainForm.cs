@@ -77,6 +77,15 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     private readonly Dictionary<Keys, ToolStripMenuItem> _menuShortcuts = new();
     private DateTime _menuClosedAt;
 
+    // ---- フッターの操作ボタン ----
+    /// <summary>操作の対象（選択中の画像 / チェックした画像）。選択が変わると「選択」に戻る</summary>
+    private enum ActionTarget { Selection, Checked }
+    private ActionTarget _target;
+    private readonly IconButton _targetSelection = new() { AccessibleName = "選択中の画像を対象にする" };
+    private readonly IconButton _targetChecked = new() { AccessibleName = "チェックした画像を対象にする" };
+    private readonly List<(IconButton Button, IImageCommand Command)> _actionButtons = new();
+    private readonly ContextMenuStrip _moveMenu = new(), _moreMenu = new();
+
     // ---- フォルダジャンプ ----
     private readonly FolderJumpService _jump = new(FolderJumpService.DefaultDataDir);
     private readonly JumpList _jumpList = new();
@@ -117,8 +126,16 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _thumbnails = new ThumbnailService(LogicalToDeviceUnits(160), 128L * 1024 * 1024,
             SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext());
         _grid = new ThumbnailGrid(_thumbnails, _settings.ThumbnailSize ?? 160) { Dock = DockStyle.Fill, ContextMenuStrip = _contextMenu };
-        _grid.SelectionChanged += (_, _) => UpdateCommandStates();
-        _grid.MarksChanged += (_, _) => UpdateCommandStates();
+        _grid.SelectionChanged += (_, _) =>
+        {
+            _target = ActionTarget.Selection; // 選び直したら、選んだ画像が対象
+            UpdateCommandStates();
+        };
+        _grid.MarksChanged += (_, _) =>
+        {
+            if (_grid.MarkedCount == 0) _target = ActionTarget.Selection;
+            UpdateCommandStates();
+        };
         _grid.OrderChanged += (_, _) => SaveManualOrder();
         _grid.FolderDropped += async (_, folder) => await LoadFolderAsync(folder);
         _grid.FolderActivated += async (_, dir) => await LoadFolderAsync(dir.FullName);
@@ -139,6 +156,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         };
 
         _footer.UpdateClicked += (_, _) => ShowUpdateDialog();
+        SetUpActionBar();
         // フッター右端のボタンはライト ↔ ダークだけ（システムに合わせるは ☰ → 表示 → テーマ）
         _footer.ThemeButton.Click += (_, _) => SetThemeMode(Theme.Current.IsDark ? ThemeMode.Light : ThemeMode.Dark);
         SetUpThumbnailSizeSlider();
@@ -666,6 +684,11 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         if (_address.Focused && keyData is Keys.Delete or (Keys.Control | Keys.C) or (Keys.Control | Keys.X)
                 or (Keys.Control | Keys.V) or (Keys.Control | Keys.A) or (Keys.Control | Keys.Z))
             return false;
+        if (keyData == Keys.Escape && _grid.Focused && _grid.SelectedCount > 0)
+        {
+            _grid.ClearSelection();
+            return true;
+        }
         if (keyData == Keys.F10)
         {
             ShowMainMenu(selectFirst: true);
@@ -681,6 +704,146 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             }
         }
         return base.ProcessCmdKey(ref msg, keyData);
+    }
+
+    // ---- フッターの操作ボタン（画像を選んでいる間） ----
+
+    private void SetUpActionBar()
+    {
+        var bar = _footer.Actions;
+        _targetChecked.Icon = Icons.Dot(Theme.Current.Check);
+        _targetSelection.Click += (_, _) => SetTarget(ActionTarget.Selection);
+        _targetChecked.Click += (_, _) => SetTarget(ActionTarget.Checked);
+        _toolTip.SetToolTip(_targetSelection, "選択中の画像に対して実行");
+        _toolTip.SetToolTip(_targetChecked, "チェックした画像に対して実行（選択し直さなくてよい）");
+        bar.AddTargets(_targetSelection, _targetChecked);
+
+        IconButton Action(string id, string text, IconPainter icon, bool danger = false)
+        {
+            var cmd = _registry.Find(id) ?? throw new InvalidOperationException($"コマンドが登録されていません: {id}");
+            string shortcut = ShortcutText(cmd);
+            var button = new IconButton { Text = text, Icon = icon, Danger = danger, Hint = shortcut, AccessibleName = cmd.Name };
+            _toolTip.SetToolTip(button, shortcut.Length > 0 ? $"{cmd.Name.TrimEnd('.')} ({shortcut})" : cmd.Name.TrimEnd('.'));
+            button.Click += async (_, _) => await ExecuteAsync(cmd);
+            _actionButtons.Add((button, cmd));
+            return button;
+        }
+
+        var move = new IconButton { Text = "移動", Icon = Icons.Move, DropDown = true, AccessibleName = "移動" };
+        _toolTip.SetToolTip(move, "最近の移動先へ移動（Ctrl を押しながら選ぶとコピー）");
+        move.Click += (_, _) => ShowFooterMenu(move, _moveMenu, BuildMoveMenu);
+        var more = new IconButton { Icon = Icons.More, AccessibleName = "その他の操作" };
+        _toolTip.SetToolTip(more, "その他の操作");
+        more.Click += (_, _) => ShowFooterMenu(more, _moreMenu, null);
+        bar.AddActions(Action("image.resize", "リサイズ", Icons.Resize), Action("image.crop", "切り抜き", Icons.Crop),
+            Action("image.combine", "連結", Icons.Combine), Action("file.rename", "名前", Icons.Rename), move, more);
+
+        var clear = new IconButton { Icon = Icons.Close, AccessibleName = "選択を解除" };
+        _toolTip.SetToolTip(clear, "選択を解除 (Esc)");
+        clear.Click += (_, _) => _grid.ClearSelection();
+        bar.AddTrailing(Action("file.delete", "削除", Icons.Trash, danger: true), clear);
+
+        // ⋯: ボタンに出していない操作
+        foreach (var id in new[] { "edit.cut", "edit.copy", "file.copyTo", "file.copyPaths", "file.revealInExplorer" })
+            if (_registry.Find(id) is { } cmd) _moreMenu.Items.Add(CreateCommandItem(cmd, withShortcut: false));
+        _moreMenu.Items.Add(new ToolStripSeparator());
+        _moreMenu.Items.Add(new ToolStripMenuItem("チェックを付ける", null, (_, _) => _grid.SetMarkOnSelected(true)) { ShortcutKeyDisplayString = "Shift+¥" });
+        _moreMenu.Items.Add(new ToolStripMenuItem("チェックを外す", null, (_, _) => _grid.SetMarkOnSelected(false)));
+        _moreMenu.Opening += (_, _) => UpdateCommandEnabled();
+    }
+
+    private string ShortcutText(IImageCommand cmd)
+    {
+        var keys = Shortcuts.Parse(_registry.ShortcutOf(cmd));
+        return keys switch
+        {
+            Keys.None => "",
+            Keys.Delete => "Del",
+            _ => new KeysConverter().ConvertToString(keys) ?? "",
+        };
+    }
+
+    private void SetTarget(ActionTarget target)
+    {
+        _target = target;
+        UpdateCommandStates();
+    }
+
+    /// <summary>画像を選んでいる間はフッターを操作ボタンに（高さは変えない）</summary>
+    private void UpdateActionBar()
+    {
+        int selected = _grid.SelectedImages.Count, marked = _grid.MarkedCount;
+        _footer.ActionMode = selected > 0;
+        if (selected == 0) return;
+        _targetSelection.Text = $"選択 {selected}";
+        _targetSelection.Active = _target == ActionTarget.Selection;
+        _targetChecked.Text = $"チェック {marked}";
+        _targetChecked.Active = _target == ActionTarget.Checked;
+        _footer.Actions.SetShown(_targetChecked, marked > 0);
+        _footer.Actions.PerformLayout();
+    }
+
+    /// <summary>フッターのボタンから上向きにメニューを開く（開いているときのクリックは閉じるだけ）</summary>
+    private void ShowFooterMenu(IconButton button, ContextMenuStrip menu, Action? build)
+    {
+        if ((DateTime.UtcNow - _menuClosedAt).TotalMilliseconds < 150) return;
+        build?.Invoke();
+        button.Active = true;
+        void Closed(object? s, ToolStripDropDownClosedEventArgs e)
+        {
+            menu.Closed -= Closed;
+            button.Active = false;
+            _menuClosedAt = DateTime.UtcNow;
+        }
+        menu.Closed += Closed;
+        menu.Show(button, new Point(0, 0), ToolStripDropDownDirection.AboveRight);
+    }
+
+    /// <summary>移動 ▾: 最近の移動先（数字キーで選べる。Ctrl を押しながらでコピー）と、探して移動 / コピー</summary>
+    private void BuildMoveMenu()
+    {
+        _moveMenu.Items.Clear();
+        var recent = (_settings.RecentDestinations ?? Array.Empty<string>())
+            .Where(f => Directory.Exists(f) && !string.Equals(f, _folder, StringComparison.OrdinalIgnoreCase))
+            .Take(9).ToList();
+        if (recent.Count == 0)
+            _moveMenu.Items.Add(new ToolStripMenuItem("最近の移動先はまだありません") { Enabled = false });
+        for (int i = 0; i < recent.Count; i++)
+        {
+            string folder = recent[i];
+            string name = Path.GetFileName(Path.TrimEndingDirectorySeparator(folder));
+            _moveMenu.Items.Add(new ToolStripMenuItem($"&{i + 1}  {(name.Length > 0 ? name : folder)}", null,
+                async (_, _) => await TransferToAsync(folder, move: (ModifierKeys & Keys.Control) == 0))
+            {
+                ShortcutKeyDisplayString = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(folder)) ?? "",
+                ToolTipText = folder,
+            });
+        }
+        _moveMenu.Items.Add(new ToolStripSeparator());
+        foreach (var id in new[] { "file.moveTo", "file.copyTo" })
+        {
+            if (_registry.Find(id) is not { } cmd) continue;
+            _moveMenu.Items.Add(new ToolStripMenuItem(cmd.Name.Replace("フォルダーへ", "フォルダーを探して"), null, async (_, _) => await ExecuteAsync(cmd))
+            {
+                ShortcutKeyDisplayString = ShortcutText(cmd),
+                Enabled = cmd.CanExecute(TargetPaths()),
+            });
+        }
+    }
+
+    private async Task TransferToAsync(string folder, bool move)
+    {
+        var paths = TargetPaths();
+        if (paths.Count == 0) return;
+        ((ISettingsAccess)this).UpdateSettings(s => s.WithRecentDestination(folder));
+        try
+        {
+            await FileTransfer.RunAsync(this, paths, folder, move, Handle);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, ex.Message, move ? "移動できませんでした" : "コピーできませんでした", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     // ---- ☰ メニュー・サイドバー・テーマ ----
@@ -1110,10 +1273,15 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     /// <summary>コマンドの対象（選択中の画像。フォルダのタイルは含まない）</summary>
     private IReadOnlyList<string> SelectedPaths() => _grid.SelectedImages.Select(f => f.FullName).ToList();
 
+    /// <summary>コマンドを実行する対象（フッターで「チェック」を選んでいればチェックした画像、それ以外は選択中の画像）</summary>
+    private IReadOnlyList<string> TargetPaths() =>
+        _target == ActionTarget.Checked ? _grid.MarkedImages.Select(f => f.FullName).ToList() : SelectedPaths();
+
     private void UpdateCommandStates()
     {
-        var paths = SelectedPaths();
+        var paths = TargetPaths();
         UpdateCommandEnabled(paths);
+        UpdateActionBar();
 
         // 場所はアドレスバーとタイトルに出ているので、ここは件数だけ（選択中の枚数は右側の情報に出る）
         _footer.Status = _folder == null ? "フォルダを開いてください（Ctrl+O / フォルダをドロップ）"
@@ -1128,16 +1296,18 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     /// </summary>
     private void UpdateCommandEnabled(IReadOnlyList<string>? paths = null)
     {
-        paths ??= SelectedPaths();
+        paths ??= TargetPaths();
         foreach (var (item, cmd) in _commandItems)
             item.Enabled = cmd.CanExecute(paths);
+        foreach (var (button, cmd) in _actionButtons)
+            button.Enabled = cmd.CanExecute(paths);
         bool oneFolder = SelectedSingleFolder() != null;
         foreach (var item in _renameFolderItems) item.Enabled = oneFolder;
     }
 
     private async Task ExecuteAsync(IImageCommand cmd)
     {
-        var paths = SelectedPaths();
+        var paths = TargetPaths();
         if (!cmd.CanExecute(paths)) return;
         try
         {
