@@ -1,5 +1,6 @@
 // フッター（高さ固定）。左に件数・お知らせとチェックの数、右に選択中の画像の情報・更新のお知らせ・サムネイルの大きさ・
 // ライト / ダークの切り替え。
+// 画像を選んでいる間は、左側（件数・情報）が操作ボタン（ActionBar）に入れ替わる。
 // 文字は自分で描く（配色に合わせるため）。高さは状態によって変えない（一覧がずれないように）
 namespace ImageViewer.App.Chrome;
 
@@ -15,6 +16,25 @@ public sealed class FooterBar : Control
     /// <summary>右端のライト / ダークの切り替え</summary>
     public IconButton ThemeButton { get; } = new();
 
+    /// <summary>画像を選んでいる間に出す操作ボタン</summary>
+    public ActionBar Actions { get; } = new() { Visible = false };
+
+    private bool _actionMode;
+
+    /// <summary>操作ボタンを出す（画像を選んでいる間）。高さは変えない</summary>
+    public bool ActionMode
+    {
+        get => _actionMode;
+        set
+        {
+            if (_actionMode == value) return;
+            _actionMode = value;
+            Actions.Visible = value;
+            PerformLayout();
+            Invalidate();
+        }
+    }
+
     /// <summary>更新のお知らせがクリックされた</summary>
     public event EventHandler? UpdateClicked;
 
@@ -26,6 +46,7 @@ public sealed class FooterBar : Control
         Height = LogicalToDeviceUnits(32);
         Controls.Add(Slider);
         Controls.Add(ThemeButton);
+        Controls.Add(Actions);
         ApplyTheme();
     }
 
@@ -56,7 +77,13 @@ public sealed class FooterBar : Control
     public string SelectionInfo
     {
         get => _selectionInfo;
-        set { if (_selectionInfo != value) { _selectionInfo = value; Invalidate(); } }
+        set
+        {
+            if (_selectionInfo == value) return;
+            _selectionInfo = value;
+            Actions.Info = value;
+            Invalidate();
+        }
     }
 
     /// <summary>新しいバージョンのお知らせ（空なら出さない）</summary>
@@ -80,6 +107,10 @@ public sealed class FooterBar : Control
         ThemeButton.SetBounds(right - button, (Height - button) / 2, button, button);
         right = ThemeButton.Left - LogicalToDeviceUnits(12);
         Slider.SetBounds(right - SliderWidth, 0, SliderWidth, Height);
+        // 操作ボタンは左端から、スライダーのアイコンの手前の区切り線まで
+        int actionsRight = Slider.Left - LogicalToDeviceUnits(8) - IconSize - LogicalToDeviceUnits(14);
+        Actions.SetBounds(LogicalToDeviceUnits(4), 0, Math.Max(0, actionsRight - LogicalToDeviceUnits(4)), Height);
+        if (Actions.Visible) Actions.PerformLayout();
     }
 
     private const TextFormatFlags Flags = TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;
@@ -95,6 +126,15 @@ public sealed class FooterBar : Control
         int right = Slider.Left - LogicalToDeviceUnits(8);
         Icons.Grid(g, new RectangleF(right - IconSize, (Height - IconSize) / 2f, IconSize, IconSize), p.TextSecondary);
         right -= IconSize + gap;
+        if (_actionMode)
+        {
+            // 左側は ActionBar が描く。削除とスライダーの間は区切り線で離す
+            int x0 = Actions.Right + LogicalToDeviceUnits(7), h = LogicalToDeviceUnits(18);
+            using var sep = new Pen(p.Border);
+            g.DrawLine(sep, x0, (Height - h) / 2, x0, (Height + h) / 2);
+            _updateBounds = Rectangle.Empty;
+            return;
+        }
 
         int maxInfo = Math.Max(0, Width / 3);
         if (_selectionInfo.Length > 0)

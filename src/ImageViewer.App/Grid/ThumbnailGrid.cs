@@ -274,6 +274,18 @@ public sealed class ThumbnailGrid : Control
 
     public int MarkedCount => _marks.Count;
 
+    /// <summary>チェックした画像（画面の並び順）</summary>
+    public IReadOnlyList<FileInfo> MarkedImages => _items.Where(f => _marks.IsMarked(f.FullName)).ToList();
+
+    /// <summary>選択を解除する（フォーカスの位置は残す）</summary>
+    public void ClearSelection()
+    {
+        if (_selection.Count == 0) return;
+        _selection.Clear();
+        Invalidate();
+        SelectionChanged?.Invoke(this, EventArgs.Empty);
+    }
+
     /// <summary>セルにチェックがあるか（フォルダは常に false）</summary>
     private bool IsMarked(int cell) => !IsFolder(cell) && _marks.IsMarked(_items[cell - F].FullName);
 
