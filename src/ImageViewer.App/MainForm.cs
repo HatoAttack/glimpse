@@ -453,6 +453,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             _toolTip.SetToolTip(button, tip);
         _toolbar.AddLeft(_menuButton, _sidebarButton, ToolBar.Separator, _backButton, _forwardButton, _upButton);
         _toolbar.SetFill(_addressBox);
+        _addressBox.SegmentClicked += async (_, path) => await LoadFolderAsync(path);
         _toolbar.AddRight(_sortButton, _inspectorButton);
         _inspectorButton.Click += (_, _) => ToggleDetails();
         _toolbar.MouseDown += OnMouseBackForward;
@@ -495,7 +496,8 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             else if (e.KeyCode == Keys.Enter)
             {
                 e.SuppressKeyPress = true;
-                if (_jumpList.Visible && _jumpList.SelectedPath is string picked) await JumpToAsync(picked);
+                if (_jumpList.Visible && _jumpList.SelectedCommand is { } command) RunCommandCandidate(command);
+                else if (_jumpList.Visible && _jumpList.SelectedPath is string picked) await JumpToAsync(picked);
                 else await NavigateFromAddressAsync();
             }
             else if (e.KeyCode == Keys.Escape)
@@ -525,6 +527,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         Controls.Add(_jumpList);
         _jumpList.BringToFront();
         _jumpList.Picked += async (_, path) => await JumpToAsync(path);
+        _jumpList.CommandPicked += (_, command) => RunCommandCandidate(command);
 
         // 入力が止まってから検索する（1 文字ごとに走らせない）
         _address.TextChanged += (_, _) =>
@@ -547,10 +550,17 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         Shown += (_, _) => _ = _jump.StartAsync(_settings.EffectiveJumpRoots);
     }
 
+    /// <summary>
+    /// アドレスバーの入力から候補を出す: ☰ メニューのコマンド（先に数件）とフォルダ。
+    /// 「>」で始めるとコマンドだけ（「>」だけなら全部）。パスらしい入力・今のフォルダのままなら出さない
+    /// </summary>
     private async Task UpdateJumpListAsync()
     {
         string query = _address.Text.Trim();
-        if (!_address.Focused || query.Length == 0 || FolderListing.LooksLikePath(query) || string.Equals(query, _folder, StringComparison.OrdinalIgnoreCase))
+        bool commandsOnly = query.StartsWith('>');
+        string text = commandsOnly ? query[1..].Trim() : query;
+        if (!_address.Focused || query.Length == 0
+            || (!commandsOnly && (FolderListing.LooksLikePath(query) || string.Equals(query, _folder, StringComparison.OrdinalIgnoreCase))))
         {
             HideJumpList();
             return;
@@ -558,23 +568,78 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
         _jumpCts?.Cancel();
         var cts = _jumpCts = new CancellationTokenSource();
-        IReadOnlyList<JumpResult> results;
-        string? message;
-        try
+        var commands = FindCommands(text, commandsOnly ? int.MaxValue : 5);
+        IReadOnlyList<JumpResult> results = Array.Empty<JumpResult>();
+        string? message = commandsOnly ? "コマンドが見つかりません" : null;
+        if (!commandsOnly)
         {
-            (results, message) = await SearchFoldersAsync(query, cts.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            return; // 次の入力で検索し直している
+            try
+            {
+                (results, message) = await SearchFoldersAsync(text, cts.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                return; // 次の入力で検索し直している
+            }
         }
         if (cts.IsCancellationRequested || !_address.Focused) return;
 
-        _jumpList.SetResults(results, message);
+        _jumpList.SetResults(commands, results, message);
         var below = PointToClient(_addressBox.Parent!.PointToScreen(new Point(_addressBox.Left, _addressBox.Bottom)));
         _jumpList.SetBounds(below.X, below.Y + LogicalToDeviceUnits(4), _addressBox.Width, _jumpList.Height);
         _jumpList.Visible = true;
         _jumpList.BringToFront();
+    }
+
+    /// <summary>
+    /// ☰ メニューの項目（コマンド・表示の切り替えなど）を名前とメニューの場所で探す。スペース区切りはすべてを含むもの。
+    /// ひらがな / カタカナ・全角 / 半角・大文字 / 小文字は区別しない。名前の先頭が合うもの → 名前に含むもの → 場所だけ合うもの の順
+    /// </summary>
+    private List<CommandCandidate> FindCommands(string text, int max)
+    {
+        UpdateCommandEnabled();
+        var compare = System.Globalization.CultureInfo.GetCultureInfo("ja-JP").CompareInfo;
+        const System.Globalization.CompareOptions options = System.Globalization.CompareOptions.IgnoreCase
+            | System.Globalization.CompareOptions.IgnoreKanaType | System.Globalization.CompareOptions.IgnoreWidth;
+        var tokens = text.Split(' ', '　').Where(t => t.Length > 0).ToArray();
+
+        var found = new List<(CommandCandidate Candidate, int Score, int Order)>();
+        void Walk(ToolStripItemCollection items, string where)
+        {
+            foreach (var item in items.OfType<ToolStripMenuItem>())
+            {
+                if (!item.Available) continue;
+                string name = StripMnemonic(item.Text).TrimEnd('.', '…').Trim();
+                if (item.DropDownItems.Count > 0)
+                {
+                    Walk(item.DropDownItems, where.Length > 0 ? $"{where} › {name}" : name);
+                    continue;
+                }
+                string all = $"{name} {where}";
+                if (!tokens.All(t => compare.IndexOf(all, t, options) >= 0)) continue;
+                int score = tokens.Length == 0 || compare.IsPrefix(name, tokens[0], options) ? 0
+                    : tokens.All(t => compare.IndexOf(name, t, options) >= 0) ? 1 : 2;
+                var target = item;
+                found.Add((new CommandCandidate(name, where, item.ShortcutKeyDisplayString ?? "", item.Enabled, () => target.PerformClick()), score, found.Count));
+            }
+        }
+        Walk(_mainMenu.Items, "");
+        return found.OrderBy(f => f.Score).ThenBy(f => f.Candidate.Enabled ? 0 : 1).ThenBy(f => f.Order)
+            .Take(max).Select(f => f.Candidate).ToList();
+    }
+
+    private void RunCommandCandidate(CommandCandidate command)
+    {
+        if (!command.Enabled)
+        {
+            System.Media.SystemSounds.Beep.Play();
+            Notify($"「{command.Name}」は今は実行できません（対象の画像を選んでから）");
+            return;
+        }
+        HideJumpList();
+        _address.Text = _folder ?? "";
+        _grid.Focus(); // アドレスバーから離れてから実行する（ダイアログ・キー操作が一覧に戻るように）
+        command.Run();
     }
 
     /// <summary>フォルダ名で検索（アドレスバーのフォルダジャンプと「フォルダーへ移動 / コピー」で共通）</summary>
@@ -615,7 +680,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     /// <summary>Ctrl+J: 空のアドレスバーから入力を始める</summary>
     private void StartJump()
     {
-        _address.Focus();
+        _addressBox.BeginEdit();
         _address.Text = "";
     }
 
@@ -1107,7 +1172,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             new ToolStripMenuItem("今のフォルダをホームに設定(&S)", null, (_, _) => { if (_folder != null) SetHome(_folder); }),
             new ToolStripMenuItem("ホームフォルダを選ぶ(&C)...", null, (_, _) => ChooseHome()),
             new ToolStripSeparator(),
-            new ToolStripMenuItem("アドレスバーに入力(&A)", null, (_, _) => _address.Focus()) { ShortcutKeys = Keys.Control | Keys.L },
+            new ToolStripMenuItem("アドレスバーに入力(&A)", null, (_, _) => _addressBox.BeginEdit()) { ShortcutKeys = Keys.Control | Keys.L },
             new ToolStripMenuItem("フォルダへジャンプ(&J)", null, (_, _) => StartJump()) { ShortcutKeys = Keys.Control | Keys.J },
             new ToolStripSeparator(),
             new ToolStripMenuItem("フォルダジャンプの設定(&O)...", null, (_, _) => ShowJumpSettings()),
@@ -1581,6 +1646,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         UpdateSortChecks();
         _grid.SetContents(folders, files, reload);
         if (!_address.Focused) _address.Text = folder;
+        _addressBox.Path = folder;
         if (!reload) _ = _tree.RevealAsync(folder);
         string title = Path.GetFileName(Path.TrimEndingDirectorySeparator(folder));
         Text = $"{(title.Length > 0 ? title : folder)} - {AppTitle}";
