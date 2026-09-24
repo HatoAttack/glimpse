@@ -1,0 +1,55 @@
+# リリースの自動化: GitHub でリリースを公開すると、テストしてから ImageViewer.exe（単一ファイル・インストール不要）を作って添付する。
+# 手順は README の「リリースの手順」を参照。
+# このファイルを変える PR でも同じ処理を試しに走らせる（exe は添付せず、Actions の成果物に置く）
+name: リリース
+
+on:
+  release:
+    types: [published]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: テスト
+        run: dotnet run --project tests/ImageViewer.Tests -c Release
+
+      - name: バージョン（タグの v を除いたもの。試しの実行では 0.0.0）
+        id: version
+        shell: pwsh
+        run: |
+          $tag = '${{ github.event.release.tag_name }}'
+          $version = if ($tag) { $tag.TrimStart('v') } else { '0.0.0' }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: exe を作る
+        run: >
+          dotnet publish src/ImageViewer.App/ImageViewer.App.csproj -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true
+          -p:Version=${{ steps.version.outputs.version }} -o publish
+
+      - name: リリースに添付
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ github.event.release.tag_name }}" publish/ImageViewer.exe --clobber
+
+      - name: 成果物に置く（試しの実行）
+        if: github.event_name != 'release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ImageViewer
+          path: publish/ImageViewer.exe
+          retention-days: 3
