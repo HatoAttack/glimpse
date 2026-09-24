@@ -139,6 +139,8 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         };
 
         _footer.UpdateClicked += (_, _) => ShowUpdateDialog();
+        // フッター右端のボタンはライト ↔ ダークだけ（システムに合わせるは ☰ → 表示 → テーマ）
+        _footer.ThemeButton.Click += (_, _) => SetThemeMode(Theme.Current.IsDark ? ThemeMode.Light : ThemeMode.Dark);
         SetUpThumbnailSizeSlider();
         _grid.SelectionChanged += (_, _) =>
         {

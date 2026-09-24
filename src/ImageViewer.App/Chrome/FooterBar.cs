@@ -1,4 +1,5 @@
-// フッター（高さ固定）。左に件数・お知らせとチェックの数、右に選択中の画像の情報・更新のお知らせ・サムネイルの大きさ。
+// フッター（高さ固定）。左に件数・お知らせとチェックの数、右に選択中の画像の情報・更新のお知らせ・サムネイルの大きさ・
+// ライト / ダークの切り替え。
 // 文字は自分で描く（配色に合わせるため）。高さは状態によって変えない（一覧がずれないように）
 namespace ImageViewer.App.Chrome;
 
@@ -11,6 +12,9 @@ public sealed class FooterBar : Control
 
     public ThinSlider Slider { get; } = new();
 
+    /// <summary>右端のライト / ダークの切り替え</summary>
+    public IconButton ThemeButton { get; } = new();
+
     /// <summary>更新のお知らせがクリックされた</summary>
     public event EventHandler? UpdateClicked;
 
@@ -21,12 +25,18 @@ public sealed class FooterBar : Control
         Dock = DockStyle.Bottom;
         Height = LogicalToDeviceUnits(32);
         Controls.Add(Slider);
+        Controls.Add(ThemeButton);
         ApplyTheme();
     }
 
     public void ApplyTheme()
     {
+        bool dark = Theming.Theme.Current.IsDark;
         BackColor = Theming.Theme.Current.Surface;
+        // アイコンは今の配色、説明は押したときにどうなるか
+        ThemeButton.Icon = dark ? Icons.Moon : Icons.Sun;
+        ThemeButton.AccessibleName = dark ? "ライトに切り替え" : "ダークに切り替え";
+        _toolTip.SetToolTip(ThemeButton, dark ? "ライトに切り替え" : "ダークに切り替え");
         Invalidate(true);
     }
 
@@ -65,7 +75,11 @@ public sealed class FooterBar : Control
     protected override void OnLayout(LayoutEventArgs levent)
     {
         base.OnLayout(levent);
-        Slider.SetBounds(Width - Pad - SliderWidth, 0, SliderWidth, Height);
+        int button = LogicalToDeviceUnits(26);
+        int right = Width - LogicalToDeviceUnits(4);
+        ThemeButton.SetBounds(right - button, (Height - button) / 2, button, button);
+        right = ThemeButton.Left - LogicalToDeviceUnits(12);
+        Slider.SetBounds(right - SliderWidth, 0, SliderWidth, Height);
     }
 
     private const TextFormatFlags Flags = TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix | TextFormatFlags.NoPadding;

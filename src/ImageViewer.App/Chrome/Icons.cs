@@ -46,6 +46,27 @@ public static class Icons
         p.AddRectangle(new RectangleF(9, 9, 4, 4));
     });
 
+    /// <summary>ライト（今の配色がライトのときにテーマのボタンに出す）</summary>
+    public static readonly IconPainter Sun = (g, r, c) => Stroke(g, r, c, 1.4f, p =>
+    {
+        p.AddEllipse(5, 5, 6, 6);
+        for (int i = 0; i < 8; i++)
+        {
+            double a = i * Math.PI / 4;
+            p.StartFigure();
+            p.AddLine(8 + 5 * (float)Math.Cos(a), 8 + 5 * (float)Math.Sin(a), 8 + 6.6f * (float)Math.Cos(a), 8 + 6.6f * (float)Math.Sin(a));
+        }
+    });
+
+    /// <summary>ダーク（三日月）</summary>
+    public static readonly IconPainter Moon = (g, r, c) => Stroke(g, r, c, 1.4f, p =>
+    {
+        float inner = 3 * MathF.Sqrt(2); // 内側の弧: 中心 (11, 5)、(8, 2) から (14, 8) まで
+        p.AddArc(11 - inner, 5 - inner, inner * 2, inner * 2, 225, -180);
+        p.AddArc(2, 2, 12, 12, 0, 270); // 外側の弧: 中心 (8, 8)、(14, 8) から (8, 2) まで
+        p.CloseFigure();
+    });
+
     private static void Stroke(Graphics g, RectangleF r, Color color, float width, Action<GraphicsPath> build)
     {
         using var path = new GraphicsPath();
