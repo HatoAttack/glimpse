@@ -74,7 +74,7 @@ public static class Theme
 
     private static bool _initialized;
 
-    /// <summary>最初の画面を作るときに 1 回呼ぶ（UI スレッドから。システムの設定の変化を UI スレッドで受け取るため）</summary>
+    /// <summary>最初の画面のコンストラクタで呼ぶ（UI スレッドの SynchronizationContext を覚えるため）</summary>
     public static void Initialize(ThemeMode mode)
     {
         Mode = mode;
@@ -82,9 +82,13 @@ public static class Theme
         ToolStripManager.Renderer = new ThemedMenuRenderer();
         if (_initialized) return;
         _initialized = true;
+        // システムの設定の変化は UI とは別のスレッドで届くことがあるので、画面を作ったスレッドへ回してから切り替える
+        var ui = SynchronizationContext.Current;
         SystemEvents.UserPreferenceChanged += (_, e) =>
         {
-            if (Mode == ThemeMode.System && e.Category is UserPreferenceCategory.General or UserPreferenceCategory.Color) Refresh();
+            if (e.Category is not (UserPreferenceCategory.General or UserPreferenceCategory.Color)) return;
+            if (ui != null) ui.Post(_ => RefreshIfSystem(), null);
+            else RefreshIfSystem();
         };
     }
 
@@ -92,6 +96,11 @@ public static class Theme
     {
         Mode = mode;
         Refresh();
+    }
+
+    private static void RefreshIfSystem()
+    {
+        if (Mode == ThemeMode.System) Refresh();
     }
 
     private static void Refresh()
