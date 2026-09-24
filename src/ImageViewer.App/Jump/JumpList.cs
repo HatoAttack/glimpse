@@ -1,5 +1,6 @@
 // アドレスバーの下に出す候補の一覧（フォルダ名＋パスの 2 行表示）
 // フォーカスはアドレスバーに残したまま使う（矢印キー・Enter はアドレスバー側で受けてこちらを動かす）
+using ImageViewer.App.Theming;
 using ImageViewer.Core.Jump;
 
 namespace ImageViewer.App.Jump;
@@ -18,6 +19,21 @@ public sealed class JumpList : ListBox
         BorderStyle = BorderStyle.FixedSingle;
         TabStop = false;
         Visible = false;
+        ApplyTheme();
+    }
+
+    public void ApplyTheme()
+    {
+        BackColor = Theme.Current.Surface;
+        ForeColor = Theme.Current.Text;
+        Theme.ApplyNativeTheme(this);
+        Invalidate();
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        Theme.ApplyNativeTheme(this);
     }
 
     public int MaxVisibleItems { get; set; } = 10;
@@ -54,16 +70,17 @@ public sealed class JumpList : ListBox
     protected override void OnDrawItem(DrawItemEventArgs e)
     {
         if (e.Index < 0) return;
-        e.DrawBackground();
+        var p = Theme.Current;
         bool selected = (e.State & DrawItemState.Selected) != 0;
-        var fore = selected ? SystemColors.HighlightText : SystemColors.WindowText;
-        var sub = selected ? SystemColors.HighlightText : SystemColors.GrayText;
+        using (var bg = new SolidBrush(selected ? p.SelectionFill : p.Surface)) e.Graphics.FillRectangle(bg, e.Bounds);
+        var fore = selected ? p.SelectionText : p.Text;
+        var sub = selected ? p.SelectionText : p.TextSecondary;
         var r = Rectangle.Inflate(e.Bounds, -6, -2);
 
         if (e.Index >= _results.Count)
         {
             // 「見つかりません」等のお知らせ
-            TextRenderer.DrawText(e.Graphics, Items[e.Index]?.ToString(), Font, r, SystemColors.GrayText,
+            TextRenderer.DrawText(e.Graphics, Items[e.Index]?.ToString(), Font, r, p.TextMuted,
                 TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
             return;
         }
