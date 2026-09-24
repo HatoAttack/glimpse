@@ -1,9 +1,11 @@
 // 画像ビューア - メイン画面
+using ImageViewer.App.Chrome;
 using ImageViewer.App.Commands;
 using ImageViewer.App.Dialogs;
 using ImageViewer.App.Filer;
 using ImageViewer.App.Grid;
 using ImageViewer.App.Jump;
+using ImageViewer.App.Theming;
 using ImageViewer.App.Viewer;
 using ImageViewer.Core.Commands;
 using ImageViewer.Core.Imaging;
@@ -25,8 +27,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     private readonly ThumbnailService _thumbnails;
     private readonly ThumbnailGrid _grid;
     private readonly QuickLookView _quickLook = new() { Dock = DockStyle.Fill };
-    private readonly ToolStripStatusLabel _status;
-    private readonly ToolStripStatusLabel _selectionInfo = new() { TextAlign = ContentAlignment.MiddleRight };
+    private readonly FooterBar _footer = new();
     private readonly System.Windows.Forms.Timer _infoDelay = new() { Interval = 100 };
     private readonly Dictionary<ThumbnailKey, ImageHeader?> _infoCache = new();
     private CancellationTokenSource? _infoCts;
@@ -51,18 +52,30 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     private readonly FolderTree _tree = new() { Dock = DockStyle.Fill };
     private readonly TextBox _address = new()
     {
-        Dock = DockStyle.Fill,
-        BorderStyle = BorderStyle.FixedSingle,
         // Windows 標準のフォルダ名補完（追加の処理・索引は不要）
         AutoCompleteMode = AutoCompleteMode.SuggestAppend,
         AutoCompleteSource = AutoCompleteSource.FileSystemDirectories,
     };
-    private readonly Button _backButton = new() { Text = "←" };
-    private readonly Button _forwardButton = new() { Text = "→" };
-    private readonly Button _upButton = new() { Text = "↑" };
-    private readonly Button _homeButton = new() { Text = "⌂" };
+    private readonly AddressBox _addressBox;
+    private readonly IconButton _backButton = new() { Icon = Icons.Back, AccessibleName = "戻る" };
+    private readonly IconButton _forwardButton = new() { Icon = Icons.Forward, AccessibleName = "進む" };
+    private readonly IconButton _upButton = new() { Icon = Icons.Up, AccessibleName = "上のフォルダへ" };
     private readonly ToolTip _toolTip = new();
     private ToolStripMenuItem _backItem = null!, _forwardItem = null!, _upItem = null!;
+
+    // ---- ツールバー・☰ メニュー・サイドバー ----
+    private readonly ToolBar _toolbar = new();
+    private readonly IconButton _menuButton = new() { Icon = Icons.Menu, AccessibleName = "メニュー" };
+    private readonly IconButton _sidebarButton = new() { Icon = Icons.Sidebar, AccessibleName = "サイドバー" };
+    private readonly IconButton _sortButton = new() { DropDown = true, AccessibleName = "並び順" };
+    private ContextMenuStrip _mainMenu = null!;
+    private readonly ContextMenuStrip _sortMenu = new();
+    private readonly NoFocusSplitContainer _split = new() { Dock = DockStyle.Fill, FixedPanel = FixedPanel.Panel1 };
+    private ToolStripMenuItem _sidebarItem = null!;
+    private readonly List<(ToolStripMenuItem Item, ThemeMode Mode)> _themeItems = new();
+    // メニュー項目のショートカット（メニューバーが無いので自分で振り分ける）
+    private readonly Dictionary<Keys, ToolStripMenuItem> _menuShortcuts = new();
+    private DateTime _menuClosedAt;
 
     // ---- フォルダジャンプ ----
     private readonly FolderJumpService _jump = new(FolderJumpService.DefaultDataDir);
@@ -73,7 +86,6 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     private int _visitsSinceSave;
 
     // ---- 更新の確認 ----
-    private readonly ToolStripStatusLabel _updateLabel = new() { IsLink = true, Visible = false, ToolTipText = "クリックすると変更内容を表示して更新できます" };
     private ToolStripMenuItem _updateItem = null!;
     private HttpClient? _http;
     private ReleaseInfo? _available;
@@ -97,7 +109,9 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         AllowDrop = true;
 
         _settings = _settingsStore.Load();
+        Theme.Initialize(Theme.ParseMode(_settings.Theme));
         RegisterCommands();
+        _addressBox = new AddressBox(_address);
 
         // サムネイルはメモリ上に最大 128MB まで持つ（大きさは表示サイズに合わせて段階的に決まる）
         _thumbnails = new ThumbnailService(LogicalToDeviceUnits(160), 128L * 1024 * 1024,
@@ -124,13 +138,10 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             _everything?.Dispose();
         };
 
-        var statusStrip = new StatusStrip();
-        _status = new ToolStripStatusLabel { Spring = true, TextAlign = ContentAlignment.MiddleLeft };
-        statusStrip.Items.Add(_status);
-        statusStrip.Items.Add(_updateLabel);
-        statusStrip.Items.Add(_selectionInfo);
-        _updateLabel.Click += (_, _) => ShowUpdateDialog();
-        AddThumbnailSizeSlider(statusStrip);
+        _footer.UpdateClicked += (_, _) => ShowUpdateDialog();
+        // フッター右端のボタンはライト ↔ ダークだけ（システムに合わせるは ☰ → 表示 → テーマ）
+        _footer.ThemeButton.Click += (_, _) => SetThemeMode(Theme.Current.IsDark ? ThemeMode.Light : ThemeMode.Dark);
+        SetUpThumbnailSizeSlider();
         _grid.SelectionChanged += (_, _) =>
         {
             // 選択を素早く切り替えている間は読まない（止まってから読む）
@@ -143,24 +154,25 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             await UpdateSelectionInfoAsync();
         };
 
-        var split = new NoFocusSplitContainer
-        {
-            Dock = DockStyle.Fill,
-            FixedPanel = FixedPanel.Panel1,
-            SplitterWidth = LogicalToDeviceUnits(4),
-        };
-        split.Panel1.Controls.Add(_tree);
-        split.Panel2.Controls.Add(_grid);
-        split.Panel2.Controls.Add(_quickLook);
+        _split.SplitterWidth = LogicalToDeviceUnits(4);
+        _split.Panel1.Controls.Add(_tree);
+        _split.Panel1.Padding = new Padding(0, 0, 1, 0); // サイドバーの右端の線（Panel1 の地の色で描く）
+        _split.Panel2.Controls.Add(_grid);
+        _split.Panel2.Controls.Add(_quickLook);
         SetUpQuickLook();
 
-        // Dock は後から追加したものから順に場所を取るので、Fill → アドレスバー → メニュー → ステータスバー の順に追加
-        Controls.Add(split);
-        Controls.Add(BuildNavigationBar());
-        Controls.Add(BuildMainMenu());
-        Controls.Add(statusStrip);
-        split.SplitterDistance = LogicalToDeviceUnits(220);
+        // Dock は後から追加したものから順に場所を取るので、Fill → ツールバー → フッター の順に追加
+        _mainMenu = BuildMainMenu();
+        Controls.Add(_split);
+        Controls.Add(BuildToolBar());
+        Controls.Add(_footer);
+        _split.SplitterDistance = LogicalToDeviceUnits(220);
+        _split.Panel1Collapsed = !(_settings.SidebarVisible ?? true);
         BuildContextMenu();
+        SetUpMenuKeys();
+        ApplyTheme();
+        Theme.Changed += OnThemeChanged;
+        FormClosed += (_, _) => Theme.Changed -= OnThemeChanged;
 
         DragEnter += (_, e) =>
             e.Effect = DroppedFolder(e) != null ? DragDropEffects.Copy : DragDropEffects.None;
@@ -208,29 +220,18 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
     // ---- サムネイルの大きさ（フッターのスライダー / Ctrl+ホイール） ----
 
-    private void AddThumbnailSizeSlider(StatusStrip strip)
+    private void SetUpThumbnailSizeSlider()
     {
-        var slider = new TrackBar
-        {
-            Minimum = ThumbnailGrid.MinThumbnailSize,
-            Maximum = ThumbnailGrid.MaxThumbnailSize,
-            SmallChange = ThumbnailGrid.ThumbnailSizeStep,
-            LargeChange = ThumbnailGrid.ThumbnailSizeStep * 2,
-            TickStyle = TickStyle.None,
-            AutoSize = false,
-            Width = LogicalToDeviceUnits(140),
-            Height = LogicalToDeviceUnits(22),
-            Value = _grid.ThumbnailSize,
-            BackColor = SystemColors.Control,
-        };
-        var host = new ToolStripControlHost(slider) { AutoSize = false, Width = slider.Width, Margin = new Padding(0, 1, 4, 0) };
-        var label = new ToolStripStatusLabel("サイズ") { ToolTipText = "サムネイルの大きさ（Ctrl+ホイールでも変えられます）" };
-        _toolTip.SetToolTip(slider, "サムネイルの大きさ（Ctrl+ホイールでも変えられます）");
-        strip.Items.Add(label);
-        strip.Items.Add(host);
+        var slider = _footer.Slider;
+        slider.Minimum = ThumbnailGrid.MinThumbnailSize;
+        slider.Maximum = ThumbnailGrid.MaxThumbnailSize;
+        slider.Step = ThumbnailGrid.ThumbnailSizeStep;
+        slider.Value = _grid.ThumbnailSize;
+        slider.AccessibleName = "サムネイルの大きさ";
+        _footer.SetSliderToolTip("サムネイルの大きさ（Ctrl+ホイールでも変えられます）");
 
         slider.ValueChanged += (_, _) => _grid.ThumbnailSize = slider.Value;
-        _grid.ThumbnailSizeChanged += (_, size) => slider.Value = Math.Clamp(size, slider.Minimum, slider.Maximum);
+        _grid.ThumbnailSizeChanged += (_, size) => slider.Value = size;
         // 設定には終了時に 1 回だけ書く（動かすたびに書かない）
         FormClosing += (_, _) =>
         {
@@ -251,12 +252,12 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
         if (images.Count == 0 && folders.Count == 1)
         {
-            _selectionInfo.Text = $"フォルダー ・ {folders[0].LastWriteTime:yyyy/MM/dd HH:mm}";
+            _footer.SelectionInfo = $"フォルダー ・ {folders[0].LastWriteTime:yyyy/MM/dd HH:mm}";
             return;
         }
         if (images.Count != 1)
         {
-            _selectionInfo.Text = images.Count == 0 ? "" : $"{images.Count} 枚 ・ 合計 {FormatBytes(images.Sum(SafeLength))}";
+            _footer.SelectionInfo = images.Count == 0 ? "" : $"{images.Count} 枚 ・ 合計 {FormatBytes(images.Sum(SafeLength))}";
             return;
         }
 
@@ -265,7 +266,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         var key = ThumbnailKey.From(file);
         if (!_infoCache.TryGetValue(key, out var info))
         {
-            _selectionInfo.Text = rest; // 大きさを読んでいる間も、サイズと日時は先に出す
+            _footer.SelectionInfo = rest; // 大きさを読んでいる間も、サイズと日時は先に出す
             var cts = _infoCts = new CancellationTokenSource();
             try
             {
@@ -279,7 +280,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             if (_infoCache.Count >= 2000) _infoCache.Clear(); // 覚えておく数に上限
             _infoCache[key] = info;
         }
-        _selectionInfo.Text = info != null ? $"{info.Width} × {info.Height} ・ {info.Format} ・ {rest}" : rest;
+        _footer.SelectionInfo = info != null ? $"{info.Width} × {info.Height} ・ {info.Format} ・ {rest}" : rest;
     }
 
     private static long SafeLength(FileInfo f)
@@ -388,28 +389,44 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
     // ---- アドレスバー・戻る / 進む / 上へ ----
 
-    private Control BuildNavigationBar()
+    private Control BuildToolBar()
     {
-        var buttons = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Left, AutoSize = true, WrapContents = false, Padding = new Padding(4, 3, 0, 0),
-        };
         foreach (var (button, tip) in new[]
                  {
+                     (_menuButton, "メニュー (Alt)"), (_sidebarButton, "サイドバーの表示 / 非表示"),
                      (_backButton, "戻る (Alt+←)"), (_forwardButton, "進む (Alt+→)"), (_upButton, "上のフォルダへ (Alt+↑ / Backspace)"),
-                     (_homeButton, "ホームへ (Alt+Home)"),
+                     (_sortButton, "並び順"),
                  })
-        {
-            button.Size = new Size(LogicalToDeviceUnits(30), _address.PreferredHeight + LogicalToDeviceUnits(2));
-            button.Margin = new Padding(0, 0, LogicalToDeviceUnits(2), 0);
-            button.TabStop = false;
             _toolTip.SetToolTip(button, tip);
-            buttons.Controls.Add(button);
-        }
+        _toolbar.AddLeft(_menuButton, _sidebarButton, ToolBar.Separator, _backButton, _forwardButton, _upButton);
+        _toolbar.SetFill(_addressBox);
+        _toolbar.AddRight(_sortButton);
+        _toolbar.MouseDown += OnMouseBackForward;
+
+        _menuButton.Click += (_, _) => ShowMainMenu(selectFirst: false);
+        _mainMenu.Closed += (_, _) =>
+        {
+            _menuButton.Active = false;
+            _menuClosedAt = DateTime.UtcNow;
+        };
+        _sidebarButton.Click += (_, _) => SetSidebarVisible(_split.Panel1Collapsed);
         _backButton.Click += async (_, _) => await GoBackAsync();
         _forwardButton.Click += async (_, _) => await GoForwardAsync();
         _upButton.Click += async (_, _) => await GoUpAsync();
-        _homeButton.Click += async (_, _) => await LoadFolderAsync(HomeFolder);
+
+        AddSortItems(_sortMenu.Items);
+        _sortButton.Click += (_, _) =>
+        {
+            if ((DateTime.UtcNow - _menuClosedAt).TotalMilliseconds < 150) return; // 開いているメニューを閉じるためのクリック
+            _sortButton.Active = true;
+            _sortMenu.Show(_sortButton, new Point(0, _sortButton.Height));
+        };
+        _sortMenu.Closed += (_, _) =>
+        {
+            _sortButton.Active = false;
+            _menuClosedAt = DateTime.UtcNow;
+        };
+        UpdateSortChecks();
 
         _address.KeyDown += async (_, e) =>
         {
@@ -442,12 +459,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         // クリックで全体を選択（すぐに上書き入力できる。エクスプローラーと同じ）
         _address.Enter += (_, _) => BeginInvoke(_address.SelectAll);
 
-        var addressHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(4, 4, 6, 4) };
-        addressHost.Controls.Add(_address);
-        var bar = new Panel { Dock = DockStyle.Top, Height = _address.PreferredHeight + LogicalToDeviceUnits(10) };
-        bar.Controls.Add(addressHost);
-        bar.Controls.Add(buttons);
-        return bar;
+        return _toolbar;
     }
 
     // ---- フォルダジャンプ ----
@@ -505,8 +517,8 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         if (cts.IsCancellationRequested || !_address.Focused) return;
 
         _jumpList.SetResults(results, message);
-        var below = PointToClient(_address.Parent!.PointToScreen(new Point(_address.Left, _address.Bottom)));
-        _jumpList.SetBounds(below.X, below.Y + 1, _address.Width, _jumpList.Height);
+        var below = PointToClient(_addressBox.Parent!.PointToScreen(new Point(_addressBox.Left, _addressBox.Bottom)));
+        _jumpList.SetBounds(below.X, below.Y + LogicalToDeviceUnits(4), _addressBox.Width, _jumpList.Height);
         _jumpList.Visible = true;
         _jumpList.BringToFront();
     }
@@ -654,7 +666,124 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         if (_address.Focused && keyData is Keys.Delete or (Keys.Control | Keys.C) or (Keys.Control | Keys.X)
                 or (Keys.Control | Keys.V) or (Keys.Control | Keys.A) or (Keys.Control | Keys.Z))
             return false;
+        if (keyData == Keys.F10)
+        {
+            ShowMainMenu(selectFirst: true);
+            return true;
+        }
+        if (_menuShortcuts.TryGetValue(keyData, out var item))
+        {
+            UpdateCommandEnabled(); // 貼り付けなどはクリップボード次第なので押したときに確かめる
+            if (item.Enabled)
+            {
+                item.PerformClick();
+                return true;
+            }
+        }
         return base.ProcessCmdKey(ref msg, keyData);
+    }
+
+    // ---- ☰ メニュー・サイドバー・テーマ ----
+
+    private void ShowMainMenu(bool selectFirst)
+    {
+        if (_mainMenu.Visible || (DateTime.UtcNow - _menuClosedAt).TotalMilliseconds < 150) return; // 開いているメニューを閉じるためのクリック
+        _menuButton.Active = true;
+        _mainMenu.Show(_menuButton, new Point(0, _menuButton.Height));
+        if (selectFirst && _mainMenu.Items.Count > 0) _mainMenu.Items[0].Select();
+    }
+
+    /// <summary>
+    /// ☰ メニューの項目のショートカットを覚えて、項目には表示だけ残す（表示していないメニューのショートカットは
+    /// WinForms では働かないため ProcessCmdKey で振り分ける）。Alt だけを押して離すと ☰ を開く
+    /// </summary>
+    private void SetUpMenuKeys()
+    {
+        var converter = new KeysConverter();
+        void Collect(ToolStripItemCollection items)
+        {
+            foreach (var item in items.OfType<ToolStripMenuItem>())
+            {
+                if (item.ShortcutKeys != Keys.None)
+                {
+                    item.ShortcutKeyDisplayString ??= converter.ConvertToString(item.ShortcutKeys);
+                    _menuShortcuts[item.ShortcutKeys] = item;
+                    item.ShortcutKeys = Keys.None;
+                }
+                Collect(item.DropDownItems);
+            }
+        }
+        Collect(_mainMenu.Items);
+
+        var altFilter = new AltKeyFilter(this, () => ShowMainMenu(selectFirst: true));
+        Application.AddMessageFilter(altFilter);
+        FormClosed += (_, _) => Application.RemoveMessageFilter(altFilter);
+    }
+
+    /// <summary>Alt を押して、ほかのキーを押さずに離したとき（メニューバーと同じ操作で ☰ を開く）</summary>
+    private sealed class AltKeyFilter(Form form, Action open) : IMessageFilter
+    {
+        private const int WmKeyDown = 0x100, WmSysKeyDown = 0x104, WmSysKeyUp = 0x105, WmLButtonDown = 0x201, WmRButtonDown = 0x204;
+        private const int VkMenu = 0x12;
+        private bool _armed;
+
+        public bool PreFilterMessage(ref Message m)
+        {
+            switch (m.Msg)
+            {
+                case WmSysKeyDown when (int)m.WParam == VkMenu:
+                    if (((long)m.LParam & (1L << 30)) == 0) _armed = Form.ActiveForm == form; // 押し続けの繰り返しは無視
+                    break;
+                case WmSysKeyDown or WmKeyDown or WmLButtonDown or WmRButtonDown:
+                    _armed = false;
+                    break;
+                case WmSysKeyUp when (int)m.WParam == VkMenu:
+                    if (!_armed) break;
+                    _armed = false;
+                    open();
+                    return true; // Windows のシステムメニューにフォーカスを移さない
+            }
+            return false;
+        }
+    }
+
+    private void SetSidebarVisible(bool visible)
+    {
+        _split.Panel1Collapsed = !visible;
+        _sidebarItem.Checked = visible;
+        ((ISettingsAccess)this).UpdateSettings(s => s with { SidebarVisible = visible ? null : false });
+    }
+
+    private void SetThemeMode(ThemeMode mode)
+    {
+        ((ISettingsAccess)this).UpdateSettings(s => s with { Theme = Theme.ToSetting(mode) });
+        foreach (var (item, m) in _themeItems) item.Checked = m == mode;
+        Theme.SetMode(mode); // 変わっていれば OnThemeChanged が呼ばれる
+    }
+
+    private void OnThemeChanged(object? sender, EventArgs e) => ApplyTheme();
+
+    /// <summary>今の配色を画面の各部品に当てる</summary>
+    private void ApplyTheme()
+    {
+        var p = Theme.Current;
+        BackColor = p.Background;
+        _toolbar.ApplyTheme();
+        _footer.ApplyTheme();
+        _addressBox.ApplyTheme();
+        _split.BackColor = p.Background;
+        _split.Panel1.BackColor = p.Border;
+        _split.Panel2.BackColor = p.Background;
+        _tree.ApplyTheme();
+        _grid.ApplyTheme();
+        _jumpList.ApplyTheme();
+        Theme.ApplyTitleBar(this);
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        Theme.ApplyTitleBar(this);
     }
 
     private void RegisterCommands()
@@ -678,9 +807,10 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
     // ---- メニュー ----
 
-    private MenuStrip BuildMainMenu()
+    /// <summary>☰ メニュー（今までのメニューバーの中身をそのまま入れる。ショートカットは SetUpMenuKeys で振り分ける）</summary>
+    private ContextMenuStrip BuildMainMenu()
     {
-        var menu = new MenuStrip();
+        var menu = new ContextMenuStrip();
         var fileMenu = new ToolStripMenuItem("ファイル(&F)");
         fileMenu.DropDownItems.Add(new ToolStripMenuItem("フォルダを開く(&O)...", null,
             async (_, _) => await ChooseFolderAsync()) { ShortcutKeys = Keys.Control | Keys.O });
@@ -736,6 +866,14 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         helpMenu.DropDownItems.Add(new ToolStripMenuItem("更新を確認(&U)...", null, async (_, _) => await CheckForUpdatesAsync(manual: true)));
         helpMenu.DropDownItems.Add(checkOnStartup);
         menu.Items.Add(helpMenu);
+
+        // よく使うものを上に（カテゴリで増えたメニューはヘルプの前）
+        string[] order = { "ファイル", "編集", "画像", "移動", "表示", "チェック" };
+        var sorted = menu.Items.Cast<ToolStripItem>()
+            .OrderBy(i => i == helpMenu ? int.MaxValue : Array.IndexOf(order, StripMnemonic(i.Text)) is var n and >= 0 ? n : order.Length)
+            .ToList();
+        menu.Items.Clear();
+        menu.Items.AddRange(sorted.ToArray());
         return menu;
     }
 
@@ -766,6 +904,25 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     private ToolStripMenuItem BuildViewMenu()
     {
         var viewMenu = new ToolStripMenuItem("表示(&V)");
+        AddSortItems(viewMenu.DropDownItems);
+        viewMenu.DropDownItems.Add(new ToolStripSeparator());
+        _sidebarItem = new ToolStripMenuItem("サイドバー(&B)", null, (_, _) => SetSidebarVisible(_split.Panel1Collapsed))
+            { Checked = _settings.SidebarVisible ?? true };
+        viewMenu.DropDownItems.Add(_sidebarItem);
+        var themeMenu = new ToolStripMenuItem("テーマ(&T)");
+        foreach (var (label, mode) in new[] { ("システムに合わせる(&S)", ThemeMode.System), ("ライト(&L)", ThemeMode.Light), ("ダーク(&D)", ThemeMode.Dark) })
+        {
+            var item = new ToolStripMenuItem(label, null, (_, _) => SetThemeMode(mode)) { Checked = Theme.Mode == mode };
+            _themeItems.Add((item, mode));
+            themeMenu.DropDownItems.Add(item);
+        }
+        viewMenu.DropDownItems.Add(themeMenu);
+        return viewMenu;
+    }
+
+    /// <summary>並び順の項目（☰ の表示メニューとツールバーの並び順ボタンの両方に作る）</summary>
+    private void AddSortItems(ToolStripItemCollection items)
+    {
         foreach (var (label, mode) in new[]
                  {
                      ("名前順(&N)", SortMode.Name), ("更新日時順(&D)", SortMode.Modified),
@@ -774,17 +931,23 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         {
             var item = new ToolStripMenuItem(label, null, async (_, _) => await ChangeSortAsync(mode));
             _sortItems.Add((item, mode));
-            viewMenu.DropDownItems.Add(item);
+            items.Add(item);
         }
-        viewMenu.DropDownItems.Add(new ToolStripSeparator());
-        viewMenu.DropDownItems.Add(new ToolStripMenuItem("手動の並び順を削除(&R)", null, async (_, _) => await DeleteManualOrderAsync()));
-        UpdateSortChecks();
-        return viewMenu;
+        items.Add(new ToolStripSeparator());
+        items.Add(new ToolStripMenuItem("手動の並び順を削除(&R)", null, async (_, _) => await DeleteManualOrderAsync()));
     }
 
     private void UpdateSortChecks()
     {
         foreach (var (item, mode) in _sortItems) item.Checked = mode == _sortMode;
+        _sortButton.Text = _sortMode switch
+        {
+            SortMode.Modified => "更新日時順",
+            SortMode.Size => "サイズ順",
+            SortMode.Manual => "手動の並び",
+            _ => "名前順",
+        };
+        _toolbar.PerformLayout();
     }
 
     /// <summary>
@@ -854,8 +1017,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         if (!manual && latest.Tag == _settings.SkippedVersion) return; // 「このバージョンは飛ばす」を選んだもの
 
         _available = latest;
-        _updateLabel.Text = $"新しいバージョン {latest.Tag} があります（クリックで更新）";
-        _updateLabel.Visible = true;
+        _footer.UpdateText = $"新しいバージョン {latest.Tag} があります（クリックで更新）";
         _updateItem.Text = $"{latest.Tag} に更新(&N)...";
         _updateItem.Visible = true;
         if (manual) ShowUpdateDialog();
@@ -874,8 +1036,9 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         {
             case UpdateDialog.Outcome.Skip:
                 ((ISettingsAccess)this).UpdateSettings(s => s with { SkippedVersion = release.Tag });
-                _updateLabel.Visible = _updateItem.Visible = false;
-                Notify($"{release.Tag} は飛ばします（ヘルプ →「更新を確認」からいつでも更新できます）");
+                _footer.UpdateText = "";
+                _updateItem.Visible = false;
+                Notify($"{release.Tag} は飛ばします（☰ → ヘルプ →「更新を確認」からいつでも更新できます）");
                 break;
             case UpdateDialog.Outcome.Updated when UpdatableExe is string exe:
                 // 新しい exe で、今のフォルダを開いた状態で起動し直す
@@ -952,13 +1115,11 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         var paths = SelectedPaths();
         UpdateCommandEnabled(paths);
 
-        string where = _folder ?? "フォルダ未選択（Ctrl+O で開く / フォルダをドロップ）";
-        string text = _grid.Folders.Count > 0
-            ? $"{where}   フォルダ {_grid.Folders.Count}   画像 {_grid.Items.Count} 枚"
-            : $"{where}   画像 {_grid.Items.Count} 枚";
-        if (paths.Count > 0) text += $"   選択 {paths.Count} 枚";
-        if (_grid.MarkedCount > 0) text += $"   チェック {_grid.MarkedCount} 枚";
-        _status.Text = text;
+        // 場所はアドレスバーとタイトルに出ているので、ここは件数だけ（選択中の枚数は右側の情報に出る）
+        _footer.Status = _folder == null ? "フォルダを開いてください（Ctrl+O / フォルダをドロップ）"
+            : _grid.Folders.Count > 0 ? $"画像 {_grid.Items.Count} · フォルダ {_grid.Folders.Count}"
+            : $"画像 {_grid.Items.Count}";
+        _footer.CheckCount = _grid.MarkedCount;
     }
 
     /// <summary>
@@ -990,7 +1151,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         UpdateCommandEnabled(); // コピー・切り取りで貼り付けができるようになる
     }
 
-    public void Notify(string message) => _status.Text = message;
+    public void Notify(string message) => _footer.Status = message;
 
     public string? CurrentFolder => _folder;
 
@@ -1150,7 +1311,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     {
         _loadCts?.Cancel();
         var cts = _loadCts = new CancellationTokenSource();
-        _status.Text = $"{folder} を読み込み中...";
+        _footer.Status = "読み込み中…";
         bool reload = string.Equals(_folder, folder, StringComparison.OrdinalIgnoreCase);
         List<DirectoryInfo> folders;
         List<FileInfo> files;

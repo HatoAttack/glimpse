@@ -4,6 +4,7 @@
 // チェック・手動の並べ替え・コマンドの対象は画像だけ
 using System.Drawing.Drawing2D;
 using ImageViewer.App.Commands;
+using ImageViewer.App.Theming;
 using ImageViewer.Core.Ordering;
 using ImageViewer.Core.Thumbnails;
 
@@ -96,10 +97,11 @@ public sealed class ThumbnailGrid : Control
         AllowDrop = true;
         // 日本語入力がオンだと ¥ や ^ が文字入力に取られてキーとして届かないので、このコントロールでは使わない
         ImeMode = ImeMode.Disable;
-        BackColor = SystemColors.Window;
-        ForeColor = SystemColors.WindowText;
+        BackColor = Theme.Current.Background;
+        ForeColor = Theme.Current.Text;
 
         Controls.Add(_scroll);
+        _scroll.HandleCreated += (_, _) => Theme.ApplyNativeTheme(_scroll);
         _scroll.ValueChanged += (_, _) =>
         {
             Invalidate();
@@ -110,6 +112,15 @@ public sealed class ThumbnailGrid : Control
     }
 
     // ---- 公開 API ----
+
+    /// <summary>今の配色で描き直す</summary>
+    public void ApplyTheme()
+    {
+        BackColor = Theme.Current.Background;
+        ForeColor = Theme.Current.Text;
+        Theme.ApplyNativeTheme(_scroll);
+        Invalidate();
+    }
 
     /// <summary>画像（フォルダのタイルは含まない）</summary>
     public IReadOnlyList<FileInfo> Items => _items;
@@ -468,8 +479,8 @@ public sealed class ThumbnailGrid : Control
         {
             var band = BandRect;
             band.Offset(0, -ScrollY);
-            using var fill = new SolidBrush(Color.FromArgb(50, SystemColors.Highlight));
-            using var border = new Pen(SystemColors.Highlight);
+            using var fill = new SolidBrush(Color.FromArgb(40, Theme.Current.SelectionBorder));
+            using var border = new Pen(Theme.Current.SelectionBorder);
             g.FillRectangle(fill, band);
             g.DrawRectangle(border, band.X, band.Y, Math.Max(0, band.Width - 1), Math.Max(0, band.Height - 1));
         }
@@ -478,29 +489,40 @@ public sealed class ThumbnailGrid : Control
         {
             var marker = _dropMarker;
             marker.Offset(0, -ScrollY);
-            using var brush = new SolidBrush(SystemColors.Highlight);
+            using var brush = new SolidBrush(Theme.Current.SelectionBorder);
             g.FillRectangle(brush, marker);
         }
     }
 
     private void DrawCell(Graphics g, int index, Rectangle cell)
     {
+        var p = Theme.Current;
         bool selected = _selection.IsSelected(index) || index == _dropFolder; // ドロップ先のフォルダも選択と同じ色で示す
+        var nameColor = selected ? p.SelectionText : p.Text;
         if (selected)
         {
-            using var fill = new SolidBrush(Color.FromArgb(Focused ? 70 : 40, SystemColors.Highlight));
-            g.FillRectangle(fill, cell);
-            using var border = new Pen(SystemColors.Highlight);
-            g.DrawRectangle(border, cell.X, cell.Y, cell.Width - 1, cell.Height - 1);
+            // 角の丸い地と、フォーカスがあるときは青い枠（ほかの部品を操作中は地の色だけ）
+            float radius = LogicalToDeviceUnits(6);
+            var r = new RectangleF(cell.X + 0.5f, cell.Y + 0.5f, cell.Width - 1, cell.Height - 1);
+            Chrome.Icons.FillRounded(g, r, radius, p.SelectionFill);
+            if (Focused)
+            {
+                var oldMode = g.SmoothingMode;
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                using var path = Chrome.Icons.RoundedRect(RectangleF.Inflate(r, -0.75f, -0.75f), radius);
+                using var border = new Pen(p.SelectionBorder, 1.5f);
+                g.DrawPath(border, path);
+                g.SmoothingMode = oldMode;
+            }
         }
         if (Focused && index == _selection.Focus)
-            ControlPaint.DrawFocusRectangle(g, Rectangle.Inflate(cell, -2, -2));
+            ControlPaint.DrawFocusRectangle(g, Rectangle.Inflate(cell, -3, -3), p.Text, selected ? p.SelectionFill : p.Background);
 
         var area = ThumbArea(cell);
         if (IsFolder(index))
         {
             DrawFolderIcon(g, FolderIconBounds(area));
-            TextRenderer.DrawText(g, CellName(index), Font, NameArea(cell), ForeColor,
+            TextRenderer.DrawText(g, CellName(index), Font, NameArea(cell), nameColor,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
             return;
         }
@@ -514,19 +536,19 @@ public sealed class ThumbnailGrid : Control
                 g.DrawImage(bmp, dest);
                 break;
             case ThumbnailState.Failed:
-                g.FillRectangle(SystemBrushes.ControlLight, area);
+                using (var placeholder = new SolidBrush(p.Placeholder)) g.FillRectangle(placeholder, area);
                 TextRenderer.DrawText(g, _items[index - F].Extension.TrimStart('.').ToUpperInvariant() + "\n読めません",
-                    Font, area, SystemColors.GrayText,
+                    Font, area, p.TextMuted,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
                 break;
             default:
-                g.FillRectangle(SystemBrushes.ControlLight, Rectangle.Inflate(area, -_thumb / 8, -_thumb / 8));
+                using (var placeholder = new SolidBrush(p.Placeholder)) g.FillRectangle(placeholder, Rectangle.Inflate(area, -_thumb / 8, -_thumb / 8));
                 break;
         }
 
         if (IsMarked(index)) DrawCheckBadge(g, area);
 
-        TextRenderer.DrawText(g, CellName(index), Font, NameArea(cell), ForeColor,
+        TextRenderer.DrawText(g, CellName(index), Font, NameArea(cell), nameColor,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
     }
 
@@ -567,7 +589,7 @@ public sealed class ThumbnailGrid : Control
         var r = new Rectangle(area.X, area.Y, d, d);
         var oldMode = g.SmoothingMode;
         g.SmoothingMode = SmoothingMode.AntiAlias;
-        using (var fill = new SolidBrush(CheckColor))
+        using (var fill = new SolidBrush(Theme.Current.Check))
             g.FillEllipse(fill, r);
         using (var ring = new Pen(Color.White, Math.Max(1.5f, d / 12f)))
             g.DrawEllipse(ring, r);
@@ -580,9 +602,6 @@ public sealed class ThumbnailGrid : Control
             });
         g.SmoothingMode = oldMode;
     }
-
-    /// <summary>チェックの色（選択の青と区別できる橙）</summary>
-    private static readonly Color CheckColor = Color.FromArgb(232, 112, 0);
 
     protected override void OnGotFocus(EventArgs e)
     {

@@ -4,6 +4,7 @@
 //   ネットワークドライブは応答待ちで固まる原因になるので出さない（アドレスバーからは開ける）
 using System.Runtime.InteropServices;
 using ImageViewer.App.Commands;
+using ImageViewer.App.Theming;
 using ImageViewer.Core.Navigation;
 
 namespace ImageViewer.App.Filer;
@@ -26,18 +27,37 @@ public sealed class FolderTree : TreeView
     {
         HideSelection = false;
         AllowDrop = true;
-        // 開閉の ＋ / － を一番上の階層にも出し、子フォルダは字下げして階層を見やすくする
+        // 開閉の印を一番上の階層にも出し、子フォルダは字下げして階層を見やすくする
         ShowRootLines = true;
         ShowPlusMinus = true;
-        ShowLines = true;
+        // 線は引かず、行全体を選択の色にする（エクスプローラーと同じ見た目）
+        ShowLines = false;
+        FullRowSelect = true;
         Indent = LogicalToDeviceUnits(18);
         BorderStyle = BorderStyle.None;
+        ItemHeight = LogicalToDeviceUnits(26);
+        BackColor = Theme.Current.Background;
+        ForeColor = Theme.Current.Text;
         _keyboardDelay.Tick += (_, _) =>
         {
             _keyboardDelay.Stop();
             if (SelectedNode?.Tag is string path) FolderSelected?.Invoke(this, path);
         };
         BuildRoots();
+    }
+
+    /// <summary>今の配色に（開閉の印・スクロールバー・選択の色は Windows のダーク用 / 通常の見た目に切り替える）</summary>
+    public void ApplyTheme()
+    {
+        BackColor = Theme.Current.Background;
+        ForeColor = Theme.Current.Text;
+        Theme.ApplyNativeTheme(this);
+    }
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        Theme.ApplyNativeTheme(this);
     }
 
     private void BuildRoots()

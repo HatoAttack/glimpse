@@ -41,6 +41,12 @@ public sealed record AppSettings
     /// <summary>「このバージョンは飛ばす」を選んだバージョンのタグ（起動時の確認では知らせない）</summary>
     public string? SkippedVersion { get; init; }
 
+    /// <summary>配色（"system" / "light" / "dark"。null はシステムに合わせる）</summary>
+    public string? Theme { get; init; }
+
+    /// <summary>左のサイドバー（フォルダツリー）を表示する（null は既定 = 表示）</summary>
+    public bool? SidebarVisible { get; init; }
+
     /// <summary>最近の移動先の先頭に追加した設定（同じものは前から外す。件数に上限）</summary>
     public AppSettings WithRecentDestination(string folder) => this with
     {
