@@ -10,6 +10,12 @@ using SixLabors.ImageSharp.Processing;
 
 namespace ImageViewer.Core.Editing;
 
+/// <summary>上書きしない保存で、書き終えたときには保存先に別のファイルができていた</summary>
+public sealed class DestinationExistsException(string path) : IOException($"同名のファイルができていたので保存しませんでした: {Path.GetFileName(path)}")
+{
+    public string Destination { get; } = path;
+}
+
 /// <summary>出力形式。Keep は元の拡張子のまま（書き出せない形式なら JPG）</summary>
 public enum OutputFormat { Keep, Jpeg, Png, Webp }
 
@@ -52,7 +58,11 @@ public static class ImageSaver
     /// dst の拡張子の形式で保存する。JPEG は透過を扱えないので image 自体を白背景に合成してから書く
     /// （呼び出し側の画像が変わる点に注意）
     /// </summary>
-    public static void Save(Image<Rgba32> image, string dst)
+    /// <param name="overwrite">
+    /// false なら、書き終えて差し替える時点で dst があれば保存せずに DestinationExistsException
+    /// （事前に無いことを確かめていても、書いている間に別の処理が作ることがあるため、最後の差し替えで確かめる）
+    /// </param>
+    public static void Save(Image<Rgba32> image, string dst, bool overwrite = true)
     {
         string ext = Path.GetExtension(dst).ToLowerInvariant();
         if (ext == ".webp" && Math.Max(image.Width, image.Height) > WebpMaxEdge)
@@ -79,12 +89,20 @@ public static class ImageSaver
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(dst))!);
-        string temp = dst + ".tmp";
+        // 同じ保存先へ同時に書く処理があっても一時ファイルを取り合わないよう、一時ファイルの名前は毎回変える
+        string temp = $"{dst}.{Guid.NewGuid():N}.tmp";
         try
         {
-            using (var stream = new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None))
+            using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
                 image.Save(stream, encoder);
-            File.Move(temp, dst, overwrite: true);
+            try
+            {
+                File.Move(temp, dst, overwrite);
+            }
+            catch (IOException) when (!overwrite && File.Exists(dst))
+            {
+                throw new DestinationExistsException(dst);
+            }
         }
         catch
         {

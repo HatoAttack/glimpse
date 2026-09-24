@@ -163,9 +163,14 @@ public static class Converter
     public static bool KeepsMetadata(string path) => ImageFormats.IsImageSharpFormat(path);
 
     /// <summary>計画の Ok のものを 1 枚ずつ変換する（重い処理なので呼び出し側で別スレッドへ）</summary>
+    /// <param name="createOnly">
+    /// 新しいファイルを作るだけにする（設定の「上書き」に関わらず上書きしない）。上書きしないときは、
+    /// 計画の後に保存先ができていたら（ほかの処理が作った等）その画像は飛ばす
+    /// </param>
     public static ConvertResult Run(IReadOnlyList<ConvertPlanItem> plan, ConvertOptions options,
-        IProgress<ConvertProgress>? progress = null, CancellationToken ct = default)
+        IProgress<ConvertProgress>? progress = null, CancellationToken ct = default, bool createOnly = false)
     {
+        bool overwrite = options.Overwrite && !createOnly;
         var todo = plan.Where(p => p.Status == ConvertStatus.Ok).ToList();
         int converted = 0, skipped = plan.Count(p => p.Status == ConvertStatus.Skip);
         var errors = new List<string>();
@@ -176,8 +181,12 @@ public static class Converter
             progress?.Report(new(i, todo.Count, item.SourceName));
             try
             {
-                ConvertOne(item.Source, item.Target, options);
+                ConvertOne(item.Source, item.Target, options, overwrite);
                 converted++;
+            }
+            catch (DestinationExistsException)
+            {
+                skipped++;
             }
             catch (Exception ex) when (ex is not OutOfMemoryException)
             {
@@ -189,7 +198,7 @@ public static class Converter
     }
 
     /// <summary>1 枚を変換して保存する（上書きの判断は済んでいる前提）</summary>
-    public static void ConvertOne(string src, string dst, ConvertOptions options)
+    public static void ConvertOne(string src, string dst, ConvertOptions options, bool overwrite = true)
     {
         // 回転補正済み・先頭フレームだけ（アニメーションは静止画になる）
         using var image = ImageLoader.Load(src);
@@ -212,7 +221,7 @@ public static class Converter
             image.Metadata.IptcProfile = null;
             image.Metadata.GetPngMetadata().TextData.Clear();
         }
-        ImageSaver.Save(image, dst);
+        ImageSaver.Save(image, dst, overwrite);
     }
 
     /// <summary>設定の説明（1 行）</summary>

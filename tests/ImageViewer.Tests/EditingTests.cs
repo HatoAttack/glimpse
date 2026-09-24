@@ -46,6 +46,16 @@ static class EditingTests
         check(Converter.QuickRunBlocker(Converter.Plan(new[] { P("b.png") }, overwrite), overwrite)?.Contains("上書き") == true, "そのまま実行: 上書きになるなら設定画面へ");
         var clash = new ConvertOptions { Format = OutputFormat.Png };
         check(Converter.QuickRunBlocker(Converter.Plan(new[] { P("a.png"), P("a.jpg") }, clash), clash) != null, "そのまま実行: 出力名が重なるなら設定画面へ");
+        // 確かめた後に保存先ができたら上書きしない（ほかの処理が同時に作った等）
+        var racePlan = Converter.Plan(new[] { P("a.png") }, quick with { Suffix = "_race" });
+        string raced = racePlan[0].Target;
+        File.WriteAllText(raced, "other");
+        var raceResult = Converter.Run(racePlan, quick with { Suffix = "_race", Overwrite = true }, createOnly: true);
+        check(raceResult.Converted == 0 && raceResult.Skipped == 1 && raceResult.Errors.Count == 0 && File.ReadAllText(raced) == "other",
+            "そのまま実行: 実行中に保存先ができたら上書きせずに飛ばす");
+        raceResult = Converter.Run(racePlan, quick with { Suffix = "_race" });
+        check(raceResult.Skipped == 1 && File.ReadAllText(raced) == "other", "上書きしない設定: 実行中に保存先ができたら飛ばす");
+        check(!Directory.GetFiles(P("resized"), "*.tmp").Any(), "飛ばしたときも一時ファイルが残らない");
         var noFolder = new ConvertOptions { OutputMode = OutputFolderMode.Custom };
         check(Converter.QuickRunBlocker(Converter.Plan(new[] { P("a.png") }, noFolder), noFolder) != null, "そのまま実行: 出力先の指定が無いなら設定画面へ");
 

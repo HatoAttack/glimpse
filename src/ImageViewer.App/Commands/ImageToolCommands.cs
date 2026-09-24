@@ -63,7 +63,8 @@ public sealed class QuickResizeCommand(Form owner, ISettingsAccess settings, Res
         {
             if (p.Done < p.Total) context.Host.Notify($"リサイズ中 {p.Done + 1} / {p.Total}: {p.Name}");
         });
-        var result = await Task.Run(() => Converter.Run(plan, options, progress));
+        // 新しいファイルを作るだけ（確かめた後に保存先ができても上書きしない）
+        var result = await Task.Run(() => Converter.Run(plan, options, progress, createOnly: true));
         if (result.Converted > 0) context.Host.RequestRefresh();
         context.Host.Notify($"{ResizeDialog.Summarize(result)}（{Converter.Describe(options)}・{Converter.DescribeOutput(options)}）");
         if (result.Errors.Count > 0)
