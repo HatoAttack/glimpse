@@ -133,3 +133,19 @@ HEIC は「HEIF 画像拡張機能」＋「HEVC ビデオ拡張機能」、AVIF 
 
 - 設定を変えるとすぐプレビューに反映する。プレビューは縮小して読んだ画像（長辺 1200px まで・合計 1600 万画素まで）で組み、長辺 2400px のキャンバスに直接描くので、何百枚選んでもメモリは増えすぎない。原寸で読むのは保存するときだけ
 - 仕上がりが形式の上限（WEBP 16383px・JPG 65535px）を超えるときは保存前に知らせ、とても大きいとき（2 億画素超）は確認する
+
+## リリースの手順
+
+GitHub でリリースを公開すると、GitHub Actions（`.github/workflows/release.yml`）がテストしてから
+`ImageViewer.exe`（単一ファイル・インストール不要）を作り、そのリリースに添付する（数分かかる）。
+
+1. main に変更を入れる
+2. リリースを作る（タグ `v0.1.4` のように。説明文も書く）
+   - `gh release create v0.1.4 --target main --title v0.1.4 --notes "…"`、または GitHub の Releases 画面から
+3. Actions の「リリース」が終わると、リリースに `ImageViewer.exe` が付く。テストが通らなければ付かない（Actions で理由を確認）
+
+バージョン番号はタグから付く（`v0.1.4` → 0.1.4）。手元で作るときは次のとおり（出力は `publish` フォルダ）:
+
+```
+dotnet publish src/ImageViewer.App/ImageViewer.App.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -p:EnableCompressionInSingleFile=true -p:Version=0.1.4 -o publish
+```
