@@ -55,6 +55,8 @@ public sealed class QuickLookView : Control
     public void ToggleDetails()
     {
         Details.Visible = !Details.Visible;
+        // 閉じて広くなったら読み直す（狭い幅で読んだものは拡大しないので、そのままだと小さいまま）
+        if (!Details.Visible) ReloadForNewSize();
         Invalidate();
         DetailsToggled?.Invoke(this, EventArgs.Empty);
     }
@@ -270,8 +272,13 @@ public sealed class QuickLookView : Control
     protected override void OnResize(EventArgs e)
     {
         base.OnResize(e);
+        ReloadForNewSize();
+    }
+
+    /// <summary>表示できる大きさが変わったら読み直す（小さく読んだものを引き伸ばさない）</summary>
+    private void ReloadForNewSize()
+    {
         if (!Visible) return;
-        // 大きくなったら読み直す（小さく読んだものを引き伸ばさない）
         foreach (var b in _cache.Values) b.Dispose();
         _cache.Clear();
         _ = LoadAroundAsync();
