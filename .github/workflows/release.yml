@@ -1,5 +1,7 @@
-# リリースの自動化: GitHub でリリースを公開すると、テストしてから ImageViewer.exe（単一ファイル・インストール不要）と
-# そのチェックサム（ImageViewer.exe.sha256。アプリの自動更新が使う）を作って添付する。
+# リリースの自動化: GitHub でリリースを公開すると、テストしてから Glimpse.exe（単一ファイル・インストール不要）と
+# そのチェックサム（Glimpse.exe.sha256。アプリの自動更新が使う）を作って添付する。
+# 名前を変える前のバージョン（v0.1.5 まで）は ImageViewer.exe を探して更新するので、同じ中身を ImageViewer.exe の名前でも添付する
+# （そのバージョンの人が更新し終わったころに外す）。
 # 手順は docs/development.md の「リリースの手順」を参照。
 # このファイルを変える PR でも同じ処理を試しに走らせる（exe は添付せず、Actions の成果物に置く）
 name: リリース
@@ -44,9 +46,12 @@ jobs:
       - name: チェックサム（アプリの自動更新で、ダウンロードした exe が壊れていないか確かめるのに使う）
         shell: pwsh
         run: |
-          $hash = (Get-FileHash publish/ImageViewer.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          $hash = (Get-FileHash publish/Glimpse.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  Glimpse.exe" | Set-Content -Encoding ascii -NoNewline publish/Glimpse.exe.sha256
+          Get-Content publish/Glimpse.exe.sha256
+          # 名前を変える前のバージョンの更新用（中身は同じ）
+          Copy-Item publish/Glimpse.exe publish/ImageViewer.exe
           "$hash  ImageViewer.exe" | Set-Content -Encoding ascii -NoNewline publish/ImageViewer.exe.sha256
-          Get-Content publish/ImageViewer.exe.sha256
 
       - name: リリースに添付
         if: github.event_name == 'release'
@@ -54,15 +59,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         # チェックサムを先に置く（exe があれば必ずチェックサムもある状態にして、途中で確認したアプリが更新できないと判断しないように）
         run: |
-          gh release upload "${{ github.event.release.tag_name }}" publish/ImageViewer.exe.sha256 --clobber
-          gh release upload "${{ github.event.release.tag_name }}" publish/ImageViewer.exe --clobber
+          gh release upload "${{ github.event.release.tag_name }}" publish/Glimpse.exe.sha256 publish/ImageViewer.exe.sha256 --clobber
+          gh release upload "${{ github.event.release.tag_name }}" publish/Glimpse.exe publish/ImageViewer.exe --clobber
 
       - name: 成果物に置く（試しの実行）
         if: github.event_name != 'release'
         uses: actions/upload-artifact@v4
         with:
-          name: ImageViewer
+          name: Glimpse
           path: |
-            publish/ImageViewer.exe
-            publish/ImageViewer.exe.sha256
+            publish/Glimpse.exe
+            publish/Glimpse.exe.sha256
           retention-days: 3

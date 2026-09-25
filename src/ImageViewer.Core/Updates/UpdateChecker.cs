@@ -10,16 +10,16 @@ public sealed record ReleaseInfo(Version Version, string Tag, string Notes, stri
 
 public static class UpdateChecker
 {
-    public const string LatestReleaseApi = "https://api.github.com/repos/HatoAttack/ima-ge-viewer/releases/latest";
-    public const string ReleasesPage = "https://github.com/HatoAttack/ima-ge-viewer/releases/latest";
-    public const string ExeName = "ImageViewer.exe";
+    public const string LatestReleaseApi = "https://api.github.com/repos/HatoAttack/glimpse/releases/latest";
+    public const string ReleasesPage = "https://github.com/HatoAttack/glimpse/releases/latest";
+    public const string ExeName = "Glimpse.exe";
     public const string Sha256Name = ExeName + ".sha256";
 
     /// <summary>更新の確認・ダウンロード用。GitHub の API は User-Agent が無いと断られる</summary>
     public static HttpClient CreateClient(Version current)
     {
         var http = new HttpClient { Timeout = Timeout.InfiniteTimeSpan }; // 打ち切りは呼び出し側の CancellationToken で
-        http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("ima-ge-viewer", Normalize(current).ToString()));
+        http.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Glimpse", Normalize(current).ToString()));
         return http;
     }
 
