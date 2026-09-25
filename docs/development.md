@@ -20,7 +20,8 @@ dotnet run --project tests/ImageViewer.Tests    # テスト
 
 .NET 8 + WinForms + ImageSharp。
 
-アイコンの元は `docs/images/glimpse-icon.svg`。これを 512px の PNG にしてから、16〜256px を入れた `src/ImageViewer.App/Glimpse.ico` を作る（exe とウィンドウのアイコン）。
+アイコンの元は `docs/images/glimpse-icon.svg`（40px 以上）と、線を太くした `docs/images/glimpse-icon-small.svg`（16〜32px。タスクバーなど）。
+どちらも 512px の PNG にしてから縮小し、1 つの `src/ImageViewer.App/Glimpse.ico` にまとめる（exe とウィンドウのアイコン）。
 
 ## コマンドの仕組み
 
