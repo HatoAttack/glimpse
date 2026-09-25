@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- 16〜32px 用: 線を太く・背景を明るく・入力光を省いて、小さくしてもつぶれないようにしたもの -->
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#6A7785" />
+      <stop offset="100%" stop-color="#4A5560" />
+    </linearGradient>
+    <linearGradient id="rainbowGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#FF3B30" />
+      <stop offset="16.6%" stop-color="#FF9500" />
+      <stop offset="33.3%" stop-color="#FFCC00" />
+      <stop offset="50%" stop-color="#34C759" />
+      <stop offset="66.6%" stop-color="#007AFF" />
+      <stop offset="83.3%" stop-color="#5856D6" />
+      <stop offset="100%" stop-color="#AF52DE" />
+    </linearGradient>
+    <clipPath id="iconClip">
+      <rect x="0" y="0" width="512" height="512" rx="112" ry="112" />
+    </clipPath>
+  </defs>
+  <g clip-path="url(#iconClip)">
+    <rect x="0" y="0" width="512" height="512" fill="url(#bgGrad)" />
+    <polygon points="300,290 446,205 446,355" fill="url(#rainbowGrad)" />
+    <polygon points="240,120 110,370 370,370" fill="none" stroke="#FFFFFF" stroke-width="34" stroke-linejoin="round" />
+    <g stroke="#FFFFFF" stroke-width="30" stroke-linecap="round" stroke-linejoin="round" fill="none">
+      <path d="M 70 140 L 70 70 L 140 70" />
+      <path d="M 372 70 L 442 70 L 442 140" />
+      <path d="M 70 372 L 70 442 L 140 442" />
+      <path d="M 372 442 L 442 442 L 442 372" />
+    </g>
+  </g>
+</svg>
