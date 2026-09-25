@@ -1,8 +1,10 @@
-# 画像ビューア（仮称）
+<img src="docs/images/glimpse-icon.png" width="96" alt="">
+
+# Glimpse
 
 サムネイル一覧で画像を眺めながら、選んだ画像（複数可）をそのままリサイズ・形式変換・切り抜き・連結できる Windows 用の画像ビューアです。
 
-[image-sizechange](https://github.com/HatoAttack/image-sizechange) の後継として開発しています。アプリの名前とアイコンは v1.0 で決める予定です。
+[image-sizechange](https://github.com/HatoAttack/image-sizechange) の後継として開発しています。
 
 ## 特長
 
@@ -21,7 +23,7 @@
 
 ## インストール・始め方
 
-1. [Releases](https://github.com/HatoAttack/ima-ge-viewer/releases/latest) から `ImageViewer.exe` をダウンロードします
+1. [Releases](https://github.com/HatoAttack/glimpse/releases/latest) から `Glimpse.exe` をダウンロードします
 2. 好きな場所に置いて起動します
 3. 初めはピクチャフォルダが開きます。フォルダは Ctrl+O・フォルダのドロップ・アドレスバーで開けます
 
@@ -55,7 +57,6 @@
 ## 今後の予定
 
 - [ ] 一覧がそのまま拡大表示に変わる 1 枚表示（フィルムストリップ・拡大 / 移動・GIF / WEBP アニメの再生）
-- [ ] v1.0 に向けたアプリの名前とアイコン
 
 UI の設計は [docs/ui-concept.md](docs/ui-concept.md) にまとめています。
 
@@ -63,14 +64,14 @@ UI の設計は [docs/ui-concept.md](docs/ui-concept.md) にまとめていま�
 
 不具合の報告・要望・プルリクエストを歓迎します。
 
-- **不具合の報告・要望**: [Issues](https://github.com/HatoAttack/ima-ge-viewer/issues) に書いてください。不具合は、再現する手順・画像の形式・Windows のバージョンがあると助かります
+- **不具合の報告・要望**: [Issues](https://github.com/HatoAttack/glimpse/issues) に書いてください。不具合は、再現する手順・画像の形式・Windows のバージョンがあると助かります
 - **プルリクエスト**: 大きな変更は先に Issue で相談してもらえると行き違いがありません
 
 開発に必要なもの: Windows・[.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
 
 ```
-git clone https://github.com/HatoAttack/ima-ge-viewer.git
-cd ima-ge-viewer
+git clone https://github.com/HatoAttack/glimpse.git
+cd glimpse
 dotnet run --project src/ImageViewer.App
 dotnet run --project tests/ImageViewer.Tests
 ```

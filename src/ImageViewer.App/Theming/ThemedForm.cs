@@ -11,6 +11,11 @@ public class ThemedForm : Form
     // ダイアログを作ったとき・最後に塗ったときの配色（文字の色を新しい配色の同じ役割の色に置き換えるため）
     private Palette _palette = Theme.Current;
 
+    public ThemedForm()
+    {
+        Icon = AppIcon.Current;
+    }
+
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);

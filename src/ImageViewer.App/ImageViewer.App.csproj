@@ -7,9 +7,16 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>ImageViewer.App</RootNamespace>
-    <AssemblyName>ImageViewer</AssemblyName>
+    <AssemblyName>Glimpse</AssemblyName>
+    <Product>Glimpse</Product>
+    <ApplicationIcon>Glimpse.ico</ApplicationIcon>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- exe のアイコン（ApplicationIcon）と同じものを、ウィンドウのアイコン用に埋め込む -->
+    <EmbeddedResource Include="Glimpse.ico" LogicalName="Glimpse.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\ImageViewer.Core\ImageViewer.Core.csproj" />

@@ -9,17 +9,17 @@ static class UpdateTests
         const string json = """
             {
               "tag_name": "v0.1.4",
-              "html_url": "https://github.com/HatoAttack/ima-ge-viewer/releases/tag/v0.1.4",
+              "html_url": "https://github.com/HatoAttack/glimpse/releases/tag/v0.1.4",
               "body": "## 追加\r\n- フォルダー名の変更",
               "assets": [
-                { "name": "ImageViewer.exe.sha256", "size": 81, "browser_download_url": "https://example.invalid/ImageViewer.exe.sha256" },
-                { "name": "ImageViewer.exe", "size": 72445677, "browser_download_url": "https://example.invalid/ImageViewer.exe" }
+                { "name": "Glimpse.exe.sha256", "size": 81, "browser_download_url": "https://example.invalid/Glimpse.exe.sha256" },
+                { "name": "Glimpse.exe", "size": 72445677, "browser_download_url": "https://example.invalid/Glimpse.exe" }
               ]
             }
             """;
         var r = UpdateChecker.Parse(json);
         check(r != null && r.Version == new Version(0, 1, 4) && r.Tag == "v0.1.4" && r.ExeSize == 72445677
-              && r.ExeUrl!.EndsWith("/ImageViewer.exe") && r.Sha256Url!.EndsWith(".sha256") && r.Notes.Contains("フォルダー名"),
+              && r.ExeUrl!.EndsWith("/Glimpse.exe") && r.Sha256Url!.EndsWith(".sha256") && r.Notes.Contains("フォルダー名"),
             "リリース情報を読む（バージョン・exe・チェックサム・説明文）");
         var noAssets = UpdateChecker.Parse("""{ "tag_name": "v0.1.3", "assets": [] }""");
         check(noAssets != null && noAssets.ExeUrl == null && noAssets.Sha256Url == null, "exe が付いていないリリースも読める（自動更新はしない）");
@@ -34,12 +34,12 @@ static class UpdateTests
 
         // ---- チェックサム ----
         const string abc = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
-        check(UpdateChecker.ParseSha256($"{abc.ToUpperInvariant()}  ImageViewer.exe") == abc && UpdateChecker.ParseSha256(abc + "\n") == abc
+        check(UpdateChecker.ParseSha256($"{abc.ToUpperInvariant()}  Glimpse.exe") == abc && UpdateChecker.ParseSha256(abc + "\n") == abc
               && UpdateChecker.ParseSha256("not a hash") == null, "チェックサムのファイルを読む（sha256sum 形式・値だけ・大文字）");
 
         // ---- 説明文の表示 ----
-        string plain = UpdateChecker.NotesToPlainText("はじめに `ImageViewer.exe` を\r\n\r\n## 追加\n- **F2**: 名前の変更\n#");
-        check(plain == string.Join(Environment.NewLine, "はじめに ImageViewer.exe を", "", "【追加】", "- F2: 名前の変更", ""),
+        string plain = UpdateChecker.NotesToPlainText("はじめに `Glimpse.exe` を\r\n\r\n## 追加\n- **F2**: 名前の変更\n#");
+        check(plain == string.Join(Environment.NewLine, "はじめに Glimpse.exe を", "", "【追加】", "- F2: 名前の変更", ""),
             "説明文: 見出しは【】、** と ` は外す（中身の無い # は消す）");
         string upd = Path.Combine(dir, "update");
         Directory.CreateDirectory(upd);
@@ -48,7 +48,7 @@ static class UpdateTests
         check(SelfUpdate.ComputeSha256(abcFile) == abc, "ファイルのチェックサムを計算");
 
         // ---- 入れ替え ----
-        string exe = Path.Combine(upd, "ImageViewer.exe"), fresh = SelfUpdate.NewPath(exe);
+        string exe = Path.Combine(upd, "Glimpse.exe"), fresh = SelfUpdate.NewPath(exe);
         File.WriteAllText(exe, "old");
         File.WriteAllText(fresh, "new");
         SelfUpdate.Swap(exe, fresh);

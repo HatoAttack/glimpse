@@ -1,4 +1,4 @@
-// 画像ビューア - メイン画面
+// Glimpse - メイン画面
 using ImageViewer.App.Chrome;
 using ImageViewer.App.Commands;
 using ImageViewer.App.Dialogs;
@@ -21,7 +21,7 @@ namespace ImageViewer.App;
 
 public class MainForm : Form, ICommandHost, ISettingsAccess
 {
-    public const string AppTitle = "画像ビューア";
+    public const string AppTitle = "Glimpse";
 
     private readonly CommandRegistry _registry = new();
     private readonly ThumbnailService _thumbnails;
@@ -116,6 +116,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     public MainForm(string? initialFolder = null)
     {
         Text = AppTitle;
+        Icon = AppIcon.Current;
         Font = new Font("Yu Gothic UI", 9F);
         ClientSize = new Size(980, 700);
         StartPosition = FormStartPosition.CenterScreen;
@@ -1315,10 +1316,10 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
     /// <summary>
     /// 自分で入れ替えられる exe（リリース用の単一ファイル）のパス。
-    /// 開発用のビルド（横に ImageViewer.dll がある）では null（確認はするが入れ替えない）
+    /// 開発用のビルド（横に Glimpse.dll がある）では null（確認はするが入れ替えない）
     /// </summary>
     private static string? UpdatableExe =>
-        Environment.ProcessPath is string exe && !File.Exists(Path.Combine(Path.GetDirectoryName(exe) ?? "", "ImageViewer.dll")) ? exe : null;
+        Environment.ProcessPath is string exe && !File.Exists(Path.Combine(Path.GetDirectoryName(exe) ?? "", typeof(MainForm).Assembly.GetName().Name + ".dll")) ? exe : null;
 
     private void SetUpUpdateCheck()
     {

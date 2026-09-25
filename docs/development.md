@@ -20,6 +20,8 @@ dotnet run --project tests/ImageViewer.Tests    # テスト
 
 .NET 8 + WinForms + ImageSharp。
 
+アイコンの元は `docs/images/glimpse-icon.svg`。これを 512px の PNG にしてから、16〜256px を入れた `src/ImageViewer.App/Glimpse.ico` を作る（exe とウィンドウのアイコン）。
+
 ## コマンドの仕組み
 
 編集機能はすべて `IImageCommand`（`src/ImageViewer.Core/Commands`）として実装し、`MainForm.RegisterCommands` で登録する。
@@ -40,7 +42,7 @@ public sealed class CopyPathsCommand : ImageCommandBase
 
 ## 設定・保存データ
 
-`%LOCALAPPDATA%\ima-ge-viewer\` に保存する。どれも小さく上限があり、壊れていたら初期値で動く（起動できなくならない）。
+`%LOCALAPPDATA%\ima-ge-viewer\` に保存する（名前を Glimpse に変える前からの場所のまま）。どれも小さく上限があり、壊れていたら初期値で動く（起動できなくならない）。
 
 | ファイル | 内容 |
 |---|---|
@@ -61,12 +63,13 @@ public sealed class CopyPathsCommand : ImageCommandBase
 ## リリースの手順
 
 GitHub でリリースを公開すると、GitHub Actions（`.github/workflows/release.yml`）がテストしてから
-`ImageViewer.exe`（単一ファイル・インストール不要）を作り、そのリリースに添付する（数分かかる）。
+`Glimpse.exe`（単一ファイル・インストール不要）を作り、そのリリースに添付する（数分かかる）。
 
 1. main に変更を入れる
 2. リリースを作る（タグ `v0.1.4` のように。説明文も書く）
    - `gh release create v0.1.4 --target main --title v0.1.4 --notes "…"`、または GitHub の Releases 画面から
-3. Actions の「リリース」が終わると、リリースに `ImageViewer.exe` とチェックサム `ImageViewer.exe.sha256`（アプリの自動更新が使う）が付く。テストが通らなければ付かない（Actions で理由を確認）
+3. Actions の「リリース」が終わると、リリースに `Glimpse.exe` とチェックサム `Glimpse.exe.sha256`（アプリの自動更新が使う）が付く。テストが通らなければ付かない（Actions で理由を確認）
+   - 名前を変える前のバージョン（v0.1.5 まで）の自動更新のために、同じ中身の `ImageViewer.exe`・`ImageViewer.exe.sha256` も付く
 
 バージョン番号はタグから付く（`v0.1.4` → 0.1.4）。手元で作るときは次のとおり（出力は `publish` フォルダ）:
 
