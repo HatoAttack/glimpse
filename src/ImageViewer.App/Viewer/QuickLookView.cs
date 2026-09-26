@@ -6,6 +6,8 @@
 // - I で右側に詳細パネル（画像には重ねず、画像は残りの幅に合わせる）
 // - 開くときは一覧のサムネイルの位置から広がり、閉じるときは今の画像のサムネイルの位置へ縮んで戻る
 //   （Windows の「アニメーション効果」がオフなら動かさない）
+// - Z を押している間だけ 100%（画像の 1 画素を画面の 1 画素で、ぼかさずに）。見える範囲はカーソルの位置で決まる。
+//   ピントやノイズの確認用。原寸で読み直すのはこのときだけで、読んだものは次の画像へ移る・閉じるまで持つ
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Drawing.Drawing2D;
@@ -146,6 +148,8 @@ public sealed class QuickLookView : Control
     private void FinishClose()
     {
         EndZoom();
+        _actualSize = false;
+        ReleaseFull();
         Visible = false;
         _loadCts?.Cancel();
         foreach (var b in _cache.Values) b.Dispose();
@@ -174,6 +178,9 @@ public sealed class QuickLookView : Control
     private void ShowIndex(int index)
     {
         if (_zooming && !_closing && _index >= 0) EndZoom(); // 広がっている途中で送ったら、動きは打ち切る
+        // 送ったら画面に合わせた大きさに戻す。原寸で読んだものは捨てる
+        _actualSize = false;
+        if (_index >= 0 && _index < _items.Count && index != _index) ReleaseFull();
         _index = Math.Clamp(index, 0, _items.Count - 1);
         CurrentChanged?.Invoke(this, _index);
         Invalidate();
@@ -251,6 +258,7 @@ public sealed class QuickLookView : Control
             PaintZoom(g);
             return;
         }
+        if (_actualSize && PaintActualSize(g)) return;
         var file = _items[_index];
         int bar = Font.Height * 2;
         var area = ImageArea;
@@ -290,7 +298,8 @@ public sealed class QuickLookView : Control
 
         // 下: 操作の案内
         var bottom = new Rectangle(16, ClientSize.Height - bar, ContentWidth - 32, bar);
-        TextRenderer.DrawText(g, $"← → 前後    {KeyName(MarkKey)} チェック    {KeyName(MarkNextKey)} チェックして次へ    I 詳細    Space / Esc 閉じる",
+        string actualSize = ActualSizeKeyFree ? "    Z 100%" : "";
+        TextRenderer.DrawText(g, $"← → 前後    {KeyName(MarkKey)} チェック    {KeyName(MarkNextKey)} チェックして次へ{actualSize}    I 詳細    Space / Esc 閉じる",
             Font, bottom, Color.Gray, TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPrefix);
     }
 
@@ -445,6 +454,130 @@ public sealed class QuickLookView : Control
         return Rectangle.FromLTRB(L(a.Left, b.Left), L(a.Top, b.Top), L(a.Right, b.Right), L(a.Bottom, b.Bottom));
     }
 
+    // ---- 100%（Z を押している間だけ） ----
+
+    private const Keys ActualSizeKey = Keys.Z;
+
+    /// <summary>チェックのキー（settings.json で変えられる）を Z にしていたら、そちらを優先して 100% は使わない</summary>
+    private bool ActualSizeKeyFree => MarkKey != ActualSizeKey && MarkNextKey != ActualSizeKey;
+    private bool _actualSize;             // Z を押している間
+    private Bitmap? _full;                // 原寸で読んだ今の画像
+    private string? _fullPath;            // 原寸で読んだ（読んでいる）画像
+    private Size _fullSize;               // 原寸の大きさ（読み終わる前はヘッダーから）
+    private bool _fullFailed;
+    private CancellationTokenSource? _fullCts;
+
+    private void BeginActualSize()
+    {
+        // Space を押し続けて見ているとき（離したら閉じる）は使わない。ちらっと見るだけの表示なので
+        if (_actualSize || !_spaceReleased || _zooming || _index < 0) return;
+        _actualSize = true;
+        _ = LoadFullAsync();
+        Invalidate();
+    }
+
+    private void EndActualSize()
+    {
+        if (!_actualSize) return;
+        _actualSize = false;
+        Invalidate();
+    }
+
+    /// <summary>今の画像を原寸で読む。先にヘッダーで大きさを調べ、読み終わるまでは今の画像を引き伸ばして見せる</summary>
+    private async Task LoadFullAsync()
+    {
+        string path = _items[_index].FullName;
+        if (string.Equals(_fullPath, path, StringComparison.OrdinalIgnoreCase)) return; // 読み込み済み・読み込み中
+        ReleaseFull();
+        _fullPath = path;
+        var cts = _fullCts = new CancellationTokenSource();
+        try
+        {
+            var header = await Task.Run(() => ImageLoader.Identify(path));
+            if (cts.IsCancellationRequested) return;
+            if (header != null)
+            {
+                _fullSize = new Size(header.Width, header.Height);
+                Invalidate();
+            }
+            var bmp = await Task.Run(() =>
+            {
+                using var image = ImageLoader.Load(path, LoadOptions.Full);
+                return ThumbnailGenerator.ToPArgbBitmap(image);
+            });
+            if (cts.IsCancellationRequested)
+            {
+                bmp.Dispose(); // 次の画像へ移った・閉じた
+                return;
+            }
+            _full = bmp;
+            _fullSize = bmp.Size;
+        }
+        catch (Exception) // 大きすぎてメモリが足りない場合も含む
+        {
+            if (cts.IsCancellationRequested) return;
+            _fullFailed = true;
+        }
+        Invalidate();
+    }
+
+    private void ReleaseFull()
+    {
+        _fullCts?.Cancel();
+        _fullCts = null;
+        _full?.Dispose();
+        _full = null;
+        _fullPath = null;
+        _fullSize = Size.Empty;
+        _fullFailed = false;
+    }
+
+    /// <summary>100% で描く。原寸の大きさがまだ分からない・読めなかったときは false（いつもの表示のまま）</summary>
+    private bool PaintActualSize(Graphics g)
+    {
+        if (_fullFailed || _fullSize.IsEmpty) return false;
+        Image? image = _full;
+        if (image == null)
+        {
+            // 読み終わるまでは、今の画像を原寸の大きさに引き伸ばして見せる
+            if (CurrentImage() is not var (current, _)) return false;
+            image = current;
+        }
+
+        // 画像の上をカーソルで見て回る: 表示領域の端にカーソルがあれば、画像のその端が見える
+        var view = new Rectangle(0, 0, ContentWidth, ClientSize.Height);
+        var cursor = PointToClient(Cursor.Position);
+        int Offset(int imageLength, int viewLength, int at) => imageLength <= viewLength
+            ? (viewLength - imageLength) / 2
+            : -(int)Math.Round((imageLength - viewLength) * Math.Clamp(at / (double)Math.Max(1, viewLength - 1), 0, 1));
+        var dest = new Rectangle(Offset(_fullSize.Width, view.Width, cursor.X), Offset(_fullSize.Height, view.Height, cursor.Y),
+            _fullSize.Width, _fullSize.Height);
+
+        g.PixelOffsetMode = PixelOffsetMode.Half;
+        if (image == _full)
+        {
+            // 画素をそのまま写す（拡大縮小しないので、ぼかさない）。見えている部分だけ描く
+            var visible = Rectangle.Intersect(dest, view);
+            var source = new Rectangle(visible.X - dest.X, visible.Y - dest.Y, visible.Width, visible.Height);
+            g.InterpolationMode = InterpolationMode.NearestNeighbor;
+            g.DrawImage(_full, visible, source, GraphicsUnit.Pixel);
+        }
+        else
+        {
+            g.InterpolationMode = InterpolationMode.Bilinear;
+            g.DrawImage(image, dest);
+        }
+
+        // 左上に倍率（読み込み中はそのことも）
+        string label = _full == null ? "100%  読み込み中…" : "100%";
+        var size = TextRenderer.MeasureText(label, Font);
+        var box = new Rectangle(12, 12, size.Width + 16, size.Height + 8);
+        using (var back = new SolidBrush(Color.FromArgb(160, 0, 0, 0))) g.FillRectangle(back, box);
+        TextRenderer.DrawText(g, label, Font, box, Color.White,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+        return true;
+    }
+
     protected override void OnResize(EventArgs e)
     {
         base.OnResize(e);
@@ -495,6 +628,7 @@ public sealed class QuickLookView : Control
                 case Keys.End: ShowIndex(_items.Count - 1); break;
                 case Keys.Escape: Close(); break;
                 case Keys.I when !e.Control && !e.Alt: ToggleDetails(); break;
+                case ActualSizeKey when !e.Control && !e.Alt: BeginActualSize(); break;
                 // 開いたときの Space を押し続けている間（キーリピート）は閉じない
                 case Keys.Space when _spaceReleased: Close(); break;
                 default: return;
@@ -507,6 +641,7 @@ public sealed class QuickLookView : Control
     protected override void OnKeyUp(KeyEventArgs e)
     {
         base.OnKeyUp(e);
+        if (e.KeyCode == ActualSizeKey) EndActualSize();
         if (e.KeyCode != Keys.Space || _spaceReleased) return;
         _spaceReleased = true;
         // 開いたときの Space を長く押していた = 「押している間だけ」見たい → 離したら閉じる
@@ -521,6 +656,12 @@ public sealed class QuickLookView : Control
         else if (e.Delta > 0 && _index > 0) ShowIndex(_index - 1);
     }
 
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        base.OnMouseMove(e);
+        if (_actualSize) Invalidate(); // 100% のときはカーソルで見える範囲が動く
+    }
+
     protected override void OnMouseDoubleClick(MouseEventArgs e)
     {
         base.OnMouseDoubleClick(e);
@@ -530,6 +671,7 @@ public sealed class QuickLookView : Control
     protected override void OnLostFocus(EventArgs e)
     {
         base.OnLostFocus(e);
+        EndActualSize(); // Z を離したことが届かないので戻す
         // 別の操作（メニュー・ダイアログ等）に移ったら、押し続けの判定はやめる
         _spaceReleased = true;
     }
@@ -541,6 +683,7 @@ public sealed class QuickLookView : Control
             _loadCts?.Cancel();
             _zoomTimer.Dispose();
             _backdrop?.Dispose();
+            ReleaseFull();
             foreach (var b in _cache.Values) b.Dispose();
             _cache.Clear();
         }
