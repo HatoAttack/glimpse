@@ -272,6 +272,18 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _quickLook.FrameSaved += async (_, path) => await FilesAddedAsync(Path.GetDirectoryName(path)!, Array.Empty<string>());
         // 補正して保存したら、前回の補正として覚え、一覧を読み直す（上書きならサムネイルが新しくなる。HEIC などは JPG が増える）
         _quickLook.Adjust.Last = _settings.LastAdjust?.Normalize();
+        // ウィンドウを閉じるとき（✕・Alt+F4）も、1 枚表示に保存していない補正があれば聞く。
+        // 聞いている間・保存している間はいったん閉じるのをやめ、よければ閉じ直す（Windows の終了のときは聞かない）
+        bool closeConfirmed = false;
+        FormClosing += async (_, e) =>
+        {
+            if (closeConfirmed || e.CloseReason is CloseReason.WindowsShutDown or CloseReason.TaskManagerClosing) return;
+            if (!_quickLook.HasUnsavedAdjust) return;
+            e.Cancel = true;
+            if (!await _quickLook.ConfirmLeaveAsync()) return;
+            closeConfirmed = true;
+            Close();
+        };
         _quickLook.ImageAdjusted += async (_, path) =>
         {
             ((ISettingsAccess)this).UpdateSettings(s => s with { LastAdjust = _quickLook.Adjust.Last });

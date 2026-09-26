@@ -214,6 +214,24 @@ public static class ImageLoader
         return image;
     }
 
+    /// <summary>WIC で読んだときのコマ・ページの数（ヘッダーだけ読む）。WIC で読めない・読めなければ null</summary>
+    public static int? WicFrameCount(string path)
+    {
+        if (!ImageFormats.IsWicFormat(path)) return null;
+        try
+        {
+            using var stream = File.OpenRead(path);
+            var decoder = Wpf.BitmapDecoder.Create(stream,
+                Wpf.BitmapCreateOptions.DelayCreation | Wpf.BitmapCreateOptions.IgnoreColorProfile, Wpf.BitmapCacheOption.None);
+            return decoder.Frames.Count;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or InvalidOperationException
+                                       or ArgumentException or System.Runtime.InteropServices.COMException or FileFormatException)
+        {
+            return null;
+        }
+    }
+
     /// <summary>埋め込みの色プロファイル（iPhone の HEIC は Display P3 等）があれば sRGB に変換する</summary>
     private static Wpf.BitmapSource ToSrgb(Wpf.BitmapFrame frame)
     {

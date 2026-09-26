@@ -612,16 +612,7 @@ public sealed class QuickLookView : Control
     private bool PaintActualSize(Graphics g)
     {
         if (_fullFailed || _fullSize.IsEmpty) return false;
-        // 原寸の画像。補正中は、原寸に補正をかけたものが裏で出来るまで null（その間は画面用の画像を引き伸ばして見せる）
-        Image? full = _full;
-        string? waiting = _full == null ? "読み込み中…" : null;
-        if (_full != null && Adjusting)
-        {
-            var (adjusted, state) = _adjustedFull.GetOrStart(_full, Adjust.Options, Invalidate);
-            full = adjusted;
-            if (adjusted == null) waiting = state == AdjustedBitmap.State.Failed ? "原寸には補正をかけられません（メモリ不足）" : "補正中…";
-        }
-        Image? image = full;
+        Image? image = _full;
         if (image == null)
         {
             // 読み終わるまでは、今の画像を原寸の大きさに引き伸ばして見せる
@@ -639,13 +630,21 @@ public sealed class QuickLookView : Control
             _fullSize.Width, _fullSize.Height);
 
         g.PixelOffsetMode = PixelOffsetMode.Half;
-        if (image == full)
+        if (image == _full)
         {
             // 画素をそのまま写す（拡大縮小しないので、ぼかさない）。見えている部分だけ描く
             var visible = Rectangle.Intersect(dest, view);
             var source = new Rectangle(visible.X - dest.X, visible.Y - dest.Y, visible.Width, visible.Height);
             g.InterpolationMode = InterpolationMode.NearestNeighbor;
-            g.DrawImage(image, visible, source, GraphicsUnit.Pixel);
+            if (Adjusting && !source.IsEmpty)
+            {
+                // 補正は見えている部分だけにかける（画面の大きさ程度なので、原寸の写真でも待たせない）
+                g.DrawImage(_adjustedFull.Get(_full, source, Adjust.Options), visible);
+            }
+            else
+            {
+                g.DrawImage(_full, visible, source, GraphicsUnit.Pixel);
+            }
         }
         else
         {
@@ -653,8 +652,8 @@ public sealed class QuickLookView : Control
             g.DrawImage(image, dest);
         }
 
-        // 左上に倍率（読み込み中・補正中はそのことも）
-        string label = waiting == null ? "100%" : $"100%  {waiting}";
+        // 左上に倍率（読み込み中はそのことも）
+        string label = _full == null ? "100%  読み込み中…" : "100%";
         var size = TextRenderer.MeasureText(label, Font);
         var box = new Rectangle(12, 12, size.Width + 16, size.Height + 8);
         using (var back = new SolidBrush(Color.FromArgb(160, 0, 0, 0))) g.FillRectangle(back, box);
@@ -997,13 +996,13 @@ public sealed class QuickLookView : Control
     private const Keys SaveKey = Keys.Control | Keys.S;
     private bool _comparing;                                  // 「補正前」を押している間
     private readonly AdjustedBitmap _adjustedView = new();    // 画面に合わせて読んだ画像に補正をかけたもの
-    private readonly AdjustedBitmap _adjustedFull = new();    // 100% 用に原寸で読んだ画像に補正をかけたもの
+    private readonly AdjustedBitmap _adjustedFull = new();    // 100% 用に原寸で読んだ画像の、見えている範囲に補正をかけたもの
 
     /// <summary>補正をかけて見せているか（パネルを開いていて、値が既定でなく、「補正前」を押していない）</summary>
     private bool Adjusting => Adjust.Visible && !_comparing && !Adjust.Options.IsIdentity;
 
-    /// <summary>保存していない補正があるか</summary>
-    private bool HasUnsavedAdjust => Adjust.Visible && !Adjust.Options.IsIdentity;
+    /// <summary>保存していない補正があるか（本体はウィンドウを閉じる前に見る）</summary>
+    public bool HasUnsavedAdjust => Adjust.Visible && !Adjust.Options.IsIdentity;
 
     private Image Adjusted(Bitmap source, AdjustedBitmap cache) => Adjusting ? cache.Get(source, Adjust.Options) : source;
 
@@ -1047,8 +1046,11 @@ public sealed class QuickLookView : Control
         _adjustedFull.Dispose();
     }
 
-    /// <summary>保存していない補正があれば、保存するか聞く。今の画像から離れてよければ true（捨てたときは値を戻してある）</summary>
-    private async Task<bool> ConfirmLeaveAsync()
+    /// <summary>
+    /// 保存していない補正があれば、保存するか聞く。今の画像から離れてよければ true（捨てたときは値を戻してある）。
+    /// 本体もウィンドウを閉じる前に呼ぶ
+    /// </summary>
+    public async Task<bool> ConfirmLeaveAsync()
     {
         if (!HasUnsavedAdjust) return true;
         if (Adjust.Saving) return false; // 保存が終わるまでは離れない
@@ -1150,68 +1152,30 @@ public sealed class QuickLookView : Control
     private string AdjustGuide => !KeyFree(AdjustKey) ? "" : Adjust.Visible ? "    Ctrl+S 保存    E 補正を閉じる" : "    E 補正";
 
     /// <summary>
-    /// 画像に補正をかけたもの。元の画像と値が同じ間は作り直さない。
-    /// 画面用（小さい）はその場で作り（Get）、原寸は裏で作る（GetOrStart。UI を止めない・メモリが足りなければあきらめる）
+    /// 画像（またはその一部）に補正をかけたもの。元の画像・範囲・値が同じ間は作り直さない。
+    /// 画面用は画像全体に、100% の原寸は見えている範囲だけにかける（どちらも画面の大きさ程度なので、その場で作る）
     /// </summary>
     private sealed class AdjustedBitmap : IDisposable
     {
-        public enum State { Ready, Pending, Failed }
-
         private Bitmap? _source;
+        private Rectangle _region;
         private AdjustOptions? _options;
         private Bitmap? _result;
-        private bool _failed;                  // _source / _options で作れなかった
-        private CancellationTokenSource? _cts; // 裏で作っている途中
 
-        public Bitmap Get(Bitmap source, AdjustOptions options)
+        /// <summary>画像全体に補正をかけたもの</summary>
+        public Bitmap Get(Bitmap source, AdjustOptions options) => Get(source, new Rectangle(Point.Empty, source.Size), options);
+
+        /// <summary>画像の region の範囲に補正をかけたもの（大きさは region と同じ）</summary>
+        public Bitmap Get(Bitmap source, Rectangle region, AdjustOptions options)
         {
-            if (_result != null && Matches(source, options)) return _result;
-            var result = Make(ReadPixels(source), source.Width, source.Height, options);
+            if (_result != null && ReferenceEquals(_source, source) && _region == region && _options == options) return _result;
+            var result = Make(source, region, options);
             Dispose();
-            (_source, _options, _result) = (source, options, result);
+            (_source, _region, _options, _result) = (source, region, options, result);
             return result;
         }
 
-        /// <summary>出来ていれば返す。まだなら裏で作り始め、出来たら ready を呼ぶ（UI のスレッドで）</summary>
-        public (Bitmap? Result, State State) GetOrStart(Bitmap source, AdjustOptions options, Action ready)
-        {
-            if (Matches(source, options))
-            {
-                if (_result != null) return (_result, State.Ready);
-                if (_failed) return (null, State.Failed);
-                if (_cts != null) return (null, State.Pending);
-            }
-            Dispose();
-            (_source, _options) = (source, options);
-            (byte[] Pixels, int Stride) read;
-            try
-            {
-                // 画素の読み出しだけは UI のスレッドで（描いている Bitmap を別のスレッドから触らない）
-                read = ReadPixels(source);
-            }
-            catch (Exception ex) when (ex is OutOfMemoryException or ArgumentException)
-            {
-                _failed = true;
-                return (null, State.Failed);
-            }
-            var cts = _cts = new CancellationTokenSource();
-            int w = source.Width, h = source.Height;
-            Task.Run(() => Make(read, w, h, options), cts.Token).ContinueWith(t =>
-            {
-                if (cts.IsCancellationRequested)
-                {
-                    if (t.IsCompletedSuccessfully) t.Result.Dispose(); // 値が変わった・捨てた
-                    return;
-                }
-                _cts = null;
-                if (t.IsCompletedSuccessfully) _result = t.Result;
-                else _failed = true; // メモリが足りない など
-                ready();
-            }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.FromCurrentSynchronizationContext());
-            return (null, State.Pending);
-        }
-
-        /// <summary>作ったものを引き取る（以後この入れ物は持たない）。まだ作っていなければ作る</summary>
+        /// <summary>作ったもの（画像全体）を引き取る（以後この入れ物は持たない）。まだ作っていなければ作る</summary>
         public Bitmap Take(Bitmap source, AdjustOptions options)
         {
             var result = Get(source, options);
@@ -1222,24 +1186,21 @@ public sealed class QuickLookView : Control
 
         public void Dispose()
         {
-            _cts?.Cancel();
-            _cts = null;
             _result?.Dispose();
-            (_source, _options, _result, _failed) = (null, null, null, false);
+            (_source, _region, _options, _result) = (null, Rectangle.Empty, null, null);
         }
 
-        private bool Matches(Bitmap source, AdjustOptions options) => ReferenceEquals(_source, source) && _options == options;
-
-        private static Bitmap Make((byte[] Pixels, int Stride) read, int width, int height, AdjustOptions options)
+        private static Bitmap Make(Bitmap source, Rectangle region, AdjustOptions options)
         {
-            var (pixels, stride) = read;
-            Adjuster.ApplyBgra(pixels, width, height, stride, options);
+            var (pixels, stride) = ReadPixels(source, region);
+            Adjuster.ApplyBgra(pixels, region.Width, region.Height, stride, options);
             Premultiply(pixels);
-            var result = new Bitmap(width, height, PixelFormat.Format32bppPArgb);
-            var data = result.LockBits(new Rectangle(0, 0, width, height), ImageLockMode.WriteOnly, PixelFormat.Format32bppPArgb);
+            var result = new Bitmap(region.Width, region.Height, PixelFormat.Format32bppPArgb);
+            var data = result.LockBits(new Rectangle(Point.Empty, region.Size), ImageLockMode.WriteOnly, PixelFormat.Format32bppPArgb);
             try
             {
-                Marshal.Copy(pixels, 0, data.Scan0, pixels.Length);
+                for (int y = 0; y < region.Height; y++)
+                    Marshal.Copy(pixels, y * stride, data.Scan0 + y * data.Stride, stride);
             }
             finally
             {
@@ -1250,22 +1211,24 @@ public sealed class QuickLookView : Control
 
         public static AdjustOptions Auto(Bitmap source)
         {
-            var (pixels, stride) = ReadPixels(source);
+            var (pixels, stride) = ReadPixels(source, new Rectangle(Point.Empty, source.Size));
             return Adjuster.AutoBgra(pixels, source.Width, source.Height, stride);
         }
 
         /// <summary>
-        /// 画素を BGRA の並び（1 行 = stride バイト）で読む。表示用の Bitmap は乗算済みアルファなので、
+        /// region の画素を BGRA の並び（1 行 = stride バイト）で読む。表示用の Bitmap は乗算済みアルファなので、
         /// 補正は保存のとき（ImageSharp の画像）と同じく乗算を外した色にかける（半透明のところで結果がずれないように）
         /// </summary>
-        private static (byte[] Pixels, int Stride) ReadPixels(Bitmap source)
+        private static (byte[] Pixels, int Stride) ReadPixels(Bitmap source, Rectangle region)
         {
-            var data = source.LockBits(new Rectangle(Point.Empty, source.Size), ImageLockMode.ReadOnly, PixelFormat.Format32bppPArgb);
-            byte[] pixels;
+            // 一部を取り出すときの Stride は画像全体の 1 行の長さなので、1 行ずつ region の幅だけ写す（詰めて並べる）
+            int stride = region.Width * 4;
+            var pixels = new byte[stride * region.Height];
+            var data = source.LockBits(region, ImageLockMode.ReadOnly, PixelFormat.Format32bppPArgb);
             try
             {
-                pixels = new byte[data.Stride * source.Height];
-                Marshal.Copy(data.Scan0, pixels, 0, pixels.Length);
+                for (int y = 0; y < region.Height; y++)
+                    Marshal.Copy(data.Scan0 + y * data.Stride, pixels, y * stride, stride);
             }
             finally
             {
@@ -1279,7 +1242,7 @@ public sealed class QuickLookView : Control
                 pixels[i + 1] = (byte)Math.Min(255, (pixels[i + 1] * 255 + a / 2) / a);
                 pixels[i + 2] = (byte)Math.Min(255, (pixels[i + 2] * 255 + a / 2) / a);
             }
-            return (pixels, data.Stride);
+            return (pixels, stride);
         }
 
         /// <summary>乗算済みアルファに戻す（透明な画素は色も 0）</summary>

@@ -152,6 +152,7 @@ static class AdjustTests
         check(Adjuster.FrameCount(P("pages.tif")) == 2 && tifRefused && File.ReadAllBytes(P("pages.tif")).SequenceEqual(tifBefore),
             "ファイル: 複数ページの TIFF も補正して保存しない（元のまま）");
         check(Adjuster.FrameCount(P("photo.jpg")) == 1, "コマの数: 静止画は 1");
+        check(ImageViewer.Core.Imaging.ImageLoader.WicFrameCount(P("pages.tif")) == 2, "コマの数: WIC でも複数ページの TIFF を数えられる（ImageSharp で読めない亜種用）");
 
         // ---- ファイル: WIC で読む画像はメタデータを残せないので、許可が無ければ保存しない ----
         string jxr = P("wic.jxr");
@@ -169,5 +170,6 @@ static class AdjustTests
             "ファイル: WIC で読む画像は、許可が無ければメタデータが消えるので保存しない");
         Adjuster.ApplyToFile(jxr, P("wic.jpg"), new AdjustOptions { Brightness = 30 }, allowMetadataLoss: true);
         check(File.Exists(P("wic.jpg")), "ファイル: 許可すれば WIC で読む画像も保存できる");
+        check(Adjuster.FrameCount(jxr) == 1, "コマの数: WIC で読む形式も数える");
     }
 }
