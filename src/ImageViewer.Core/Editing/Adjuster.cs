@@ -148,7 +148,7 @@ public static class Adjuster
     }
 
     /// <summary>
-    /// ファイルを読み、補正をかけて保存する（回転は反映する）。ImageSharp で読めた画像は EXIF などのメタデータを残す。
+    /// ファイルを読み、補正をかけて保存する（回転は反映する）。アニメ（コマが 2 つ以上）は NotSupportedException。ImageSharp で読めた画像は EXIF などのメタデータを残す。
     /// WIC で読んだ画像（HEIC / AVIF / RAW や、ImageSharp で読めない JPEG の亜種）は画素だけなので残せない
     /// </summary>
     /// <param name="allowMetadataLoss">
@@ -156,8 +156,9 @@ public static class Adjuster
     /// </param>
     public static void ApplyToFile(string src, string dst, AdjustOptions options, bool overwrite = true, bool allowMetadataLoss = false)
     {
-        // 回転補正済み・先頭フレームだけ（アニメーションは静止画になる）
-        using var image = ImageLoader.Load(src);
+        // 読むのは先頭のコマだけなので、アニメを保存すると静止画になってしまう。アニメは受けない
+        if (AnimationLoader.FrameCount(src) > 1) throw new NotSupportedException("アニメーションは補正できません（保存すると静止画になるため）");
+        using var image = ImageLoader.Load(src); // 回転補正済み
         if (!allowMetadataLoss && !KeepsMetadata(image)) throw new MetadataLossException(src);
         Apply(image, options);
         ImageSaver.Save(image, dst, overwrite);

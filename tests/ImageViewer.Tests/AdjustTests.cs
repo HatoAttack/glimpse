@@ -128,6 +128,18 @@ static class AdjustTests
         }
         check(Directory.GetFiles(dir, "*.tmp").Length == 0, "ファイル: 一時ファイルを残さない");
 
+        // ---- ファイル: アニメは保存しない（先頭のコマだけの静止画になってしまうため） ----
+        using (var anim = new Image<Rgba32>(8, 8, new Rgba32(255, 0, 0)))
+        {
+            anim.Frames.AddFrame(new Image<Rgba32>(8, 8, new Rgba32(0, 0, 255)).Frames.RootFrame);
+            anim.SaveAsGif(P("anim.gif"));
+        }
+        byte[] gifBefore = File.ReadAllBytes(P("anim.gif"));
+        bool animRefused = false;
+        try { Adjuster.ApplyToFile(P("anim.gif"), P("anim.gif"), new AdjustOptions { Brightness = 30 }); }
+        catch (NotSupportedException) { animRefused = true; }
+        check(animRefused && File.ReadAllBytes(P("anim.gif")).SequenceEqual(gifBefore), "ファイル: アニメは補正して保存しない（元のまま）");
+
         // ---- ファイル: WIC で読む画像はメタデータを残せないので、許可が無ければ保存しない ----
         string jxr = P("wic.jxr");
         if (!ImageViewer.Core.Imaging.WicCodecs.DecoderExtensions.Contains(".jxr"))
