@@ -112,5 +112,22 @@ static class AdjustTests
             check(img[5, 5].R > 110 && exif, "ファイル: 上書きで補正がかかり、EXIF は残る");
         }
         check(Directory.GetFiles(dir, "*.tmp").Length == 0, "ファイル: 一時ファイルを残さない");
+
+        // ---- ファイル: WIC で読む画像はメタデータを残せないので、許可が無ければ保存しない ----
+        string jxr = P("wic.jxr");
+        if (!ImageViewer.Core.Imaging.WicCodecs.DecoderExtensions.Contains(".jxr"))
+        {
+            Console.WriteLine("SKIP 色調補正の WIC 画像: この PC に JPEG XR のデコーダが無い");
+            return;
+        }
+        LoaderTests.EncodeAsync(jxr, Windows.Graphics.Imaging.BitmapEncoder.JpegXREncoderId, 40, 20, null).GetAwaiter().GetResult();
+        byte[] before = File.ReadAllBytes(jxr);
+        bool refused = false;
+        try { Adjuster.ApplyToFile(jxr, P("wic.jpg"), new AdjustOptions { Brightness = 30 }); }
+        catch (MetadataLossException) { refused = true; }
+        check(refused && !File.Exists(P("wic.jpg")) && File.ReadAllBytes(jxr).SequenceEqual(before),
+            "ファイル: WIC で読む画像は、許可が無ければメタデータが消えるので保存しない");
+        Adjuster.ApplyToFile(jxr, P("wic.jpg"), new AdjustOptions { Brightness = 30 }, allowMetadataLoss: true);
+        check(File.Exists(P("wic.jpg")), "ファイル: 許可すれば WIC で読む画像も保存できる");
     }
 }

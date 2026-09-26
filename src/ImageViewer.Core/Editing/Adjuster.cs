@@ -6,6 +6,12 @@ using SixLabors.ImageSharp.PixelFormats;
 
 namespace ImageViewer.Core.Editing;
 
+/// <summary>読んだ形式のせいで EXIF などのメタデータを残して保存できない（HEIC / RAW などを WIC で読んだとき）</summary>
+public sealed class MetadataLossException(string path) : NotSupportedException($"撮影情報（EXIF など）を残して保存できない画像です: {Path.GetFileName(path)}")
+{
+    public string Source { get; } = path;
+}
+
 /// <summary>補正の値。既定値（new()）なら何も変えない</summary>
 public sealed record AdjustOptions
 {
@@ -115,14 +121,24 @@ public static class Adjuster
         }
     }
 
-    /// <summary>ファイルを読み、補正をかけて保存する（回転は反映し、EXIF などのメタデータは残す）</summary>
-    public static void ApplyToFile(string src, string dst, AdjustOptions options, bool overwrite = true)
+    /// <summary>
+    /// ファイルを読み、補正をかけて保存する（回転は反映する）。ImageSharp で読めた画像は EXIF などのメタデータを残す。
+    /// WIC で読んだ画像（HEIC / AVIF / RAW や、ImageSharp で読めない JPEG の亜種）は画素だけなので残せない
+    /// </summary>
+    /// <param name="allowMetadataLoss">
+    /// false なら、メタデータを残せないときは保存せずに MetadataLossException（ユーザーに確かめてから true で呼び直す）
+    /// </param>
+    public static void ApplyToFile(string src, string dst, AdjustOptions options, bool overwrite = true, bool allowMetadataLoss = false)
     {
         // 回転補正済み・先頭フレームだけ（アニメーションは静止画になる）
         using var image = ImageLoader.Load(src);
+        if (!allowMetadataLoss && !KeepsMetadata(image)) throw new MetadataLossException(src);
         Apply(image, options);
         ImageSaver.Save(image, dst, overwrite);
     }
+
+    /// <summary>読み込んだ画像がメタデータを持っているか（ImageSharp で読めたか。WIC で読んだものは画素だけ）</summary>
+    public static bool KeepsMetadata(Image image) => image.Metadata.DecodedImageFormat != null;
 
     /// <summary>
     /// 自動補正の値（レベル補正だけを決め、ほかは 0）。明るさの分布の両端 AutoClip ずつを黒・白にし、
