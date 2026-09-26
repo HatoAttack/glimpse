@@ -924,9 +924,11 @@ public sealed class QuickLookView : Control
     /// <summary>今のコマを原寸の PNG で、元のファイルと同じフォルダに保存する</summary>
     private async Task SaveFrameAsync()
     {
-        if (_animFrames == null || _animPath == null) return;
+        // 保存中の Ctrl+S（押し続けたときのキーリピートも）は受けない。原寸で読み直すので、重なるとメモリを使いすぎる
+        if (_animFrames == null || _animPath == null || _savingFrame) return;
         string source = _animPath;
         int frame = _animFrame, count = _animFrames.Length;
+        _savingFrame = true;
         try
         {
             string saved = await Task.Run(() => AnimationLoader.SaveFrame(source, frame, count));
@@ -937,7 +939,13 @@ public sealed class QuickLookView : Control
         {
             ShowNotice($"フレームを保存できませんでした: {ex.Message}");
         }
+        finally
+        {
+            _savingFrame = false;
+        }
     }
+
+    private bool _savingFrame;
 
     // ---- お知らせ（画像の上に少しの間だけ出す） ----
 

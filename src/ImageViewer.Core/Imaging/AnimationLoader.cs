@@ -80,6 +80,8 @@ public static class AnimationLoader
         try
         {
             ct.ThrowIfCancellationRequested();
+            // 先頭のコマの静止画（ImageLoader.Load）と同じく EXIF の回転を直す（全部のコマにかかる）
+            image.Mutate(x => x.AutoOrient());
             var delays = image.Frames.Select(f => DelayMs(f.Metadata)).ToList();
             // 画面の大きさと、全部のコマの合計の上限の、小さいほうに合わせて縮める
             double scale = Math.Min(1.0, (double)maxEdge / Math.Max(image.Width, image.Height));
@@ -113,6 +115,7 @@ public static class AnimationLoader
         // そのコマまでだけ展開する（重ね合わせのため、前のコマは読む必要がある）
         using var image = Image.Load<Rgba32>(new DecoderOptions { MaxFrames = (uint)index + 1 }, path);
         if (index >= image.Frames.Count) throw new ArgumentOutOfRangeException(nameof(index), "そのコマはありません");
+        ImageLoader.AutoOrient(image, path, partial: true); // 再生と同じ向きで（EXIF の回転を直す）
         return image.Frames.CloneFrame(index);
     }
 

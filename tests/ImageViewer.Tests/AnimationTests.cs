@@ -54,6 +54,26 @@ static class AnimationTests
             check(f != null && Near(f[10, 20], Blue) && Near(f[70, 20], Red), "WEBP: 2 コマ目");
         }
 
+        // EXIF の Orientation=6（時計回り 90° で正立）: 元の左半分が上に来る。先頭のコマの静止画と同じ向きになること
+        string rotated = Path.Combine(dir, "rotated.webp");
+        using (var img = MakeAnimation(80, 40))
+        {
+            img.Metadata.ExifProfile = new SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifProfile();
+            img.Metadata.ExifProfile.SetValue(SixLabors.ImageSharp.Metadata.Profiles.Exif.ExifTag.Orientation, (ushort)6);
+            img.SaveAsWebp(rotated, new WebpEncoder { FileFormat = WebpFileFormatType.Lossless });
+        }
+        using (var first = ImageLoader.Load(rotated))
+        using (var anim = AnimationLoader.Load(rotated, maxEdge: 1000))
+        {
+            var f = anim?.Image.Frames[1];
+            check(anim != null && anim.Image.Width == first.Width && anim.Image.Height == first.Height && first.Width == 40,
+                $"EXIF の回転: 静止画と同じ向き（静止画 {first.Width}x{first.Height}・アニメ {anim?.Image.Width}x{anim?.Image.Height}）");
+            check(f != null && Near(f[20, 10], Blue) && Near(f[20, 70], Red), "EXIF の回転: 2 コマ目も回っている");
+        }
+        using (var frame = AnimationLoader.LoadFrame(rotated, 1))
+            check(frame.Width == 40 && frame.Height == 80 && Near(frame[20, 10], Blue) && Near(frame[20, 70], Red),
+                $"EXIF の回転: 原寸で読むコマ（100% 表示・フレーム保存）も回っている（{frame.Width}x{frame.Height}）");
+
         // ---- フレーム保存 ----
         check(Path.GetFileName(AnimationLoader.FramePath(gif, 11, 40)) == "anim_frame012.png", "保存先の名前: 元の名前_frame012.png（1 から数える）");
         check(Path.GetFileName(AnimationLoader.FramePath(gif, 0, 1500)) == "anim_frame0001.png", "保存先の名前: 桁はコマの数に合わせる");
