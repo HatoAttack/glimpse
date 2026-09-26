@@ -30,7 +30,10 @@ public static class ThumbnailGenerator
     }
 
     /// <summary>ImageSharp の画像を GDI+ の 32bppPArgb（乗算済みアルファ）Bitmap に変換</summary>
-    public static Bitmap ToPArgbBitmap(SixLabors.ImageSharp.Image<Rgba32> image)
+    public static Bitmap ToPArgbBitmap(SixLabors.ImageSharp.Image<Rgba32> image) => ToPArgbBitmap(image.Frames.RootFrame);
+
+    /// <summary>1 コマ分を変換（アニメのコマ用）</summary>
+    public static Bitmap ToPArgbBitmap(SixLabors.ImageSharp.ImageFrame<Rgba32> image)
     {
         int w = image.Width, h = image.Height;
         var bmp = new Bitmap(w, h, PixelFormat.Format32bppPArgb);
