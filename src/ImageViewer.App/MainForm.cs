@@ -1720,6 +1720,13 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
     private async Task LoadFolderAsync(string folder, NavKind kind = NavKind.New)
     {
+        // 別のフォルダへ移ると 1 枚表示は閉じるので、保存していない補正があれば先に聞く（やめたらツリーの選択を今のフォルダに戻す）
+        if (!string.Equals(_folder, folder, StringComparison.OrdinalIgnoreCase)
+            && _quickLook.HasUnsavedAdjust && !await _quickLook.ConfirmLeaveAsync())
+        {
+            if (_folder != null) await _tree.RevealAsync(_folder);
+            return;
+        }
         _loadCts?.Cancel();
         var cts = _loadCts = new CancellationTokenSource();
         bool reload = string.Equals(_folder, folder, StringComparison.OrdinalIgnoreCase);

@@ -1,5 +1,6 @@
 // 1 枚表示の右側の補正パネル（E で開け閉め）。スライダーとボタンだけで、画像にかけるのは 1 枚表示の側。
-// 1 枚表示は常に暗い地なのでダークの配色で描く。どの部品もフォーカスを取らない（← → などのキーは 1 枚表示が受ける）
+// 1 枚表示は常に暗い地なのでダークの配色で描く。どの部品もフォーカスを取らない（← → などのキーは 1 枚表示が受ける）。
+// ウィンドウが低くて入りきらないときは縦にスクロールする
 using System.Drawing.Drawing2D;
 using ImageViewer.App.Chrome;
 using ImageViewer.App.Theming;
@@ -7,7 +8,7 @@ using ImageViewer.Core.Editing;
 
 namespace ImageViewer.App.Viewer;
 
-public sealed class AdjustPanel : Control
+public sealed class AdjustPanel : ScrollableControl
 {
     private static Palette P => Palette.Dark;
 
@@ -60,6 +61,7 @@ public sealed class AdjustPanel : Control
         SetStyle(ControlStyles.Selectable, false);
         Width = LogicalToDeviceUnits(264);
         BackColor = P.Surface;
+        AutoScroll = true;
 
         _brightness = AddRow("明るさ", AdjustOptions.MinAmount, AdjustOptions.MaxAmount, 0, v => $"{v:+0;-0;0}");
         _contrast = AddRow("コントラスト", AdjustOptions.MinAmount, AdjustOptions.MaxAmount, 0, v => $"{v:+0;-0;0}");
@@ -187,7 +189,9 @@ public sealed class AdjustPanel : Control
     {
         base.OnLayout(levent);
         if (_save == null) return;
-        int x = Pad, width = Math.Max(1, Width - Pad * 2);
+        // 位置は中身の上端から数える（LabelTop・_levelsTop も）。部品は今のスクロールの分ずらして置く（AutoScrollPosition.Y は 0 か負）
+        int x = Pad, width = Math.Max(1, ClientSize.Width - Pad * 2), top = AutoScrollPosition.Y;
+        Rectangle At(int left, int y, int w, int h) => new(left, y + top, w, h);
         int y = LogicalToDeviceUnits(14) + Font.Height + LogicalToDeviceUnits(10); // 見出しの下
         foreach (var row in _rows)
         {
@@ -199,19 +203,28 @@ public sealed class AdjustPanel : Control
             }
             row.LabelTop = y;
             y += LabelHeight;
-            row.Slider.Bounds = new Rectangle(x, y, width, SliderHeight);
+            row.Slider.Bounds = At(x, y, width, SliderHeight);
             y += SliderHeight + LogicalToDeviceUnits(4);
         }
 
         y += Gap * 2;
         int half = (width - Gap) / 2;
-        _auto.Bounds = new Rectangle(x, y, half, ButtonHeight);
-        _last.Bounds = new Rectangle(x + half + Gap, y, width - half - Gap, ButtonHeight);
+        _auto.Bounds = At(x, y, half, ButtonHeight);
+        _last.Bounds = At(x + half + Gap, y, width - half - Gap, ButtonHeight);
         y += ButtonHeight + Gap;
-        _reset.Bounds = new Rectangle(x, y, half, ButtonHeight);
-        _compare.Bounds = new Rectangle(x + half + Gap, y, width - half - Gap, ButtonHeight);
+        _reset.Bounds = At(x, y, half, ButtonHeight);
+        _compare.Bounds = At(x + half + Gap, y, width - half - Gap, ButtonHeight);
         y += ButtonHeight + Gap * 2;
-        _save.Bounds = new Rectangle(x, y, width, ButtonHeight);
+        _save.Bounds = At(x, y, width, ButtonHeight);
+        // 中身の高さ（ウィンドウがこれより低ければスクロールバーが出る）
+        var content = new Size(0, y + ButtonHeight + Pad);
+        if (AutoScrollMinSize != content) AutoScrollMinSize = content;
+    }
+
+    protected override void OnScroll(ScrollEventArgs se)
+    {
+        base.OnScroll(se);
+        Invalidate(); // 手で描いている文字（項目名・値）を描き直す
     }
 
     /// <summary>パネルの上のホイールは 1 枚表示へ回さない（画像が送られないように）</summary>
@@ -228,21 +241,22 @@ public sealed class AdjustPanel : Control
         var g = e.Graphics;
         g.Clear(P.Surface);
         using (var line = new Pen(P.Border)) g.DrawLine(line, 0, 0, 0, Height);
-        int x = Pad, width = Math.Max(0, Width - Pad * 2);
+        int x = Pad, width = Math.Max(0, ClientSize.Width - Pad * 2), top = AutoScrollPosition.Y; // スクロールの分ずらす
         using var small = new Font(Font.FontFamily, Font.Size * 0.9f);
-        TextRenderer.DrawText(g, "補正", small, new Point(x, LogicalToDeviceUnits(14)), P.TextMuted, Flags & ~TextFormatFlags.VerticalCenter);
+        TextRenderer.DrawText(g, "補正", small, new Point(x, top + LogicalToDeviceUnits(14)), P.TextMuted, Flags & ~TextFormatFlags.VerticalCenter);
 
         foreach (var row in _rows)
         {
-            var r = new Rectangle(x, row.LabelTop, width, LabelHeight);
+            var r = new Rectangle(x, top + row.LabelTop, width, LabelHeight);
             TextRenderer.DrawText(g, row.Label, Font, r, P.Text, Flags);
             bool changed = row.Slider.Value != row.Default;
             TextRenderer.DrawText(g, row.Format(row.Slider.Value), Font, r, changed ? P.Text : P.TextMuted, Flags | TextFormatFlags.Right);
         }
         if (_levelsTop > 0)
         {
-            using (var line = new Pen(P.Border)) g.DrawLine(line, x, _levelsTop, x + width, _levelsTop);
-            TextRenderer.DrawText(g, "レベル補正", small, new Rectangle(x, _levelsTop + Gap, width, Font.Height), P.TextMuted, Flags);
+            int levels = top + _levelsTop;
+            using (var line = new Pen(P.Border)) g.DrawLine(line, x, levels, x + width, levels);
+            TextRenderer.DrawText(g, "レベル補正", small, new Rectangle(x, levels + Gap, width, Font.Height), P.TextMuted, Flags);
         }
     }
 
