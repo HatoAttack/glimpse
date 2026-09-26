@@ -10,6 +10,8 @@
 //   ピントやノイズの確認用。原寸で読み直すのはこのときだけで、読んだものは次の画像へ移る・閉じるまで持つ
 // - フィルムストリップ（前後の画像のサムネイルを下に 1 列）は、← → やホイールで送り始めたら下から出して、画像はその分縮む。
 //   一度出したら閉じるまで出したまま。Space を押し続けて見ているときは出さない。クリックでその画像へ
+// - GIF / WEBP のアニメは再生する（先に先頭のコマの静止画を見せ、裏で全部のコマを読む）。P で止める / 再開、, . で 1 コマずつ、
+//   Ctrl+S で今のコマを原寸の PNG で保存（フレーム保存）。持つのは今の画像のコマだけで、次の画像へ移る・閉じると捨てる
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Drawing.Drawing2D;
@@ -61,6 +63,9 @@ public sealed class QuickLookView : Control
     /// <summary>画像番号のサムネイルが描かれている位置（画面座標。見えていなければ null）</summary>
     public Func<int, Rectangle?>? ThumbBoundsProvider { get; set; }
 
+    /// <summary>フレーム保存でファイルを作った（本体が一覧を読み直す）。引数は作ったファイル</summary>
+    public event EventHandler<string>? FrameSaved;
+
     /// <summary>閉じる動きを始める前（本体はここで、1 枚表示の間だけ隠していた部品を戻して一覧を閉じた後の並びにする）</summary>
     public event EventHandler? Closing;
 
@@ -80,6 +85,9 @@ public sealed class QuickLookView : Control
         DetailsToggled?.Invoke(this, EventArgs.Empty);
     }
 
+    /// <summary>画面に合わせて読むときの長辺</summary>
+    private int MaxEdge => Math.Max(1, Math.Max(ContentWidth, ClientSize.Height));
+
     /// <summary>画像を描ける幅（詳細パネルを出していればその分を除く）</summary>
     private int ContentWidth => Math.Max(1, ClientSize.Width - (Details.Visible ? Details.Width : 0));
 
@@ -98,6 +106,12 @@ public sealed class QuickLookView : Control
         Controls.Add(Details);
         _zoomTimer.Tick += OnZoomTick;
         _filmTimer.Tick += OnFilmTick;
+        _animTimer.Tick += OnAnimTick;
+        _noticeTimer.Tick += (_, _) =>
+        {
+            ClearNotice();
+            Invalidate();
+        };
     }
 
     /// <param name="byKey">Space で開いた（押し続けたかどうかを離したときに判定する）</param>
@@ -154,6 +168,8 @@ public sealed class QuickLookView : Control
         EndZoom();
         _actualSize = false;
         ReleaseFull();
+        ReleaseAnimation();
+        ClearNotice();
         Visible = false;
         _loadCts?.Cancel();
         foreach (var b in _cache.Values) b.Dispose();
@@ -189,6 +205,12 @@ public sealed class QuickLookView : Control
         CurrentChanged?.Invoke(this, _index);
         Invalidate();
         _ = LoadAroundAsync();
+        if (!string.Equals(_animPath, _items[_index].FullName, StringComparison.OrdinalIgnoreCase))
+        {
+            ReleaseAnimation();
+            ClearNotice();
+            _ = LoadAnimationAsync(_items[_index].FullName, 0, paused: false);
+        }
     }
 
     /// <summary>今の画像 → 次 → 前 の順に読む。それ以外は捨てる</summary>
@@ -206,7 +228,7 @@ public sealed class QuickLookView : Control
             _cache.Remove(key);
         }
 
-        int maxEdge = Math.Max(1, Math.Max(ContentWidth, ClientSize.Height));
+        int maxEdge = MaxEdge;
         foreach (var path in wanted)
         {
             if (cts.IsCancellationRequested) return;
@@ -268,7 +290,7 @@ public sealed class QuickLookView : Control
         var area = ImageArea;
 
         Rectangle imageRect = Rectangle.Empty;
-        if (_cache.TryGetValue(file.FullName, out var bmp))
+        if (ShownBitmap(file) is Bitmap bmp)
         {
             imageRect = Fit(bmp.Size, area, allowUpscale: false);
             // フィルムストリップが出てくる間は速さを優先する（止まったら高い品質で描き直す）
@@ -296,7 +318,7 @@ public sealed class QuickLookView : Control
 
         // 上: ファイル名と位置、チェック数
         var top = new Rectangle(16, 0, ContentWidth - 32, bar);
-        TextRenderer.DrawText(g, $"{file.Name}    {_index + 1} / {_items.Count}", Font, top, Color.White,
+        TextRenderer.DrawText(g, $"{file.Name}    {_index + 1} / {_items.Count}{AnimationStatus}", Font, top, Color.White,
             TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         int marked = MarkedCount?.Invoke() ?? 0;
         if (marked > 0)
@@ -305,9 +327,19 @@ public sealed class QuickLookView : Control
 
         // 下: 操作の案内
         var bottom = new Rectangle(16, ClientSize.Height - bar, ContentWidth - 32, bar);
-        string actualSize = ActualSizeKeyFree ? "    Z 100%" : "";
-        TextRenderer.DrawText(g, $"← → 前後    {KeyName(MarkKey)} チェック    {KeyName(MarkNextKey)} チェックして次へ{actualSize}    I 詳細    Space / Esc 閉じる",
+        string actualSize = KeyFree(ActualSizeKey) ? "    Z 100%" : "";
+        TextRenderer.DrawText(g, $"← → 前後    {KeyName(MarkKey)} チェック    {KeyName(MarkNextKey)} チェックして次へ{actualSize}{AnimationGuide}    I 詳細    Space / Esc 閉じる",
             Font, bottom, Color.Gray, TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPrefix);
+
+        if (_notice != null && !imageRect.IsEmpty) PaintNotice(g, imageRect);
+    }
+
+    /// <summary>今の画像として描くもの: アニメを読み終えていれば今のコマ、まだなら先頭のコマの静止画</summary>
+    private Bitmap? ShownBitmap(FileInfo file)
+    {
+        if (_animFrames != null && string.Equals(_animPath, file.FullName, StringComparison.OrdinalIgnoreCase))
+            return _animFrames[_animFrame];
+        return _cache.TryGetValue(file.FullName, out var bmp) ? bmp : null;
     }
 
     /// <summary>画像を置く枠（上下の文字の行と、詳細パネルを除いた部分）</summary>
@@ -324,7 +356,7 @@ public sealed class QuickLookView : Control
     private (Image Image, Rectangle Rect)? CurrentImage()
     {
         var file = _items[_index];
-        if (_cache.TryGetValue(file.FullName, out var bmp)) return (bmp, Fit(bmp.Size, ImageArea, allowUpscale: false));
+        if (ShownBitmap(file) is Bitmap bmp) return (bmp, Fit(bmp.Size, ImageArea, allowUpscale: false));
         if (PlaceholderProvider?.Invoke(file) is Bitmap thumb) return (thumb, Fit(thumb.Size, ImageArea, allowUpscale: true));
         return null;
     }
@@ -465,20 +497,24 @@ public sealed class QuickLookView : Control
 
     private const Keys ActualSizeKey = Keys.Z;
 
-    /// <summary>チェックのキー（settings.json で変えられる）を Z にしていたら、そちらを優先して 100% は使わない</summary>
-    private bool ActualSizeKeyFree => MarkKey != ActualSizeKey && MarkNextKey != ActualSizeKey;
+    /// <summary>チェックのキー（settings.json で変えられる）と同じキーなら、チェックを優先して 100% やアニメの操作には使わない</summary>
+    private bool KeyFree(Keys key) => MarkKey != key && MarkNextKey != key;
     private bool _actualSize;             // Z を押している間
     private Bitmap? _full;                // 原寸で読んだ今の画像
     private string? _fullPath;            // 原寸で読んだ（読んでいる）画像
     private Size _fullSize;               // 原寸の大きさ（読み終わる前はヘッダーから）
     private bool _fullFailed;
     private CancellationTokenSource? _fullCts;
+    private bool _resumeAfterActualSize;  // 100% を見ている間だけアニメを止めた
 
     private void BeginActualSize()
     {
         // Space を押し続けて見ているとき（離したら閉じる）は使わない。ちらっと見るだけの表示なので
         if (_actualSize || !_spaceReleased || _zooming || _index < 0) return;
         _actualSize = true;
+        // アニメは止めて、今のコマを原寸で見る（離したら元どおり動かす）
+        _resumeAfterActualSize = _animFrames != null && !_animPaused;
+        if (_resumeAfterActualSize) PauseAnimation(true);
         _ = LoadFullAsync();
         Invalidate();
     }
@@ -487,6 +523,8 @@ public sealed class QuickLookView : Control
     {
         if (!_actualSize) return;
         _actualSize = false;
+        if (_resumeAfterActualSize) PauseAnimation(false);
+        _resumeAfterActualSize = false;
         Invalidate();
     }
 
@@ -494,9 +532,12 @@ public sealed class QuickLookView : Control
     private async Task LoadFullAsync()
     {
         string path = _items[_index].FullName;
-        if (string.Equals(_fullPath, path, StringComparison.OrdinalIgnoreCase)) return; // 読み込み済み・読み込み中
+        // アニメは今のコマを読む（読んだものはコマごとに「パス#コマ」で覚える）
+        int? frame = _animFrames != null && string.Equals(_animPath, path, StringComparison.OrdinalIgnoreCase) ? _animFrame : null;
+        string key = frame is int f ? $"{path}#{f}" : path;
+        if (string.Equals(_fullPath, key, StringComparison.OrdinalIgnoreCase)) return; // 読み込み済み・読み込み中
         ReleaseFull();
-        _fullPath = path;
+        _fullPath = key;
         var cts = _fullCts = new CancellationTokenSource();
         try
         {
@@ -509,12 +550,12 @@ public sealed class QuickLookView : Control
             }
             var bmp = await Task.Run(() =>
             {
-                using var image = ImageLoader.Load(path, LoadOptions.Full);
+                using var image = frame is int i ? AnimationLoader.LoadFrame(path, i) : ImageLoader.Load(path, LoadOptions.Full);
                 return ThumbnailGenerator.ToPArgbBitmap(image);
             });
             if (cts.IsCancellationRequested)
             {
-                bmp.Dispose(); // 次の画像へ移った・閉じた
+                bmp.Dispose(); // 次の画像・コマへ移った・閉じた
                 return;
             }
             _full = bmp;
@@ -723,6 +764,221 @@ public sealed class QuickLookView : Control
         g.Restore(state);
     }
 
+    // ---- アニメ（GIF / WEBP） ----
+
+    private const Keys PauseKey = Keys.P;
+    private const Keys SaveFrameKey = Keys.Control | Keys.S;
+    private readonly System.Windows.Forms.Timer _animTimer = new();
+    private string? _animPath;            // 読んだ（読んでいる）アニメ
+    private Bitmap[]? _animFrames;        // 全部のコマ（画面に合わせて縮めたもの）
+    private int[] _animDelays = Array.Empty<int>();
+    private int _animFrame;
+    private bool _animPaused;
+    private bool _animDownscaled;         // 元より縮めて読んだ
+    private int _animEdge;                // 読んだときの長辺の上限
+    private CancellationTokenSource? _animCts;
+
+    /// <summary>
+    /// 全部のコマを読んで再生を始める。コマが 1 つ・大きすぎて読めないときは先頭のコマの静止画のまま。
+    /// startFrame / paused は、広くなって読み直すときに今の状態を引き継ぐため
+    /// </summary>
+    private async Task LoadAnimationAsync(string path, int startFrame, bool paused)
+    {
+        if (!AnimationLoader.MayBeAnimated(path)) return;
+        _animCts?.Cancel();
+        var cts = _animCts = new CancellationTokenSource();
+        _animPath = path;
+        int maxEdge = MaxEdge;
+        (Bitmap[] Frames, int[] Delays, bool Downscaled)? loaded;
+        try
+        {
+            // 静止画の読み込み（今の画像と前後）と順番に。先頭のコマの静止画が先に出る
+            await _decodeGate.WaitAsync(cts.Token);
+            try
+            {
+                loaded = await Task.Run(() => DecodeAnimation(path, maxEdge, cts.Token), cts.Token);
+            }
+            finally
+            {
+                _decodeGate.Release();
+            }
+        }
+        catch (Exception) // 取り消し・読めない・メモリが足りない → 静止画のまま
+        {
+            return;
+        }
+        if (loaded is not var (frames, delays, downscaled)) return;
+        if (cts.IsCancellationRequested || !Visible)
+        {
+            foreach (var b in frames) b.Dispose(); // 別の画像へ移った・閉じた・読み直しが始まった
+            return;
+        }
+        DisposeAnimationFrames();
+        _animFrames = frames;
+        _animDelays = delays;
+        _animDownscaled = downscaled;
+        _animEdge = maxEdge;
+        _animFrame = Math.Clamp(startFrame, 0, frames.Length - 1);
+        _animPaused = paused;
+        if (_actualSize && !_animPaused)
+        {
+            // 100% を見ている間に読み終えた: 離すまで止めておく
+            _animPaused = _resumeAfterActualSize = true;
+        }
+        if (!_animPaused) StartAnimTimer();
+        Invalidate();
+    }
+
+    private static (Bitmap[], int[], bool)? DecodeAnimation(string path, int maxEdge, CancellationToken ct)
+    {
+        using var anim = AnimationLoader.Load(path, maxEdge, ct);
+        if (anim == null) return null;
+        var frames = new Bitmap[anim.Count];
+        try
+        {
+            for (int i = 0; i < frames.Length; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+                frames[i] = ThumbnailGenerator.ToPArgbBitmap(anim.Image.Frames[i]);
+            }
+        }
+        catch
+        {
+            foreach (var b in frames) b?.Dispose();
+            throw;
+        }
+        return (frames, anim.DelaysMs.ToArray(), anim.Downscaled);
+    }
+
+    private void DisposeAnimationFrames()
+    {
+        _animTimer.Stop();
+        if (_animFrames != null)
+            foreach (var b in _animFrames) b.Dispose();
+        _animFrames = null;
+    }
+
+    private void ReleaseAnimation()
+    {
+        _animCts?.Cancel();
+        _animCts = null;
+        DisposeAnimationFrames();
+        _animPath = null;
+        _animDelays = Array.Empty<int>();
+        _animFrame = 0;
+        _animPaused = _animDownscaled = _resumeAfterActualSize = false;
+        _animEdge = 0;
+    }
+
+    private void StartAnimTimer()
+    {
+        _animTimer.Interval = Math.Max(1, _animDelays[_animFrame]);
+        _animTimer.Start();
+    }
+
+    private void OnAnimTick(object? sender, EventArgs e)
+    {
+        _animTimer.Stop();
+        if (_animFrames == null || _animPaused || !Visible) return;
+        _animFrame = (_animFrame + 1) % _animFrames.Length;
+        StartAnimTimer();
+        Invalidate();
+    }
+
+    private void PauseAnimation(bool pause)
+    {
+        if (_animFrames == null) return;
+        _animPaused = pause;
+        _animTimer.Stop();
+        if (!pause) StartAnimTimer();
+        Invalidate();
+    }
+
+    /// <summary>1 コマ進める / 戻す（端では反対の端へ）。止めてから送る</summary>
+    private void StepAnimation(int delta)
+    {
+        if (_animFrames == null) return;
+        _resumeAfterActualSize = false; // コマを選んだら、100% をやめても止めたまま
+        PauseAnimation(true);
+        _animFrame = (_animFrame + delta + _animFrames.Length) % _animFrames.Length;
+        if (_actualSize) _ = LoadFullAsync(); // 100% で見ているなら、そのコマを原寸で読み直す
+        Invalidate();
+    }
+
+    /// <summary>上の行に出すアニメの状態（アニメでなければ空）</summary>
+    private string AnimationStatus => _animFrames == null ? ""
+        : $"    {(_animPaused ? "一時停止" : "再生中")}  コマ {_animFrame + 1} / {_animFrames.Length}";
+
+    /// <summary>下の操作の案内に足すアニメの操作（アニメでなければ空）</summary>
+    private string AnimationGuide
+    {
+        get
+        {
+            if (_animFrames == null) return "";
+            string pause = KeyFree(PauseKey) ? $"    P {(_animPaused ? "再生" : "一時停止")}" : "";
+            string step = KeyFree(Keys.Oemcomma) && KeyFree(Keys.OemPeriod) ? "    , . コマ送り" : "";
+            return $"{pause}{step}    Ctrl+S フレーム保存";
+        }
+    }
+
+    /// <summary>今のコマを原寸の PNG で、元のファイルと同じフォルダに保存する</summary>
+    private async Task SaveFrameAsync()
+    {
+        // 保存中の Ctrl+S（押し続けたときのキーリピートも）は受けない。原寸で読み直すので、重なるとメモリを使いすぎる
+        if (_animFrames == null || _animPath == null || _savingFrame) return;
+        string source = _animPath;
+        int frame = _animFrame, count = _animFrames.Length;
+        _savingFrame = true;
+        try
+        {
+            string saved = await Task.Run(() => AnimationLoader.SaveFrame(source, frame, count));
+            ShowNotice($"フレーム {frame + 1} を保存しました（{Path.GetFileName(saved)}）");
+            FrameSaved?.Invoke(this, saved);
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            ShowNotice($"フレームを保存できませんでした: {ex.Message}");
+        }
+        finally
+        {
+            _savingFrame = false;
+        }
+    }
+
+    private bool _savingFrame;
+
+    // ---- お知らせ（画像の上に少しの間だけ出す） ----
+
+    private readonly System.Windows.Forms.Timer _noticeTimer = new() { Interval = 2500 };
+    private string? _notice;
+
+    private void ShowNotice(string text)
+    {
+        if (!Visible) return;
+        _notice = text;
+        _noticeTimer.Stop();
+        _noticeTimer.Start();
+        Invalidate();
+    }
+
+    private void ClearNotice()
+    {
+        _noticeTimer.Stop();
+        _notice = null;
+    }
+
+    /// <summary>画像の上の端に、暗い地に乗せて出す</summary>
+    private void PaintNotice(Graphics g, Rectangle image)
+    {
+        var size = TextRenderer.MeasureText(_notice, Font);
+        var box = new Rectangle(0, 0, Math.Min(Math.Max(1, ContentWidth - 32), size.Width + 24), size.Height + 12);
+        box.X = Math.Clamp(image.X + (image.Width - box.Width) / 2, 16, Math.Max(16, ContentWidth - 16 - box.Width));
+        box.Y = image.Y + LogicalToDeviceUnits(12);
+        using (var back = new SolidBrush(Color.FromArgb(200, 0, 0, 0))) g.FillRectangle(back, box);
+        TextRenderer.DrawText(g, _notice, Font, box, Color.White,
+            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+    }
+
     protected override void OnResize(EventArgs e)
     {
         base.OnResize(e);
@@ -736,6 +992,9 @@ public sealed class QuickLookView : Control
         foreach (var b in _cache.Values) b.Dispose();
         _cache.Clear();
         _ = LoadAroundAsync();
+        // アニメは読み直しが重いので、縮めて読んでいて、前より広くなったときだけ（今のコマと止めているかはそのまま）
+        if (_animPath != null && _animFrames != null && _animDownscaled && MaxEdge > _animEdge)
+            _ = LoadAnimationAsync(_animPath, _animFrame, _animPaused);
     }
 
     // ---- 操作 ----
@@ -774,6 +1033,9 @@ public sealed class QuickLookView : Control
                 case Keys.Escape: Close(); break;
                 case Keys.I when !e.Control && !e.Alt: ToggleDetails(); break;
                 case ActualSizeKey when !e.Control && !e.Alt: BeginActualSize(); break;
+                case PauseKey when !e.Control && !e.Alt && _animFrames != null: PauseAnimation(!_animPaused); break;
+                case Keys.Oemcomma when !e.Control && !e.Alt && _animFrames != null: StepAnimation(-1); break;
+                case Keys.OemPeriod when !e.Control && !e.Alt && _animFrames != null: StepAnimation(+1); break;
                 // 開いたときの Space を押し続けている間（キーリピート）は閉じない
                 case Keys.Space when _spaceReleased: Close(); break;
                 default: return;
@@ -781,6 +1043,17 @@ public sealed class QuickLookView : Control
         }
         e.Handled = true;
         e.SuppressKeyPress = true;
+    }
+
+    /// <summary>Ctrl+S は本体のショートカット（設定で割り当てられていることもある）より先に受ける</summary>
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if (keyData == SaveFrameKey && Visible && !_closing && _animFrames != null)
+        {
+            _ = SaveFrameAsync();
+            return true;
+        }
+        return base.ProcessCmdKey(ref msg, keyData);
     }
 
     protected override void OnKeyUp(KeyEventArgs e)
@@ -838,6 +1111,9 @@ public sealed class QuickLookView : Control
             _loadCts?.Cancel();
             _zoomTimer.Dispose();
             _filmTimer.Dispose();
+            ReleaseAnimation();
+            _animTimer.Dispose();
+            _noticeTimer.Dispose();
             _backdrop?.Dispose();
             ReleaseFull();
             foreach (var b in _cache.Values) b.Dispose();

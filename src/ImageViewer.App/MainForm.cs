@@ -266,6 +266,8 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _quickLook.CurrentChanged += (_, index) => _grid.SelectImage(index);
         _quickLook.ToggleMarkRequested += (_, index) => _grid.ToggleImageMark(index);
         _quickLook.Closed += (_, _) => _grid.Focus();
+        // フレーム保存で作った PNG を一覧に出す（1 枚表示は同じ画像を表示したまま）
+        _quickLook.FrameSaved += async (_, path) => await FilesAddedAsync(Path.GetDirectoryName(path)!, Array.Empty<string>());
         _grid.MarksChanged += (_, _) => _quickLook.Invalidate();
         _thumbnails.ThumbnailReady += _ => _quickLook.OnThumbnailReady(); // フィルムストリップに出ているサムネイル
         // 別のフォルダへ移った・表示中の画像が消えたら閉じる。並べ替え・リネームなら同じ画像を表示し続ける

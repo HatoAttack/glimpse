@@ -74,6 +74,11 @@ Directory.CreateDirectory(dir);
 await LoaderTests.RunAsync(Check, dir);
 Directory.Delete(dir, true);
 
+// ---- GIF / WEBP アニメ・フレーム保存 ----
+Directory.CreateDirectory(dir);
+AnimationTests.Run(Check, dir);
+Directory.Delete(dir, true);
+
 // ---- サムネイル・グリッド ----
 Directory.CreateDirectory(dir);
 ThumbnailTests.Run(Check, dir);

@@ -150,11 +150,27 @@ public static class ImageLoader
                 decoderOptions = new DecoderOptions { MaxFrames = decoderOptions.MaxFrames, TargetSize = new Size(maxEdge, maxEdge) };
         }
         var image = Image.Load<Rgba32>(decoderOptions, path);
-        image.Mutate(x => x.AutoOrient());
+        AutoOrient(image, path, partial: options.FirstFrameOnly);
         // JPEG の縮小デコードは 1/2・1/4・1/8 単位なので、上限を超えた分はここで合わせる
         if (options.MaxEdge is int edge && Math.Max(image.Width, image.Height) > edge)
             image.Mutate(x => x.Resize(new ResizeOptions { Size = new Size(edge, edge), Mode = ResizeMode.Max }));
         return image;
+    }
+
+    /// <summary>
+    /// EXIF の回転を直す。アニメ WEBP は EXIF を全部のコマの後ろに置くので、途中のコマまでしか読まない（partial）と
+    /// 読み込んだ画像に EXIF が入らない。そのときはヘッダーから向きを調べる（Identify は最後まで見る）
+    /// </summary>
+    internal static void AutoOrient(Image<Rgba32> image, string path, bool partial)
+    {
+        if (partial && image.Metadata.ExifProfile == null
+            && string.Equals(Path.GetExtension(path), ".webp", StringComparison.OrdinalIgnoreCase)
+            && Image.Identify(path).Metadata.ExifProfile?.TryGetValue(ExifTag.Orientation, out var o) == true && o.Value is > 1 and <= 8)
+        {
+            image.Metadata.ExifProfile = new ExifProfile();
+            image.Metadata.ExifProfile.SetValue(ExifTag.Orientation, o.Value);
+        }
+        image.Mutate(x => x.AutoOrient());
     }
 
     // ---- WIC（WPF の画像 API 経由） ----
