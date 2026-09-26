@@ -298,7 +298,8 @@ public sealed class QuickLookView : Control
 
         // 下: 操作の案内
         var bottom = new Rectangle(16, ClientSize.Height - bar, ContentWidth - 32, bar);
-        TextRenderer.DrawText(g, $"← → 前後    {KeyName(MarkKey)} チェック    {KeyName(MarkNextKey)} チェックして次へ    Z 100%    I 詳細    Space / Esc 閉じる",
+        string actualSize = ActualSizeKeyFree ? "    Z 100%" : "";
+        TextRenderer.DrawText(g, $"← → 前後    {KeyName(MarkKey)} チェック    {KeyName(MarkNextKey)} チェックして次へ{actualSize}    I 詳細    Space / Esc 閉じる",
             Font, bottom, Color.Gray, TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPrefix);
     }
 
@@ -456,6 +457,9 @@ public sealed class QuickLookView : Control
     // ---- 100%（Z を押している間だけ） ----
 
     private const Keys ActualSizeKey = Keys.Z;
+
+    /// <summary>チェックのキー（settings.json で変えられる）を Z にしていたら、そちらを優先して 100% は使わない</summary>
+    private bool ActualSizeKeyFree => MarkKey != ActualSizeKey && MarkNextKey != ActualSizeKey;
     private bool _actualSize;             // Z を押している間
     private Bitmap? _full;                // 原寸で読んだ今の画像
     private string? _fullPath;            // 原寸で読んだ（読んでいる）画像
