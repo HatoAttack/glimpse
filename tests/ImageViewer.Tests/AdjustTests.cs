@@ -140,6 +140,19 @@ static class AdjustTests
         catch (NotSupportedException) { animRefused = true; }
         check(animRefused && File.ReadAllBytes(P("anim.gif")).SequenceEqual(gifBefore), "ファイル: アニメは補正して保存しない（元のまま）");
 
+        using (var pages = new Image<Rgba32>(8, 8, new Rgba32(255, 0, 0)))
+        {
+            pages.Frames.AddFrame(new Image<Rgba32>(8, 8, new Rgba32(0, 255, 0)).Frames.RootFrame);
+            pages.SaveAsTiff(P("pages.tif"));
+        }
+        byte[] tifBefore = File.ReadAllBytes(P("pages.tif"));
+        bool tifRefused = false;
+        try { Adjuster.ApplyToFile(P("pages.tif"), P("pages.tif"), new AdjustOptions { Brightness = 30 }); }
+        catch (NotSupportedException) { tifRefused = true; }
+        check(Adjuster.FrameCount(P("pages.tif")) == 2 && tifRefused && File.ReadAllBytes(P("pages.tif")).SequenceEqual(tifBefore),
+            "ファイル: 複数ページの TIFF も補正して保存しない（元のまま）");
+        check(Adjuster.FrameCount(P("photo.jpg")) == 1, "コマの数: 静止画は 1");
+
         // ---- ファイル: WIC で読む画像はメタデータを残せないので、許可が無ければ保存しない ----
         string jxr = P("wic.jxr");
         if (!ImageViewer.Core.Imaging.WicCodecs.DecoderExtensions.Contains(".jxr"))

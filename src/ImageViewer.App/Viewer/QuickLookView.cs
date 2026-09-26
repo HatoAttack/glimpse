@@ -1016,14 +1016,13 @@ public sealed class QuickLookView : Control
         }
         // Space を押し続けて見ているとき（離したら閉じる）は開かない。ちらっと見るだけの表示なので
         if (!_spaceReleased || _zooming || _index < 0 || _failed.Contains(_items[_index].FullName)) return;
-        // アニメかどうかは再生の読み込みを待たずにヘッダーで調べる（読み込み中や、大きすぎて再生しないアニメもあるため）
+        // アニメや複数ページの TIFF かどうかは、再生の読み込みを待たずにヘッダーで調べる（読み込み中や、大きすぎて再生しないアニメもあるため）
         string path = _items[_index].FullName;
-        bool animated = _animFrames != null
-                        || (AnimationLoader.MayBeAnimated(path) && await Task.Run(() => AnimationLoader.FrameCount(path)) > 1);
+        bool animated = _animFrames != null || await Task.Run(() => Adjuster.FrameCount(path)) > 1;
         if (!Visible || Adjust.Visible || _index < 0 || !string.Equals(_items[_index].FullName, path, StringComparison.OrdinalIgnoreCase)) return;
         if (animated)
         {
-            ShowNotice("アニメーションは補正できません（保存すると静止画になるため）");
+            ShowNotice(Adjuster.MultiFrameMessage);
             return;
         }
         ResetAdjust();
