@@ -143,7 +143,8 @@ static class LoaderTests
                 $"{label} 縮小読み込み 400x200 → {img.Width}x{img.Height}");
     }
 
-    static async Task EncodeAsync(string path, Guid encoderId, int w, int h, ushort? orientation)
+    /// <summary>WinRT のエンコーダで左半分が赤・右半分が青の画像を作る（WIC で読む形式のテスト画像用）</summary>
+    internal static async Task EncodeAsync(string path, Guid encoderId, int w, int h, ushort? orientation)
     {
         var bgra = new byte[w * h * 4];
         for (int y = 0; y < h; y++)
