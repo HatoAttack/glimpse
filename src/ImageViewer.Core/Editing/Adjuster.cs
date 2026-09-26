@@ -9,7 +9,7 @@ namespace ImageViewer.Core.Editing;
 /// <summary>読んだ形式のせいで EXIF などのメタデータを残して保存できない（HEIC / RAW などを WIC で読んだとき）</summary>
 public sealed class MetadataLossException(string path) : NotSupportedException($"撮影情報（EXIF など）を残して保存できない画像です: {Path.GetFileName(path)}")
 {
-    public string Source { get; } = path;
+    public string ImagePath { get; } = path;
 }
 
 /// <summary>補正の値。既定値（new()）なら何も変えない</summary>
@@ -148,7 +148,7 @@ public static class Adjuster
     }
 
     /// <summary>
-    /// ファイルを読み、補正をかけて保存する（回転は反映する）。ImageSharp で読めた画像は EXIF などのメタデータを残す。
+    /// ファイルを読み、補正をかけて保存する（回転は反映する）。アニメや複数ページの画像（コマが 2 つ以上）は NotSupportedException。ImageSharp で読めた画像は EXIF などのメタデータを残す。
     /// WIC で読んだ画像（HEIC / AVIF / RAW や、ImageSharp で読めない JPEG の亜種）は画素だけなので残せない
     /// </summary>
     /// <param name="allowMetadataLoss">
@@ -156,11 +156,39 @@ public static class Adjuster
     /// </param>
     public static void ApplyToFile(string src, string dst, AdjustOptions options, bool overwrite = true, bool allowMetadataLoss = false)
     {
-        // 回転補正済み・先頭フレームだけ（アニメーションは静止画になる）
-        using var image = ImageLoader.Load(src);
+        // 読むのは先頭のコマだけなので、アニメや複数ページの TIFF を保存すると残りが消えてしまう。受けない
+        int? frames = FrameCount(src);
+        if (frames > 1) throw new NotSupportedException(MultiFrameMessage);
+        // 数えられなかった画像は、ページが消えるかもしれないので上書きしない（別のファイルに書くならよい）
+        if (frames == null && string.Equals(Path.GetFullPath(src), Path.GetFullPath(dst), StringComparison.OrdinalIgnoreCase))
+            throw new NotSupportedException("ページの数を確かめられない画像なので、上書きしませんでした");
+        using var image = ImageLoader.Load(src); // 回転補正済み
         if (!allowMetadataLoss && !KeepsMetadata(image)) throw new MetadataLossException(src);
         Apply(image, options);
         ImageSaver.Save(image, dst, overwrite);
+    }
+
+    public const string MultiFrameMessage = "アニメーションや複数ページの画像は補正できません（保存すると先頭の 1 枚だけになるため）";
+
+    /// <summary>
+    /// コマ・ページの数（ヘッダーだけ読む）。GIF / WEBP のアニメ、複数ページの TIFF など。
+    /// ImageSharp で数えられなければ WIC で数える（ImageSharp で読めない TIFF の亜種・HEIC など）。どちらでも数えられなければ null
+    /// </summary>
+    public static int? FrameCount(string path)
+    {
+        if (ImageFormats.IsImageSharpFormat(path))
+        {
+            try
+            {
+                return Math.Max(1, Image.Identify(path).FrameMetadataCollection.Count);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException
+                                           or UnknownImageFormatException or InvalidImageContentException)
+            {
+                // WIC で数え直す
+            }
+        }
+        return ImageLoader.WicFrameCount(path);
     }
 
     /// <summary>読み込んだ画像がメタデータを持っているか（ImageSharp で読めたか。WIC で読んだものは画素だけ）</summary>

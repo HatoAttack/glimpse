@@ -128,6 +128,32 @@ static class AdjustTests
         }
         check(Directory.GetFiles(dir, "*.tmp").Length == 0, "ファイル: 一時ファイルを残さない");
 
+        // ---- ファイル: アニメは保存しない（先頭のコマだけの静止画になってしまうため） ----
+        using (var anim = new Image<Rgba32>(8, 8, new Rgba32(255, 0, 0)))
+        {
+            anim.Frames.AddFrame(new Image<Rgba32>(8, 8, new Rgba32(0, 0, 255)).Frames.RootFrame);
+            anim.SaveAsGif(P("anim.gif"));
+        }
+        byte[] gifBefore = File.ReadAllBytes(P("anim.gif"));
+        bool animRefused = false;
+        try { Adjuster.ApplyToFile(P("anim.gif"), P("anim.gif"), new AdjustOptions { Brightness = 30 }); }
+        catch (NotSupportedException) { animRefused = true; }
+        check(animRefused && File.ReadAllBytes(P("anim.gif")).SequenceEqual(gifBefore), "ファイル: アニメは補正して保存しない（元のまま）");
+
+        using (var pages = new Image<Rgba32>(8, 8, new Rgba32(255, 0, 0)))
+        {
+            pages.Frames.AddFrame(new Image<Rgba32>(8, 8, new Rgba32(0, 255, 0)).Frames.RootFrame);
+            pages.SaveAsTiff(P("pages.tif"));
+        }
+        byte[] tifBefore = File.ReadAllBytes(P("pages.tif"));
+        bool tifRefused = false;
+        try { Adjuster.ApplyToFile(P("pages.tif"), P("pages.tif"), new AdjustOptions { Brightness = 30 }); }
+        catch (NotSupportedException) { tifRefused = true; }
+        check(Adjuster.FrameCount(P("pages.tif")) == 2 && tifRefused && File.ReadAllBytes(P("pages.tif")).SequenceEqual(tifBefore),
+            "ファイル: 複数ページの TIFF も補正して保存しない（元のまま）");
+        check(Adjuster.FrameCount(P("photo.jpg")) == 1, "コマの数: 静止画は 1");
+        check(ImageViewer.Core.Imaging.ImageLoader.WicFrameCount(P("pages.tif")) == 2, "コマの数: WIC でも複数ページの TIFF を数えられる（ImageSharp で読めない亜種用）");
+
         // ---- ファイル: WIC で読む画像はメタデータを残せないので、許可が無ければ保存しない ----
         string jxr = P("wic.jxr");
         if (!ImageViewer.Core.Imaging.WicCodecs.DecoderExtensions.Contains(".jxr"))
@@ -144,5 +170,6 @@ static class AdjustTests
             "ファイル: WIC で読む画像は、許可が無ければメタデータが消えるので保存しない");
         Adjuster.ApplyToFile(jxr, P("wic.jpg"), new AdjustOptions { Brightness = 30 }, allowMetadataLoss: true);
         check(File.Exists(P("wic.jpg")), "ファイル: 許可すれば WIC で読む画像も保存できる");
+        check(Adjuster.FrameCount(jxr) == 1, "コマの数: WIC で読む形式も数える");
     }
 }

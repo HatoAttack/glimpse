@@ -270,6 +270,25 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _quickLook.Closed += (_, _) => _grid.Focus();
         // フレーム保存で作った PNG を一覧に出す（1 枚表示は同じ画像を表示したまま）
         _quickLook.FrameSaved += async (_, path) => await FilesAddedAsync(Path.GetDirectoryName(path)!, Array.Empty<string>());
+        // 補正して保存したら、前回の補正として覚え、一覧を読み直す（上書きならサムネイルが新しくなる。HEIC などは JPG が増える）
+        _quickLook.Adjust.Last = _settings.LastAdjust?.Normalize();
+        // ウィンドウを閉じるとき（✕・Alt+F4）も、1 枚表示に保存していない補正があれば聞く。
+        // 聞いている間・保存している間はいったん閉じるのをやめ、よければ閉じ直す（Windows の終了のときは聞かない）
+        bool closeConfirmed = false;
+        FormClosing += async (_, e) =>
+        {
+            if (closeConfirmed || e.CloseReason is CloseReason.WindowsShutDown or CloseReason.TaskManagerClosing) return;
+            if (!_quickLook.HasUnsavedAdjust) return;
+            e.Cancel = true;
+            if (!await _quickLook.ConfirmLeaveAsync()) return;
+            closeConfirmed = true;
+            Close();
+        };
+        _quickLook.ImageAdjusted += async (_, path) =>
+        {
+            ((ISettingsAccess)this).UpdateSettings(s => s with { LastAdjust = _quickLook.Adjust.Last });
+            await FilesAddedAsync(Path.GetDirectoryName(path)!, Array.Empty<string>());
+        };
         _grid.MarksChanged += (_, _) => _quickLook.Invalidate();
         _thumbnails.ThumbnailReady += _ => _quickLook.OnThumbnailReady(); // フィルムストリップに出ているサムネイル
         // 別のフォルダへ移った・表示中の画像が消えたら閉じる。並べ替え・リネームなら同じ画像を表示し続ける
@@ -788,15 +807,21 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         if (dlg.ShowDialog(this) == DialogResult.OK) SetHome(dlg.SelectedPath);
     }
 
+    // 戻る / 進むは履歴を動かしてから読みに行くので、保存していない補正の確認は履歴を動かす前にする（やめたら履歴もそのまま）
     private async Task GoBackAsync()
     {
+        if (!_history.CanGoBack || !await ConfirmUnsavedAdjustAsync()) return;
         if (_history.GoBack() is string path) await LoadFolderAsync(path, NavKind.Back);
     }
 
     private async Task GoForwardAsync()
     {
+        if (!_history.CanGoForward || !await ConfirmUnsavedAdjustAsync()) return;
         if (_history.GoForward() is string path) await LoadFolderAsync(path, NavKind.Forward);
     }
+
+    /// <summary>1 枚表示に保存していない補正があれば、保存するか聞く。先へ進んでよければ true</summary>
+    private async Task<bool> ConfirmUnsavedAdjustAsync() => !_quickLook.HasUnsavedAdjust || await _quickLook.ConfirmLeaveAsync();
 
     private async Task GoUpAsync()
     {
@@ -1701,6 +1726,12 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
     private async Task LoadFolderAsync(string folder, NavKind kind = NavKind.New)
     {
+        // 別のフォルダへ移ると 1 枚表示は閉じるので、保存していない補正があれば先に聞く（やめたらツリーの選択を今のフォルダに戻す）
+        if (!string.Equals(_folder, folder, StringComparison.OrdinalIgnoreCase) && !await ConfirmUnsavedAdjustAsync())
+        {
+            if (_folder != null) await _tree.RevealAsync(_folder);
+            return;
+        }
         _loadCts?.Cancel();
         var cts = _loadCts = new CancellationTokenSource();
         bool reload = string.Equals(_folder, folder, StringComparison.OrdinalIgnoreCase);

@@ -9,6 +9,9 @@ public sealed class ThinSlider : Control
 
     public event EventHandler? ValueChanged;
 
+    /// <summary>決まった配色で描く（1 枚表示の補正パネルは常にダーク）。null なら今のテーマ</summary>
+    public Theming.Palette? FixedPalette { get; set; }
+
     public ThinSlider()
     {
         SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer
@@ -105,11 +108,12 @@ public sealed class ThinSlider : Control
     {
         base.OnMouseWheel(e);
         Value += Math.Sign(e.Delta) * _step;
+        if (e is HandledMouseEventArgs handled) handled.Handled = true; // 親（1 枚表示など）へ回さない
     }
 
     protected override void OnPaint(PaintEventArgs e)
     {
-        var p = Theming.Theme.Current;
+        var p = FixedPalette ?? Theming.Theme.Current;
         var g = e.Graphics;
         int track = LogicalToDeviceUnits(4);
         float cy = Height / 2f;
