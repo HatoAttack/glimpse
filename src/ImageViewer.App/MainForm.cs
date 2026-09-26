@@ -267,6 +267,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _quickLook.ToggleMarkRequested += (_, index) => _grid.ToggleImageMark(index);
         _quickLook.Closed += (_, _) => _grid.Focus();
         _grid.MarksChanged += (_, _) => _quickLook.Invalidate();
+        _thumbnails.ThumbnailReady += _ => _quickLook.OnThumbnailReady(); // フィルムストリップに出ているサムネイル
         // 別のフォルダへ移った・表示中の画像が消えたら閉じる。並べ替え・リネームなら同じ画像を表示し続ける
         _grid.ContentsChanged += (_, _) => _quickLook.ItemsChanged(_grid.Items);
     }

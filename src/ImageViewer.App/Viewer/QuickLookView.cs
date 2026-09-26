@@ -8,6 +8,8 @@
 //   （Windows の「アニメーション効果」がオフなら動かさない）
 // - Z を押している間だけ 100%（画像の 1 画素を画面の 1 画素で、ぼかさずに）。見える範囲はカーソルの位置で決まる。
 //   ピントやノイズの確認用。原寸で読み直すのはこのときだけで、読んだものは次の画像へ移る・閉じるまで持つ
+// - フィルムストリップ（前後の画像のサムネイルを下に 1 列）は、← → やホイールで送り始めたら下から出して、画像はその分縮む。
+//   一度出したら閉じるまで出したまま。Space を押し続けて見ているときは出さない。クリックでその画像へ
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Drawing.Drawing2D;
@@ -95,6 +97,7 @@ public sealed class QuickLookView : Control
         Visible = false;
         Controls.Add(Details);
         _zoomTimer.Tick += OnZoomTick;
+        _filmTimer.Tick += OnFilmTick;
     }
 
     /// <param name="byKey">Space で開いた（押し続けたかどうかを離したときに判定する）</param>
@@ -104,6 +107,7 @@ public sealed class QuickLookView : Control
         if (_closing) FinishClose();
         _items = items;
         _openedByKey = byKey;
+        HideFilmstrip();
         _spaceReleased = !byKey;
         _openedFor.Restart();
         // サムネイルが見えていれば、そこから広がって開く（一覧の画面は隠れる前に撮る）
@@ -267,7 +271,9 @@ public sealed class QuickLookView : Control
         if (_cache.TryGetValue(file.FullName, out var bmp))
         {
             imageRect = Fit(bmp.Size, area, allowUpscale: false);
-            g.InterpolationMode = imageRect.Width < bmp.Width ? InterpolationMode.HighQualityBicubic : InterpolationMode.NearestNeighbor;
+            // フィルムストリップが出てくる間は速さを優先する（止まったら高い品質で描き直す）
+            g.InterpolationMode = _filmSliding ? InterpolationMode.Low
+                : imageRect.Width < bmp.Width ? InterpolationMode.HighQualityBicubic : InterpolationMode.NearestNeighbor;
             g.PixelOffsetMode = PixelOffsetMode.Half;
             g.DrawImage(bmp, imageRect);
         }
@@ -286,6 +292,7 @@ public sealed class QuickLookView : Control
         _lastImageRect = imageRect;
 
         if (IsMarked?.Invoke(_index) == true && !imageRect.IsEmpty) DrawCheck(g, imageRect);
+        if (_filmstrip) PaintFilmstrip(g);
 
         // 上: ファイル名と位置、チェック数
         var top = new Rectangle(16, 0, ContentWidth - 32, bar);
@@ -309,7 +316,7 @@ public sealed class QuickLookView : Control
         get
         {
             int bar = Font.Height * 2;
-            return new Rectangle(16, bar, Math.Max(1, ContentWidth - 32), Math.Max(1, ClientSize.Height - bar * 2));
+            return new Rectangle(16, bar, Math.Max(1, ContentWidth - 32), Math.Max(1, ClientSize.Height - bar * 2 - FilmstripShownHeight));
         }
     }
 
@@ -578,6 +585,144 @@ public sealed class QuickLookView : Control
         return true;
     }
 
+    // ---- フィルムストリップ ----
+
+    private const int FilmSlideMs = 180;
+    private readonly System.Windows.Forms.Timer _filmTimer = new() { Interval = 10 };
+    private readonly Stopwatch _filmClock = new();
+    private bool _filmstrip;              // 出している（閉じるまで出したまま）
+    private bool _filmSliding;            // 下から出てきている途中
+
+    private int FilmstripHeight => LogicalToDeviceUnits(84);
+    private int FilmThumbSize => FilmstripHeight - LogicalToDeviceUnits(20);
+    private int FilmGap => LogicalToDeviceUnits(6);
+
+    /// <summary>今フィルムストリップが取っている高さ（出てくる途中はその分だけ）</summary>
+    private int FilmstripShownHeight
+    {
+        get
+        {
+            if (!_filmstrip) return 0;
+            if (!_filmSliding) return FilmstripHeight;
+            double t = Math.Min(1.0, _filmClock.ElapsedMilliseconds / (double)FilmSlideMs);
+            return (int)Math.Round(FilmstripHeight * (1 - Math.Pow(1 - t, 3)));
+        }
+    }
+
+    /// <summary>フィルムストリップを置く場所（下の操作の案内の上。出てくる途中は下にずれている）</summary>
+    private Rectangle FilmstripBounds
+    {
+        get
+        {
+            int bar = Font.Height * 2;
+            int bottom = ClientSize.Height - bar;
+            return new Rectangle(0, bottom - FilmstripShownHeight, ContentWidth, FilmstripHeight);
+        }
+    }
+
+    /// <summary>← → やホイールで送る。送り始めたらフィルムストリップを出す（Space を押し続けて見ているときは出さない）</summary>
+    private void Navigate(int index)
+    {
+        if (_spaceReleased && !_filmstrip) ShowFilmstrip();
+        ShowIndex(index);
+    }
+
+    private void ShowFilmstrip()
+    {
+        _filmstrip = true;
+        if (AnimationsEnabled)
+        {
+            _filmSliding = true;
+            _filmClock.Restart();
+            _filmTimer.Start();
+        }
+        Invalidate();
+    }
+
+    private void HideFilmstrip()
+    {
+        _filmTimer.Stop();
+        _filmstrip = _filmSliding = false;
+    }
+
+    private void OnFilmTick(object? sender, EventArgs e)
+    {
+        if (_filmClock.ElapsedMilliseconds >= FilmSlideMs)
+        {
+            _filmTimer.Stop();
+            _filmSliding = false; // 止まった大きさで、高い品質で描き直す
+        }
+        Invalidate();
+    }
+
+    /// <summary>サムネイルが出来た（一覧と同じものを使うので、フィルムストリップに出ていれば描き直す）</summary>
+    public void OnThumbnailReady()
+    {
+        if (Visible && _filmstrip) Invalidate(FilmstripBounds);
+    }
+
+    /// <summary>フィルムストリップのそれぞれの枠（今の画像を真ん中にして、入るだけ左右に並べる）</summary>
+    private IEnumerable<(int Index, Rectangle Cell)> FilmstripCells()
+    {
+        var strip = FilmstripBounds;
+        int size = FilmThumbSize, pitch = size + FilmGap;
+        int y = strip.Y + (strip.Height - size) / 2;
+        int centerX = strip.X + (strip.Width - size) / 2;
+        int side = strip.Width / 2 / pitch + 1;
+        for (int i = Math.Max(0, _index - side); i <= Math.Min(_items.Count - 1, _index + side); i++)
+            yield return (i, new Rectangle(centerX + (i - _index) * pitch, y, size, size));
+    }
+
+    private int? FilmstripHitTest(Point p)
+    {
+        if (!FilmstripBounds.Contains(p)) return null;
+        foreach (var (i, cell) in FilmstripCells())
+            if (cell.Contains(p)) return i;
+        return null;
+    }
+
+    private void PaintFilmstrip(Graphics g)
+    {
+        var strip = FilmstripBounds;
+        var oldClip = g.Clip;
+        // 出てくる途中は、下の操作の案内の行に重ならないように切る
+        g.SetClip(Rectangle.FromLTRB(strip.Left, strip.Top, strip.Right, ClientSize.Height - Font.Height * 2));
+        using (var back = new SolidBrush(Color.FromArgb(34, 34, 34))) g.FillRectangle(back, strip);
+        g.InterpolationMode = InterpolationMode.Bilinear;
+        g.PixelOffsetMode = PixelOffsetMode.Half;
+        using var empty = new SolidBrush(Color.FromArgb(52, 52, 52));
+        using var mark = new SolidBrush(Color.FromArgb(232, 112, 0));
+        foreach (var (i, cell) in FilmstripCells())
+        {
+            if (!cell.IntersectsWith(strip)) continue;
+            if (PlaceholderProvider?.Invoke(_items[i]) is Bitmap thumb)
+            {
+                var r = Fit(thumb.Size, cell, allowUpscale: true);
+                g.DrawImage(thumb, r);
+                if (i != _index)
+                    using (var dim = new SolidBrush(Color.FromArgb(90, 0, 0, 0))) g.FillRectangle(dim, r); // 今の画像以外は少し暗く
+            }
+            else
+            {
+                g.FillRectangle(empty, cell); // サムネイルがまだ無い
+            }
+            if (IsMarked?.Invoke(i) == true)
+            {
+                int d = LogicalToDeviceUnits(10);
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.FillEllipse(mark, cell.X + 4, cell.Y + 4, d, d);
+                g.SmoothingMode = SmoothingMode.None;
+            }
+            if (i == _index)
+            {
+                using var border = new Pen(Color.White, LogicalToDeviceUnits(2));
+                var b = Rectangle.Inflate(cell, LogicalToDeviceUnits(2), LogicalToDeviceUnits(2));
+                g.DrawRectangle(border, b);
+            }
+        }
+        g.Clip = oldClip;
+    }
+
     protected override void OnResize(EventArgs e)
     {
         base.OnResize(e);
@@ -615,17 +760,17 @@ public sealed class QuickLookView : Control
         else if (!e.Control && !e.Alt && e.KeyCode == MarkNextKey)
         {
             ToggleMarkRequested?.Invoke(this, _index);
-            if (_index < _items.Count - 1) ShowIndex(_index + 1);
+            if (_index < _items.Count - 1) Navigate(_index + 1);
             else Invalidate();
         }
         else
         {
             switch (e.KeyCode)
             {
-                case Keys.Left or Keys.Up when _index > 0: ShowIndex(_index - 1); break;
-                case Keys.Right or Keys.Down when _index < _items.Count - 1: ShowIndex(_index + 1); break;
-                case Keys.Home: ShowIndex(0); break;
-                case Keys.End: ShowIndex(_items.Count - 1); break;
+                case Keys.Left or Keys.Up when _index > 0: Navigate(_index - 1); break;
+                case Keys.Right or Keys.Down when _index < _items.Count - 1: Navigate(_index + 1); break;
+                case Keys.Home: Navigate(0); break;
+                case Keys.End: Navigate(_items.Count - 1); break;
                 case Keys.Escape: Close(); break;
                 case Keys.I when !e.Control && !e.Alt: ToggleDetails(); break;
                 case ActualSizeKey when !e.Control && !e.Alt: BeginActualSize(); break;
@@ -652,8 +797,15 @@ public sealed class QuickLookView : Control
     {
         base.OnMouseWheel(e);
         if (_closing) return;
-        if (e.Delta < 0 && _index < _items.Count - 1) ShowIndex(_index + 1);
-        else if (e.Delta > 0 && _index > 0) ShowIndex(_index - 1);
+        if (e.Delta < 0 && _index < _items.Count - 1) Navigate(_index + 1);
+        else if (e.Delta > 0 && _index > 0) Navigate(_index - 1);
+    }
+
+    protected override void OnMouseDown(MouseEventArgs e)
+    {
+        base.OnMouseDown(e);
+        if (_closing || e.Button != MouseButtons.Left || !_filmstrip) return;
+        if (FilmstripHitTest(e.Location) is int i && i != _index) ShowIndex(i);
     }
 
     protected override void OnMouseMove(MouseEventArgs e)
@@ -665,6 +817,7 @@ public sealed class QuickLookView : Control
     protected override void OnMouseDoubleClick(MouseEventArgs e)
     {
         base.OnMouseDoubleClick(e);
+        if (_filmstrip && FilmstripBounds.Contains(e.Location)) return; // フィルムストリップのダブルクリックでは閉じない
         if (!_closing) Close();
     }
 
@@ -682,6 +835,7 @@ public sealed class QuickLookView : Control
         {
             _loadCts?.Cancel();
             _zoomTimer.Dispose();
+            _filmTimer.Dispose();
             _backdrop?.Dispose();
             ReleaseFull();
             foreach (var b in _cache.Values) b.Dispose();
