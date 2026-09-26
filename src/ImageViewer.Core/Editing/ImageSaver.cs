@@ -21,8 +21,25 @@ public enum OutputFormat { Keep, Jpeg, Png, Webp }
 
 public static class ImageSaver
 {
-    public const int JpegQuality = 90;
-    public const int WebpQuality = 90;
+    public const int DefaultQuality = 90;
+    public const int MinQuality = 1;
+    public const int MaxQuality = 100;
+
+    private static int _jpegQuality = DefaultQuality, _webpQuality = DefaultQuality;
+
+    /// <summary>JPEG で保存するときの画質（1〜100。範囲外は丸める）。起動時と設定を変えたときにアプリが入れる</summary>
+    public static int JpegQuality
+    {
+        get => _jpegQuality;
+        set => _jpegQuality = Math.Clamp(value, MinQuality, MaxQuality);
+    }
+
+    /// <summary>WEBP で保存するときの画質（1〜100。範囲外は丸める）</summary>
+    public static int WebpQuality
+    {
+        get => _webpQuality;
+        set => _webpQuality = Math.Clamp(value, MinQuality, MaxQuality);
+    }
 
     /// <summary>WEBP で保存できる最大の縦横</summary>
     public const int WebpMaxEdge = 16383;

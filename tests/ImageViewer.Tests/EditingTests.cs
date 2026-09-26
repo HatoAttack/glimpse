@@ -114,6 +114,26 @@ static class EditingTests
         catch (NotSupportedException) { tooBig = true; }
         check(tooBig && !File.Exists(P("wide.webp")), "WEBP の上限を超えるとエラー");
 
+        // ---- 保存の画質 ----
+        long SavedSize(string name)
+        {
+            using var img = new Image<Rgba32>(64, 64);
+            for (int y = 0; y < 64; y++)
+                for (int x = 0; x < 64; x++)
+                    img[x, y] = new Rgba32((byte)(x * 4), (byte)(y * 4), (byte)((x * y) % 256));
+            ImageSaver.Save(img, P(name));
+            return new FileInfo(P(name)).Length;
+        }
+        ImageSaver.JpegQuality = 20;
+        long low = SavedSize("q20.jpg");
+        ImageSaver.JpegQuality = 98;
+        long high = SavedSize("q98.jpg");
+        check(low < high, "画質: JPEG の画質を上げるとファイルが大きくなる");
+        ImageSaver.JpegQuality = 0;
+        ImageSaver.WebpQuality = 500;
+        check(ImageSaver.JpegQuality == ImageSaver.MinQuality && ImageSaver.WebpQuality == ImageSaver.MaxQuality, "画質: 範囲外は 1〜100 に丸める");
+        ImageSaver.JpegQuality = ImageSaver.WebpQuality = ImageSaver.DefaultQuality;
+
         // ---- 切り抜き ----
         var (cx, cy, cw, ch) = Cropper.CenterRect(400, 300, 1.0);
         check(cx == 50 && cy == 0 && cw == 300 && ch == 300, "切り抜き: 中央の 1:1");

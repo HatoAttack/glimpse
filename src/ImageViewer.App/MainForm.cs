@@ -8,6 +8,7 @@ using ImageViewer.App.Jump;
 using ImageViewer.App.Theming;
 using ImageViewer.App.Viewer;
 using ImageViewer.Core.Commands;
+using ImageViewer.Core.Editing;
 using ImageViewer.Core.Imaging;
 using ImageViewer.Core.Jump;
 using ImageViewer.Core.Navigation;
@@ -124,6 +125,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
         _settings = _settingsStore.Load();
         Theme.Initialize(Theme.ParseMode(_settings.Theme));
+        ApplySaveQuality();
         RegisterCommands();
         _addressBox = new AddressBox(_address);
 
@@ -717,6 +719,21 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _address.Text = "";
     }
 
+    /// <summary>設定の画質を保存の処理に入れる（未設定なら既定）</summary>
+    private void ApplySaveQuality()
+    {
+        ImageSaver.JpegQuality = _settings.JpegQuality ?? ImageSaver.DefaultQuality;
+        ImageSaver.WebpQuality = _settings.WebpQuality ?? ImageSaver.DefaultQuality;
+    }
+
+    private void ShowSaveQuality()
+    {
+        using var dlg = new SaveQualityDialog(ImageSaver.JpegQuality, ImageSaver.WebpQuality);
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        ((ISettingsAccess)this).UpdateSettings(s => s with { JpegQuality = dlg.JpegQuality, WebpQuality = dlg.WebpQuality });
+        ApplySaveQuality();
+    }
+
     private void ShowJumpSettings()
     {
         using var dlg = new JumpSettingsDialog(_settings.EffectiveJumpRoots, _settings.UseEverything, _jump);
@@ -1194,6 +1211,14 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             }
             foreach (var cmd in group)
                 top.DropDownItems.Add(CreateCommandItem(cmd, withShortcut: true));
+        }
+
+        // 保存の画質は画像の編集（リサイズ・切り抜き・連結）の保存に使うので、画像メニューの最後に置く
+        var imageMenu = menu.Items.OfType<ToolStripMenuItem>().FirstOrDefault(m => StripMnemonic(m.Text) == "画像");
+        if (imageMenu != null)
+        {
+            imageMenu.DropDownItems.Add(new ToolStripSeparator());
+            imageMenu.DropDownItems.Add(new ToolStripMenuItem("保存の画質(&Q)...", null, (_, _) => ShowSaveQuality()));
         }
 
         fileMenu.DropDownItems.Add(new ToolStripSeparator());
