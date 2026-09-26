@@ -250,6 +250,16 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _quickLook.MarkedCount = () => _grid.MarkedCount;
         _quickLook.PlaceholderProvider = f =>
             _thumbnails.TryGet(ThumbnailKey.From(f), out var bmp) == ThumbnailState.Ready ? bmp : null;
+        // 開くときは一覧のサムネイルから広がり、閉じるときはそこへ戻る
+        // 一覧の右の詳細パネルは 1 枚表示の間は隠れるので、後ろの画像に入れておく（開いた直後にその場所が空かないように）
+        _quickLook.BackdropProvider = () => new Control[] { _grid, _inspector };
+        _quickLook.ThumbBoundsProvider = i => _grid.ImageThumbBounds(i) is Rectangle r ? _grid.RectangleToScreen(r) : null;
+        // 閉じる動きの行き先は、詳細パネルを戻して一覧が並び直した後の位置で決める
+        _quickLook.Closing += (_, _) =>
+        {
+            _inspector.Visible = _inspectorItem.Checked;
+            PerformLayout();
+        };
 
         _grid.PeekRequested += (_, index) => _quickLook.Open(_grid.Items, index, byKey: true);
         _grid.ItemActivated += (_, index) => _quickLook.Open(_grid.Items, index, byKey: false);
