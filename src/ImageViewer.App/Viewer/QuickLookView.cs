@@ -12,11 +12,15 @@
 //   一度出したら閉じるまで出したまま。Space を押し続けて見ているときは出さない。クリックでその画像へ
 // - GIF / WEBP のアニメは再生する（先に先頭のコマの静止画を見せ、裏で全部のコマを読む）。P で止める / 再開、, . で 1 コマずつ、
 //   Ctrl+S で今のコマを原寸の PNG で保存（フレーム保存）。持つのは今の画像のコマだけで、次の画像へ移る・閉じると捨てる
+// - E で右側に補正パネル。表示中の画像にそのままかけて見せ（100% でも）、Ctrl+S / 「保存」で元のファイルを上書きする。
+//   保存していない補正があるまま送る・閉じる・パネルを閉じるときは、保存するか聞く。アニメでは開かない
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Drawing.Drawing2D;
+using System.Drawing.Imaging;
 using ImageViewer.App.Chrome;
 using ImageViewer.App.Theming;
+using ImageViewer.Core.Editing;
 using ImageViewer.Core.Imaging;
 using ImageViewer.Core.Thumbnails;
 
@@ -85,11 +89,17 @@ public sealed class QuickLookView : Control
         DetailsToggled?.Invoke(this, EventArgs.Empty);
     }
 
+    /// <summary>右側の補正パネル（E で開け閉め）。前回の補正（Adjust.Last）は本体が入れる</summary>
+    public AdjustPanel Adjust { get; } = new() { Dock = DockStyle.Right, Visible = false };
+
+    /// <summary>補正して保存した（本体が一覧を読み直し、前回の補正を設定に書く）。引数は保存したファイル</summary>
+    public event EventHandler<string>? ImageAdjusted;
+
     /// <summary>画面に合わせて読むときの長辺</summary>
     private int MaxEdge => Math.Max(1, Math.Max(ContentWidth, ClientSize.Height));
 
     /// <summary>画像を描ける幅（詳細パネルを出していればその分を除く）</summary>
-    private int ContentWidth => Math.Max(1, ClientSize.Width - (Details.Visible ? Details.Width : 0));
+    private int ContentWidth => Math.Max(1, ClientSize.Width - (Details.Visible ? Details.Width : 0) - (Adjust.Visible ? Adjust.Width : 0));
 
     public bool IsOpen => Visible;
     public int CurrentIndex => _index;
@@ -104,6 +114,15 @@ public sealed class QuickLookView : Control
         TabStop = true;
         Visible = false;
         Controls.Add(Details);
+        Controls.Add(Adjust);
+        Adjust.OptionsChanged += (_, _) => Invalidate();
+        Adjust.AutoRequested += (_, _) => RunAuto();
+        Adjust.SaveRequested += (_, _) => _ = SaveAdjustAsync();
+        Adjust.CompareChanged += (_, on) =>
+        {
+            _comparing = on;
+            Invalidate();
+        };
         _zoomTimer.Tick += OnZoomTick;
         _filmTimer.Tick += OnFilmTick;
         _animTimer.Tick += OnAnimTick;
@@ -133,8 +152,14 @@ public sealed class QuickLookView : Control
         ShowIndex(index);
     }
 
-    /// <summary>閉じる。今の画像のサムネイルが一覧で見えていればそこへ、見えていなければその場で縮んで消える</summary>
-    public void Close() => Close(animate: true);
+    /// <summary>
+    /// 閉じる。今の画像のサムネイルが一覧で見えていればそこへ、見えていなければその場で縮んで消える。
+    /// 保存していない補正があれば先に保存するか聞く（やめたら閉じない）
+    /// </summary>
+    public async void Close()
+    {
+        if (await ConfirmLeaveAsync()) Close(animate: true);
+    }
 
     private void Close(bool animate)
     {
@@ -170,6 +195,8 @@ public sealed class QuickLookView : Control
         ReleaseFull();
         ReleaseAnimation();
         ClearNotice();
+        ResetAdjust();
+        Adjust.Visible = false;
         Visible = false;
         _loadCts?.Cancel();
         foreach (var b in _cache.Values) b.Dispose();
@@ -297,7 +324,7 @@ public sealed class QuickLookView : Control
             g.InterpolationMode = _filmSliding ? InterpolationMode.Low
                 : imageRect.Width < bmp.Width ? InterpolationMode.HighQualityBicubic : InterpolationMode.NearestNeighbor;
             g.PixelOffsetMode = PixelOffsetMode.Half;
-            g.DrawImage(bmp, imageRect);
+            g.DrawImage(Adjusted(bmp, _adjustedView), imageRect);
         }
         else if (_failed.Contains(file.FullName))
         {
@@ -318,7 +345,7 @@ public sealed class QuickLookView : Control
 
         // 上: ファイル名と位置、チェック数
         var top = new Rectangle(16, 0, ContentWidth - 32, bar);
-        TextRenderer.DrawText(g, $"{file.Name}    {_index + 1} / {_items.Count}{AnimationStatus}", Font, top, Color.White,
+        TextRenderer.DrawText(g, $"{file.Name}    {_index + 1} / {_items.Count}{AnimationStatus}{AdjustStatus}", Font, top, Color.White,
             TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         int marked = MarkedCount?.Invoke() ?? 0;
         if (marked > 0)
@@ -328,7 +355,7 @@ public sealed class QuickLookView : Control
         // 下: 操作の案内
         var bottom = new Rectangle(16, ClientSize.Height - bar, ContentWidth - 32, bar);
         string actualSize = KeyFree(ActualSizeKey) ? "    Z 100%" : "";
-        TextRenderer.DrawText(g, $"← → 前後    {KeyName(MarkKey)} チェック    {KeyName(MarkNextKey)} チェックして次へ{actualSize}{AnimationGuide}    I 詳細    Space / Esc 閉じる",
+        TextRenderer.DrawText(g, $"← → 前後    {KeyName(MarkKey)} チェック    {KeyName(MarkNextKey)} チェックして次へ{actualSize}{AnimationGuide}{AdjustGuide}    I 詳細    Space / Esc 閉じる",
             Font, bottom, Color.Gray, TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPrefix);
 
         if (_notice != null && !imageRect.IsEmpty) PaintNotice(g, imageRect);
@@ -571,6 +598,7 @@ public sealed class QuickLookView : Control
 
     private void ReleaseFull()
     {
+        _adjustedFull.Dispose();
         _fullCts?.Cancel();
         _fullCts = null;
         _full?.Dispose();
@@ -589,7 +617,7 @@ public sealed class QuickLookView : Control
         {
             // 読み終わるまでは、今の画像を原寸の大きさに引き伸ばして見せる
             if (CurrentImage() is not var (current, _)) return false;
-            image = current;
+            image = current is Bitmap shown && shown == ShownBitmap(_items[_index]) ? Adjusted(shown, _adjustedView) : current;
         }
 
         // 画像の上をカーソルで見て回る: 表示領域の端にカーソルがあれば、画像のその端が見える
@@ -608,7 +636,7 @@ public sealed class QuickLookView : Control
             var visible = Rectangle.Intersect(dest, view);
             var source = new Rectangle(visible.X - dest.X, visible.Y - dest.Y, visible.Width, visible.Height);
             g.InterpolationMode = InterpolationMode.NearestNeighbor;
-            g.DrawImage(_full, visible, source, GraphicsUnit.Pixel);
+            g.DrawImage(Adjusted(_full, _adjustedFull), visible, source, GraphicsUnit.Pixel);
         }
         else
         {
@@ -662,8 +690,9 @@ public sealed class QuickLookView : Control
     }
 
     /// <summary>← → やホイールで送る。送り始めたらフィルムストリップを出す（Space を押し続けて見ているときは出さない）</summary>
-    private void Navigate(int index)
+    private async void Navigate(int index)
     {
+        if (!await ConfirmLeaveAsync()) return;
         if (_spaceReleased && !_filmstrip) ShowFilmstrip();
         ShowIndex(index);
     }
@@ -814,6 +843,12 @@ public sealed class QuickLookView : Control
             return;
         }
         DisposeAnimationFrames();
+        if (Adjust.Visible)
+        {
+            // 補正パネルを開いた後でアニメだと分かった: 保存すると静止画になるので閉じる
+            HideAdjust();
+            ShowNotice("アニメーションは補正できません（保存すると静止画になるため）");
+        }
         _animFrames = frames;
         _animDelays = delays;
         _animDownscaled = downscaled;
@@ -947,6 +982,236 @@ public sealed class QuickLookView : Control
 
     private bool _savingFrame;
 
+    // ---- 補正（E で右側にパネル） ----
+
+    private const Keys AdjustKey = Keys.E;
+    private const Keys SaveKey = Keys.Control | Keys.S;
+    private bool _comparing;                                  // 「補正前」を押している間
+    private readonly AdjustedBitmap _adjustedView = new();    // 画面に合わせて読んだ画像に補正をかけたもの
+    private readonly AdjustedBitmap _adjustedFull = new();    // 100% 用に原寸で読んだ画像に補正をかけたもの
+
+    /// <summary>補正をかけて見せているか（パネルを開いていて、値が既定でなく、「補正前」を押していない）</summary>
+    private bool Adjusting => Adjust.Visible && !_comparing && !Adjust.Options.IsIdentity;
+
+    /// <summary>保存していない補正があるか</summary>
+    private bool HasUnsavedAdjust => Adjust.Visible && !Adjust.Options.IsIdentity;
+
+    private Image Adjusted(Bitmap source, AdjustedBitmap cache) => Adjusting ? cache.Get(source, Adjust.Options) : source;
+
+    private async void ToggleAdjust()
+    {
+        if (Adjust.Visible)
+        {
+            if (await ConfirmLeaveAsync()) HideAdjust();
+            return;
+        }
+        // Space を押し続けて見ているとき（離したら閉じる）は開かない。ちらっと見るだけの表示なので
+        if (!_spaceReleased || _zooming || _index < 0 || _failed.Contains(_items[_index].FullName)) return;
+        if (_animFrames != null)
+        {
+            ShowNotice("アニメーションは補正できません（保存すると静止画になるため）");
+            return;
+        }
+        ResetAdjust();
+        Adjust.Visible = true;
+        Invalidate();
+    }
+
+    private void HideAdjust()
+    {
+        ResetAdjust();
+        Adjust.Visible = false;
+        ReloadForNewSize(); // 広くなったので読み直す（狭い幅で読んだものは拡大しないので、そのままだと小さいまま）
+        Invalidate();
+    }
+
+    /// <summary>値を既定に戻し、補正をかけた画像を捨てる</summary>
+    private void ResetAdjust()
+    {
+        _comparing = false;
+        Adjust.Options = new AdjustOptions();
+        _adjustedView.Dispose();
+        _adjustedFull.Dispose();
+    }
+
+    /// <summary>保存していない補正があれば、保存するか聞く。今の画像から離れてよければ true（捨てたときは値を戻してある）</summary>
+    private async Task<bool> ConfirmLeaveAsync()
+    {
+        if (!HasUnsavedAdjust) return true;
+        if (Adjust.Saving) return false; // 保存が終わるまでは離れない
+        var answer = MessageBox.Show(FindForm(), "補正を保存しますか？（元のファイルを上書きします）", "補正",
+            MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+        Focus();
+        if (answer == DialogResult.Cancel) return false;
+        if (answer == DialogResult.No)
+        {
+            ResetAdjust();
+            Invalidate();
+            return true;
+        }
+        return await SaveAdjustAsync();
+    }
+
+    /// <summary>
+    /// 今の画像に補正をかけて保存する。書き出せる形式なら上書き、HEIC / RAW などは元を残して同じ名前の JPG に。
+    /// 撮影情報（EXIF）を残せない画像は、先に確かめる。保存できたら true
+    /// </summary>
+    private async Task<bool> SaveAdjustAsync()
+    {
+        if (!HasUnsavedAdjust || Adjust.Saving || _index < 0) return false;
+        string source = _items[_index].FullName;
+        var options = Adjust.Options;
+        string target = ImageSaver.CanWrite(Path.GetExtension(source))
+            ? source
+            : ImageSaver.UniquePath(Path.ChangeExtension(source, ".jpg"));
+        Adjust.Saving = true;
+        try
+        {
+            bool allowMetadataLoss = false;
+            while (true)
+            {
+                try
+                {
+                    await Task.Run(() => Adjuster.ApplyToFile(source, target, options, overwrite: true, allowMetadataLoss));
+                    break;
+                }
+                catch (MetadataLossException)
+                {
+                    var answer = MessageBox.Show(FindForm(),
+                        $"{Path.GetFileName(source)} は撮影情報（EXIF など）を残して保存できません。撮影情報なしで保存しますか？",
+                        "補正", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning);
+                    Focus();
+                    if (answer != DialogResult.OK) return false;
+                    allowMetadataLoss = true;
+                }
+            }
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            ShowNotice($"保存できませんでした: {ex.Message}");
+            return false;
+        }
+        finally
+        {
+            Adjust.Saving = false;
+        }
+
+        Adjust.Last = options;
+        if (Visible && _index >= 0 && string.Equals(_items[_index].FullName, source, StringComparison.OrdinalIgnoreCase))
+        {
+            if (target == source)
+            {
+                // 上書きした: 補正をかけた画面用の画像を、そのまま今の画像にする（読み直すまでの間も補正後の見た目のまま）
+                if (_cache.TryGetValue(source, out var old) && _adjustedView.Take(old, options) is Bitmap baked)
+                {
+                    old.Dispose();
+                    _cache[source] = baked;
+                }
+                ReleaseFull(); // 原寸で読んだものは補正前なので捨てる
+            }
+            ResetAdjust();
+            Invalidate();
+        }
+        ShowNotice(target == source ? "補正して上書きしました" : $"補正して {Path.GetFileName(target)} に保存しました");
+        ImageAdjusted?.Invoke(this, target);
+        return true;
+    }
+
+    /// <summary>自動補正: 今の画像（画面に合わせて読んだもの）からレベル補正の値を決める。ほかのスライダーはそのまま</summary>
+    private void RunAuto()
+    {
+        if (_index < 0 || ShownBitmap(_items[_index]) is not Bitmap bmp) return;
+        var auto = AdjustedBitmap.Auto(bmp);
+        Adjust.Options = Adjust.Options with { BlackPoint = auto.BlackPoint, WhitePoint = auto.WhitePoint, Gamma = auto.Gamma };
+        if (auto.IsIdentity) ShowNotice("自動補正: 直すところが見つかりませんでした");
+    }
+
+    /// <summary>上の行に出す補正の状態</summary>
+    private string AdjustStatus => !HasUnsavedAdjust ? "" : _comparing ? "    補正前を表示中" : "    補正中（未保存）";
+
+    /// <summary>下の操作の案内に足す補正の操作</summary>
+    private string AdjustGuide => !KeyFree(AdjustKey) ? "" : Adjust.Visible ? "    Ctrl+S 保存    E 補正を閉じる" : "    E 補正";
+
+    /// <summary>画像に補正をかけたもの。元の画像と値が同じ間は作り直さない</summary>
+    private sealed class AdjustedBitmap : IDisposable
+    {
+        private Bitmap? _source;
+        private AdjustOptions? _options;
+        private Bitmap? _result;
+
+        public Bitmap Get(Bitmap source, AdjustOptions options)
+        {
+            if (_result != null && ReferenceEquals(_source, source) && _options == options) return _result;
+            var result = Make(source, options);
+            Dispose();
+            (_source, _options, _result) = (source, options, result);
+            return result;
+        }
+
+        /// <summary>作ったものを引き取る（以後この入れ物は持たない）。まだ作っていなければ作る</summary>
+        public Bitmap Take(Bitmap source, AdjustOptions options)
+        {
+            var result = Get(source, options);
+            _result = null;
+            Dispose();
+            return result;
+        }
+
+        public void Dispose()
+        {
+            _result?.Dispose();
+            (_source, _options, _result) = (null, null, null);
+        }
+
+        private static Bitmap Make(Bitmap source, AdjustOptions options)
+        {
+            var (pixels, stride) = ReadPixels(source);
+            Adjuster.ApplyBgra(pixels, source.Width, source.Height, stride, options);
+            // 乗算済みアルファなので、色が透明度を超えないようにする（透明な画素に色が付くと、描くときに光って見える）
+            for (int i = 0; i < pixels.Length; i += 4)
+            {
+                byte a = pixels[i + 3];
+                if (a == 255) continue;
+                pixels[i] = Math.Min(pixels[i], a);
+                pixels[i + 1] = Math.Min(pixels[i + 1], a);
+                pixels[i + 2] = Math.Min(pixels[i + 2], a);
+            }
+            var result = new Bitmap(source.Width, source.Height, PixelFormat.Format32bppPArgb);
+            var data = result.LockBits(new Rectangle(Point.Empty, result.Size), ImageLockMode.WriteOnly, PixelFormat.Format32bppPArgb);
+            try
+            {
+                Marshal.Copy(pixels, 0, data.Scan0, pixels.Length);
+            }
+            finally
+            {
+                result.UnlockBits(data);
+            }
+            return result;
+        }
+
+        public static AdjustOptions Auto(Bitmap source)
+        {
+            var (pixels, stride) = ReadPixels(source);
+            return Adjuster.AutoBgra(pixels, source.Width, source.Height, stride);
+        }
+
+        /// <summary>32bppPArgb の画素（BGRA の並び。1 行 = stride バイト）</summary>
+        private static (byte[] Pixels, int Stride) ReadPixels(Bitmap source)
+        {
+            var data = source.LockBits(new Rectangle(Point.Empty, source.Size), ImageLockMode.ReadOnly, PixelFormat.Format32bppPArgb);
+            try
+            {
+                var pixels = new byte[data.Stride * source.Height];
+                Marshal.Copy(data.Scan0, pixels, 0, pixels.Length);
+                return (pixels, data.Stride);
+            }
+            finally
+            {
+                source.UnlockBits(data);
+            }
+        }
+    }
+
     // ---- お知らせ（画像の上に少しの間だけ出す） ----
 
     private readonly System.Windows.Forms.Timer _noticeTimer = new() { Interval = 2500 };
@@ -1032,6 +1297,7 @@ public sealed class QuickLookView : Control
                 case Keys.End: Navigate(_items.Count - 1); break;
                 case Keys.Escape: Close(); break;
                 case Keys.I when !e.Control && !e.Alt: ToggleDetails(); break;
+                case AdjustKey when !e.Control && !e.Alt: ToggleAdjust(); break;
                 case ActualSizeKey when !e.Control && !e.Alt: BeginActualSize(); break;
                 case PauseKey when !e.Control && !e.Alt && _animFrames != null: PauseAnimation(!_animPaused); break;
                 case Keys.Oemcomma when !e.Control && !e.Alt && _animFrames != null: StepAnimation(-1); break;
@@ -1048,6 +1314,11 @@ public sealed class QuickLookView : Control
     /// <summary>Ctrl+S は本体のショートカット（設定で割り当てられていることもある）より先に受ける</summary>
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
+        if (keyData == SaveKey && Visible && !_closing && Adjust.Visible)
+        {
+            _ = SaveAdjustAsync();
+            return true;
+        }
         if (keyData == SaveFrameKey && Visible && !_closing && _animFrames != null)
         {
             _ = SaveFrameAsync();
@@ -1080,7 +1351,7 @@ public sealed class QuickLookView : Control
         // ダブルクリックの 2 回目は無視する（1 回目で並びが寄り直していて、隣の画像に当たるため）。
         // 100% 表示の間はフィルムストリップを隠しているので反応しない
         if (_closing || e.Button != MouseButtons.Left || e.Clicks > 1 || !_filmstrip || _actualSize) return;
-        if (FilmstripHitTest(e.Location) is int i && i != _index) ShowIndex(i);
+        if (FilmstripHitTest(e.Location) is int i && i != _index) Navigate(i);
     }
 
     protected override void OnMouseMove(MouseEventArgs e)
@@ -1116,6 +1387,7 @@ public sealed class QuickLookView : Control
             _noticeTimer.Dispose();
             _backdrop?.Dispose();
             ReleaseFull();
+            _adjustedView.Dispose();
             foreach (var b in _cache.Values) b.Dispose();
             _cache.Clear();
         }

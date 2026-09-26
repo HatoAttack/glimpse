@@ -9,7 +9,7 @@ namespace ImageViewer.Core.Editing;
 /// <summary>読んだ形式のせいで EXIF などのメタデータを残して保存できない（HEIC / RAW などを WIC で読んだとき）</summary>
 public sealed class MetadataLossException(string path) : NotSupportedException($"撮影情報（EXIF など）を残して保存できない画像です: {Path.GetFileName(path)}")
 {
-    public string Source { get; } = path;
+    public string ImagePath { get; } = path;
 }
 
 /// <summary>補正の値。既定値（new()）なら何も変えない</summary>
