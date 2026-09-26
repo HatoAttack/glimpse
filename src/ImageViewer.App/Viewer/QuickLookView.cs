@@ -684,7 +684,7 @@ public sealed class QuickLookView : Control
     private void PaintFilmstrip(Graphics g)
     {
         var strip = FilmstripBounds;
-        var oldClip = g.Clip;
+        var state = g.Save();
         // 出てくる途中は、下の操作の案内の行に重ならないように切る
         g.SetClip(Rectangle.FromLTRB(strip.Left, strip.Top, strip.Right, ClientSize.Height - Font.Height * 2));
         using (var back = new SolidBrush(Color.FromArgb(34, 34, 34))) g.FillRectangle(back, strip);
@@ -720,7 +720,7 @@ public sealed class QuickLookView : Control
                 g.DrawRectangle(border, b);
             }
         }
-        g.Clip = oldClip;
+        g.Restore(state);
     }
 
     protected override void OnResize(EventArgs e)
@@ -804,7 +804,9 @@ public sealed class QuickLookView : Control
     protected override void OnMouseDown(MouseEventArgs e)
     {
         base.OnMouseDown(e);
-        if (_closing || e.Button != MouseButtons.Left || !_filmstrip) return;
+        // ダブルクリックの 2 回目は無視する（1 回目で並びが寄り直していて、隣の画像に当たるため）。
+        // 100% 表示の間はフィルムストリップを隠しているので反応しない
+        if (_closing || e.Button != MouseButtons.Left || e.Clicks > 1 || !_filmstrip || _actualSize) return;
         if (FilmstripHitTest(e.Location) is int i && i != _index) ShowIndex(i);
     }
 
@@ -817,7 +819,7 @@ public sealed class QuickLookView : Control
     protected override void OnMouseDoubleClick(MouseEventArgs e)
     {
         base.OnMouseDoubleClick(e);
-        if (_filmstrip && FilmstripBounds.Contains(e.Location)) return; // フィルムストリップのダブルクリックでは閉じない
+        if (_filmstrip && !_actualSize && FilmstripBounds.Contains(e.Location)) return; // フィルムストリップのダブルクリックでは閉じない
         if (!_closing) Close();
     }
 
