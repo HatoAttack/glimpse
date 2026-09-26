@@ -96,6 +96,10 @@ Directory.Delete(dir, true);
 EditingTests.Run(Check, dir);
 Directory.Delete(dir, true);
 
+// ---- 色調補正 ----
+AdjustTests.Run(Check, dir);
+Directory.Delete(dir, true);
+
 // ---- ファイラとしての移動 ----
 NavigationTests.Run(Check, dir);
 Directory.Delete(dir, true);
