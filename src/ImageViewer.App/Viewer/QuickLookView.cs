@@ -48,11 +48,17 @@ public sealed class QuickLookView : Control
 
     public event EventHandler? Closed;
 
-    /// <summary>開く / 閉じる動きの後ろに映す部品（一覧）。動いている間はこれを撮った画像を描く</summary>
-    public Control? Backdrop { get; set; }
+    /// <summary>
+    /// 開く / 閉じる動きの後ろに映す部品（一覧と、一覧の右の詳細パネル）。動いている間はこれらを撮った画像を描く。
+    /// 1 枚表示の間は隠れて 1 枚表示が広がる部品も入れておく（開いた直後にその場所が空かないように）
+    /// </summary>
+    public Func<IEnumerable<Control>>? BackdropProvider { get; set; }
 
-    /// <summary>画像番号のサムネイルが Backdrop のどこに描かれているか（Backdrop のクライアント座標。見えていなければ null）</summary>
+    /// <summary>画像番号のサムネイルが描かれている位置（画面座標。見えていなければ null）</summary>
     public Func<int, Rectangle?>? ThumbBoundsProvider { get; set; }
+
+    /// <summary>閉じる動きを始める前（本体はここで、1 枚表示の間だけ隠していた部品を戻して一覧を閉じた後の並びにする）</summary>
+    public event EventHandler? Closing;
 
     /// <summary>右側の詳細パネル（中身は本体が入れる）。1 枚表示は常に暗い地なのでダークの配色で描く</summary>
     public DetailsPanel Details { get; } = new() { Dock = DockStyle.Right, FixedPalette = Palette.Dark, Visible = false };
@@ -99,8 +105,8 @@ public sealed class QuickLookView : Control
         _spaceReleased = !byKey;
         _openedFor.Restart();
         // サムネイルが見えていれば、そこから広がって開く（一覧の画面は隠れる前に撮る）
-        if (AnimationsEnabled && Backdrop != null && ThumbBoundsProvider?.Invoke(index) is Rectangle thumb && TakeBackdrop())
-            StartZoom(closing: false, Backdrop.RectangleToScreen(thumb), Rectangle.Empty);
+        if (AnimationsEnabled && ThumbBoundsProvider?.Invoke(index) is Rectangle thumb && TakeBackdrop())
+            StartZoom(closing: false, thumb, Rectangle.Empty);
         Visible = true;
         BringToFront();
         Focus();
@@ -118,11 +124,18 @@ public sealed class QuickLookView : Control
             if (!animate) FinishClose();
             return;
         }
-        if (animate && AnimationsEnabled && Backdrop != null && !_lastImageRect.IsEmpty && _index >= 0 && TakeBackdrop())
+        if (animate && AnimationsEnabled && !_lastImageRect.IsEmpty && _index >= 0)
         {
             var from = RectangleToScreen(_lastImageRect);
+            // 閉じた後の並び（詳細パネルを戻した一覧）で、行き先と後ろの画像を決める
+            Closing?.Invoke(this, EventArgs.Empty);
+            if (!TakeBackdrop())
+            {
+                FinishClose();
+                return;
+            }
             var to = ThumbBoundsProvider?.Invoke(_index) is Rectangle thumb
-                ? Backdrop.RectangleToScreen(thumb)
+                ? thumb
                 : new Rectangle(from.X + from.Width / 2, from.Y + from.Height / 2, 0, 0);
             StartZoom(closing: true, from, to);
             return;
@@ -339,6 +352,7 @@ public sealed class QuickLookView : Control
     private readonly Stopwatch _zoomClock = new();
     private bool _zooming, _closing;
     private Bitmap? _backdrop;            // 動いている間の後ろ（一覧を撮ったもの）
+    private Point _backdropAt;            // _backdrop の左上（画面座標）
     private Rectangle _zoomFrom, _zoomTo; // 画面座標。開くときの _zoomTo は使わない（今の画像の位置へ向かう）
     private Rectangle _lastImageRect;     // 止まっているときに最後に描いた画像の位置（閉じる動きの起点）
 
@@ -351,13 +365,25 @@ public sealed class QuickLookView : Control
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool SystemParametersInfo(uint action, uint param, out bool value, uint winIni);
 
-    /// <summary>一覧をそのまま撮る（1 枚表示に隠れていても描ける）</summary>
+    /// <summary>後ろに映す部品を、画面での並びのまま 1 枚に撮る（1 枚表示に隠れていても描ける）</summary>
     private bool TakeBackdrop()
     {
-        if (Backdrop is not { IsHandleCreated: true, Width: > 0, Height: > 0 } b) return false;
+        var parts = (BackdropProvider?.Invoke() ?? Enumerable.Empty<Control>())
+            .Where(c => c is { Visible: true, IsHandleCreated: true, Width: > 0, Height: > 0 })
+            .Select(c => (Control: c, Bounds: c.RectangleToScreen(new Rectangle(Point.Empty, c.Size))))
+            .ToList();
+        if (parts.Count == 0) return false;
+        var all = parts.Select(p => p.Bounds).Aggregate(Rectangle.Union);
         _backdrop?.Dispose();
-        _backdrop = new Bitmap(b.Width, b.Height);
-        b.DrawToBitmap(_backdrop, new Rectangle(Point.Empty, b.Size));
+        _backdrop = new Bitmap(all.Width, all.Height);
+        _backdropAt = all.Location;
+        using var g = Graphics.FromImage(_backdrop);
+        foreach (var (control, bounds) in parts)
+        {
+            using var shot = new Bitmap(control.Width, control.Height);
+            control.DrawToBitmap(shot, new Rectangle(Point.Empty, control.Size));
+            g.DrawImageUnscaled(shot, bounds.X - all.X, bounds.Y - all.Y);
+        }
         return true;
     }
 
@@ -399,8 +425,7 @@ public sealed class QuickLookView : Control
         double eased = 1 - Math.Pow(1 - t, 3); // 終わりがゆっくり
         double shown = _closing ? 1 - eased : eased; // 1 枚表示にどれだけ近いか
 
-        if (_backdrop != null && Backdrop != null)
-            g.DrawImageUnscaled(_backdrop, PointToClient(Backdrop.PointToScreen(Point.Empty)));
+        if (_backdrop != null) g.DrawImageUnscaled(_backdrop, PointToClient(_backdropAt));
         using (var dim = new SolidBrush(Color.FromArgb((int)(255 * shown), BackColor))) g.FillRectangle(dim, ClientRectangle);
 
         if (CurrentImage() is not var (image, rest)) return;
