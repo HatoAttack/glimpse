@@ -250,6 +250,9 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _quickLook.MarkedCount = () => _grid.MarkedCount;
         _quickLook.PlaceholderProvider = f =>
             _thumbnails.TryGet(ThumbnailKey.From(f), out var bmp) == ThumbnailState.Ready ? bmp : null;
+        // 開くときは一覧のサムネイルから広がり、閉じるときはそこへ戻る
+        _quickLook.Backdrop = _grid;
+        _quickLook.ThumbBoundsProvider = _grid.ImageThumbBounds;
 
         _grid.PeekRequested += (_, index) => _quickLook.Open(_grid.Items, index, byKey: true);
         _grid.ItemActivated += (_, index) => _quickLook.Open(_grid.Items, index, byKey: false);

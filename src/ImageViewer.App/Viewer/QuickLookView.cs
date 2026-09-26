@@ -4,7 +4,10 @@
 // - 表示は画面の大きさに縮小して読む。持つのは今の画像と前後 1 枚ずつの最大 3 枚、閉じたら全部解放する
 // - 開いた直後はサムネイルを引き伸ばして先に見せ、裏で本来の画像を読む（待ち時間を増やさない）
 // - I で右側に詳細パネル（画像には重ねず、画像は残りの幅に合わせる）
+// - 開くときは一覧のサムネイルの位置から広がり、閉じるときは今の画像のサムネイルの位置へ縮んで戻る
+//   （Windows の「アニメーション効果」がオフなら動かさない）
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Drawing.Drawing2D;
 using ImageViewer.App.Chrome;
 using ImageViewer.App.Theming;
@@ -45,6 +48,12 @@ public sealed class QuickLookView : Control
 
     public event EventHandler? Closed;
 
+    /// <summary>開く / 閉じる動きの後ろに映す部品（一覧）。動いている間はこれを撮った画像を描く</summary>
+    public Control? Backdrop { get; set; }
+
+    /// <summary>画像番号のサムネイルが Backdrop のどこに描かれているか（Backdrop のクライアント座標。見えていなければ null）</summary>
+    public Func<int, Rectangle?>? ThumbBoundsProvider { get; set; }
+
     /// <summary>右側の詳細パネル（中身は本体が入れる）。1 枚表示は常に暗い地なのでダークの配色で描く</summary>
     public DetailsPanel Details { get; } = new() { Dock = DockStyle.Right, FixedPalette = Palette.Dark, Visible = false };
 
@@ -77,25 +86,53 @@ public sealed class QuickLookView : Control
         TabStop = true;
         Visible = false;
         Controls.Add(Details);
+        _zoomTimer.Tick += OnZoomTick;
     }
 
     /// <param name="byKey">Space で開いた（押し続けたかどうかを離したときに判定する）</param>
     public void Open(IReadOnlyList<FileInfo> items, int index, bool byKey)
     {
         if (index < 0 || index >= items.Count) return;
+        if (_closing) FinishClose();
         _items = items;
         _openedByKey = byKey;
         _spaceReleased = !byKey;
         _openedFor.Restart();
+        // サムネイルが見えていれば、そこから広がって開く（一覧の画面は隠れる前に撮る）
+        if (AnimationsEnabled && Backdrop != null && ThumbBoundsProvider?.Invoke(index) is Rectangle thumb && TakeBackdrop())
+            StartZoom(closing: false, Backdrop.RectangleToScreen(thumb), Rectangle.Empty);
         Visible = true;
         BringToFront();
         Focus();
         ShowIndex(index);
     }
 
-    public void Close()
+    /// <summary>閉じる。今の画像のサムネイルが一覧で見えていればそこへ、見えていなければその場で縮んで消える</summary>
+    public void Close() => Close(animate: true);
+
+    private void Close(bool animate)
     {
         if (!Visible) return;
+        if (_closing)
+        {
+            if (!animate) FinishClose();
+            return;
+        }
+        if (animate && AnimationsEnabled && Backdrop != null && !_lastImageRect.IsEmpty && _index >= 0 && TakeBackdrop())
+        {
+            var from = RectangleToScreen(_lastImageRect);
+            var to = ThumbBoundsProvider?.Invoke(_index) is Rectangle thumb
+                ? Backdrop.RectangleToScreen(thumb)
+                : new Rectangle(from.X + from.Width / 2, from.Y + from.Height / 2, 0, 0);
+            StartZoom(closing: true, from, to);
+            return;
+        }
+        FinishClose();
+    }
+
+    private void FinishClose()
+    {
+        EndZoom();
         Visible = false;
         _loadCts?.Cancel();
         foreach (var b in _cache.Values) b.Dispose();
@@ -113,7 +150,7 @@ public sealed class QuickLookView : Control
         int found = current == null ? -1 : items.ToList().FindIndex(f => string.Equals(f.FullName, current, StringComparison.OrdinalIgnoreCase));
         if (found < 0)
         {
-            Close();
+            Close(animate: false); // 一覧が変わったので、戻る先のサムネイルも無い
             return;
         }
         _items = items;
@@ -123,6 +160,7 @@ public sealed class QuickLookView : Control
 
     private void ShowIndex(int index)
     {
+        if (_zooming && !_closing && _index >= 0) EndZoom(); // 広がっている途中で送ったら、動きは打ち切る
         _index = Math.Clamp(index, 0, _items.Count - 1);
         CurrentChanged?.Invoke(this, _index);
         Invalidate();
@@ -195,9 +233,14 @@ public sealed class QuickLookView : Control
         var g = e.Graphics;
         g.Clear(BackColor);
         if (_index < 0 || _index >= _items.Count) return;
+        if (_zooming)
+        {
+            PaintZoom(g);
+            return;
+        }
         var file = _items[_index];
         int bar = Font.Height * 2;
-        var area = new Rectangle(16, bar, Math.Max(1, ContentWidth - 32), Math.Max(1, ClientSize.Height - bar * 2));
+        var area = ImageArea;
 
         Rectangle imageRect = Rectangle.Empty;
         if (_cache.TryGetValue(file.FullName, out var bmp))
@@ -219,6 +262,7 @@ public sealed class QuickLookView : Control
             g.InterpolationMode = InterpolationMode.Bilinear;
             g.DrawImage(thumb, imageRect);
         }
+        _lastImageRect = imageRect;
 
         if (IsMarked?.Invoke(_index) == true && !imageRect.IsEmpty) DrawCheck(g, imageRect);
 
@@ -235,6 +279,25 @@ public sealed class QuickLookView : Control
         var bottom = new Rectangle(16, ClientSize.Height - bar, ContentWidth - 32, bar);
         TextRenderer.DrawText(g, $"← → 前後    {KeyName(MarkKey)} チェック    {KeyName(MarkNextKey)} チェックして次へ    I 詳細    Space / Esc 閉じる",
             Font, bottom, Color.Gray, TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPrefix);
+    }
+
+    /// <summary>画像を置く枠（上下の文字の行と、詳細パネルを除いた部分）</summary>
+    private Rectangle ImageArea
+    {
+        get
+        {
+            int bar = Font.Height * 2;
+            return new Rectangle(16, bar, Math.Max(1, ContentWidth - 32), Math.Max(1, ClientSize.Height - bar * 2));
+        }
+    }
+
+    /// <summary>今の画像（読み込み済みなら本来の画像、まだならサムネイル）と、止まっているときに置く位置</summary>
+    private (Image Image, Rectangle Rect)? CurrentImage()
+    {
+        var file = _items[_index];
+        if (_cache.TryGetValue(file.FullName, out var bmp)) return (bmp, Fit(bmp.Size, ImageArea, allowUpscale: false));
+        if (PlaceholderProvider?.Invoke(file) is Bitmap thumb) return (thumb, Fit(thumb.Size, ImageArea, allowUpscale: true));
+        return null;
     }
 
     private static string KeyName(Keys key) => key switch
@@ -269,6 +332,94 @@ public sealed class QuickLookView : Control
         g.SmoothingMode = SmoothingMode.None;
     }
 
+    // ---- 開く / 閉じる動き ----
+
+    private const int ZoomMs = 160;
+    private readonly System.Windows.Forms.Timer _zoomTimer = new() { Interval = 10 };
+    private readonly Stopwatch _zoomClock = new();
+    private bool _zooming, _closing;
+    private Bitmap? _backdrop;            // 動いている間の後ろ（一覧を撮ったもの）
+    private Rectangle _zoomFrom, _zoomTo; // 画面座標。開くときの _zoomTo は使わない（今の画像の位置へ向かう）
+    private Rectangle _lastImageRect;     // 止まっているときに最後に描いた画像の位置（閉じる動きの起点）
+
+    /// <summary>Windows の「アニメーション効果」（設定 → アクセシビリティ → 視覚効果）がオンか。読めなければオン扱い</summary>
+    private static bool AnimationsEnabled =>
+        !SystemParametersInfo(SpiGetClientAreaAnimation, 0, out bool on, 0) || on;
+
+    private const uint SpiGetClientAreaAnimation = 0x1042;
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool SystemParametersInfo(uint action, uint param, out bool value, uint winIni);
+
+    /// <summary>一覧をそのまま撮る（1 枚表示に隠れていても描ける）</summary>
+    private bool TakeBackdrop()
+    {
+        if (Backdrop is not { IsHandleCreated: true, Width: > 0, Height: > 0 } b) return false;
+        _backdrop?.Dispose();
+        _backdrop = new Bitmap(b.Width, b.Height);
+        b.DrawToBitmap(_backdrop, new Rectangle(Point.Empty, b.Size));
+        return true;
+    }
+
+    private void StartZoom(bool closing, Rectangle from, Rectangle to)
+    {
+        _zooming = true;
+        _closing = closing;
+        _zoomFrom = from;
+        _zoomTo = to;
+        _zoomClock.Restart();
+        _zoomTimer.Start();
+        Invalidate();
+    }
+
+    private void EndZoom()
+    {
+        _zoomTimer.Stop();
+        _zooming = _closing = false;
+        _backdrop?.Dispose();
+        _backdrop = null;
+        Invalidate();
+    }
+
+    private void OnZoomTick(object? sender, EventArgs e)
+    {
+        if (_zoomClock.ElapsedMilliseconds < ZoomMs)
+        {
+            Invalidate();
+            return;
+        }
+        if (_closing) FinishClose();
+        else EndZoom(); // 止まった位置で、文字の行と高い品質で描き直す
+    }
+
+    /// <summary>動いている間: 一覧の上を暗くしていき、画像をサムネイルの位置と 1 枚表示の位置の間に描く</summary>
+    private void PaintZoom(Graphics g)
+    {
+        double t = Math.Min(1.0, _zoomClock.ElapsedMilliseconds / (double)ZoomMs);
+        double eased = 1 - Math.Pow(1 - t, 3); // 終わりがゆっくり
+        double shown = _closing ? 1 - eased : eased; // 1 枚表示にどれだけ近いか
+
+        if (_backdrop != null && Backdrop != null)
+            g.DrawImageUnscaled(_backdrop, PointToClient(Backdrop.PointToScreen(Point.Empty)));
+        using (var dim = new SolidBrush(Color.FromArgb((int)(255 * shown), BackColor))) g.FillRectangle(dim, ClientRectangle);
+
+        if (CurrentImage() is not var (image, rest)) return;
+        var from = RectangleToClient(_zoomFrom);
+        var to = _closing ? RectangleToClient(_zoomTo) : rest;
+        var rect = Lerp(from, to, eased);
+        if (rect.Width <= 0 || rect.Height <= 0) return;
+        // 動いている間は速さを優先する（止まったら高い品質で描き直す）
+        g.InterpolationMode = InterpolationMode.Low;
+        g.PixelOffsetMode = PixelOffsetMode.HighSpeed;
+        g.DrawImage(image, rect);
+    }
+
+    private static Rectangle Lerp(Rectangle a, Rectangle b, double t)
+    {
+        int L(int x, int y) => (int)Math.Round(x + (y - x) * t);
+        return Rectangle.FromLTRB(L(a.Left, b.Left), L(a.Top, b.Top), L(a.Right, b.Right), L(a.Bottom, b.Bottom));
+    }
+
     protected override void OnResize(EventArgs e)
     {
         base.OnResize(e);
@@ -278,7 +429,7 @@ public sealed class QuickLookView : Control
     /// <summary>表示できる大きさが変わったら読み直す（小さく読んだものを引き伸ばさない）</summary>
     private void ReloadForNewSize()
     {
-        if (!Visible) return;
+        if (!Visible || _closing) return; // 閉じる途中は描いている画像を捨てない
         foreach (var b in _cache.Values) b.Dispose();
         _cache.Clear();
         _ = LoadAroundAsync();
@@ -293,6 +444,11 @@ public sealed class QuickLookView : Control
     protected override void OnKeyDown(KeyEventArgs e)
     {
         base.OnKeyDown(e);
+        if (_closing)
+        {
+            e.Handled = e.SuppressKeyPress = true; // 閉じる途中の操作は受けない
+            return;
+        }
         if (!e.Control && !e.Alt && e.KeyCode == MarkKey)
         {
             ToggleMarkRequested?.Invoke(this, _index);
@@ -335,6 +491,7 @@ public sealed class QuickLookView : Control
     protected override void OnMouseWheel(MouseEventArgs e)
     {
         base.OnMouseWheel(e);
+        if (_closing) return;
         if (e.Delta < 0 && _index < _items.Count - 1) ShowIndex(_index + 1);
         else if (e.Delta > 0 && _index > 0) ShowIndex(_index - 1);
     }
@@ -342,7 +499,7 @@ public sealed class QuickLookView : Control
     protected override void OnMouseDoubleClick(MouseEventArgs e)
     {
         base.OnMouseDoubleClick(e);
-        Close();
+        if (!_closing) Close();
     }
 
     protected override void OnLostFocus(EventArgs e)
@@ -357,6 +514,8 @@ public sealed class QuickLookView : Control
         if (disposing)
         {
             _loadCts?.Cancel();
+            _zoomTimer.Dispose();
+            _backdrop?.Dispose();
             foreach (var b in _cache.Values) b.Dispose();
             _cache.Clear();
         }

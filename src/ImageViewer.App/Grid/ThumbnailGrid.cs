@@ -242,6 +242,20 @@ public sealed class ThumbnailGrid : Control
         SelectionChanged?.Invoke(this, EventArgs.Empty);
     }
 
+    /// <summary>
+    /// その画像のサムネイルが描かれている位置（クライアント座標）。1 枚表示を開く / 閉じる動きの起点と行き先に使う。
+    /// サムネイルがまだ無い・画面に見えていないときは null
+    /// </summary>
+    public Rectangle? ImageThumbBounds(int imageIndex)
+    {
+        if (imageIndex < 0 || imageIndex >= _items.Count || imageIndex >= _keys.Length) return null;
+        if (_thumbnails.TryGet(_keys[imageIndex], out var bmp) != ThumbnailState.Ready) return null;
+        var cell = CurrentLayout.CellBounds(F + imageIndex);
+        cell.Offset(0, -ScrollY);
+        var image = Fit(bmp!.Size, ThumbArea(cell));
+        return image.IntersectsWith(ClientRectangle) ? image : null;
+    }
+
     public bool IsImageMarked(int imageIndex) => imageIndex >= 0 && imageIndex < _items.Count && _marks.IsMarked(_items[imageIndex].FullName);
 
     public void ToggleImageMark(int imageIndex)
