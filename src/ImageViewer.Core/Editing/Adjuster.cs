@@ -1,4 +1,4 @@
-// 色調補正: レベル補正（黒点・白点・ガンマ）→ 明るさ → コントラスト → 彩度 の順に、画像全体へかける
+// 色調補正: 色温度 → レベル補正（黒点・白点・ガンマ）→ 明るさ → コントラスト → 彩度 の順に、画像全体へかける
 // 1 枚表示のプレビュー（BGRA の画素の並び）と保存（ImageSharp の画像）の両方で同じ計算を使う
 using ImageViewer.Core.Imaging;
 using SixLabors.ImageSharp;
@@ -27,6 +27,9 @@ public sealed record AdjustOptions
     /// <summary>彩度（-100〜100）。-100 で白黒</summary>
     public int Saturation { get; init; }
 
+    /// <summary>色温度（-100〜100）。+ で暖かい色み（赤みを足し青みを引く）、- で冷たい色み</summary>
+    public int Temperature { get; init; }
+
     /// <summary>レベル補正の黒点（0〜254）。これより暗いところは黒になる</summary>
     public int BlackPoint { get; init; }
 
@@ -49,6 +52,7 @@ public sealed record AdjustOptions
             Brightness = Math.Clamp(Brightness, MinAmount, MaxAmount),
             Contrast = Math.Clamp(Contrast, MinAmount, MaxAmount),
             Saturation = Math.Clamp(Saturation, MinAmount, MaxAmount),
+            Temperature = Math.Clamp(Temperature, MinAmount, MaxAmount),
             BlackPoint = black,
             WhitePoint = Math.Clamp(WhitePoint, black + 1, 255),
             Gamma = double.IsFinite(Gamma) ? Math.Round(Math.Clamp(Gamma, MinGamma, MaxGamma), 2) : 1,
@@ -60,6 +64,9 @@ public static class Adjuster
 {
     /// <summary>自動補正で黒・白とみなす画素の割合（両端のわずかな点に引っぱられないように）</summary>
     public const double AutoClip = 0.005;
+
+    /// <summary>色温度 ±100 での赤・青の倍率の変わり幅（+100 で赤 1.3 倍・青 0.7 倍）</summary>
+    public const double TemperatureStrength = 0.3;
 
     /// <summary>自動補正のガンマの範囲（強くかけすぎない）</summary>
     public const double AutoMinGamma = 0.5, AutoMaxGamma = 2;
@@ -88,18 +95,37 @@ public static class Adjuster
         return table;
     }
 
+    /// <summary>
+    /// R・G・B それぞれの表。色温度（赤と青の倍率）をかけてから、明るさ・コントラスト・レベル補正の表を引く
+    /// </summary>
+    public static (byte[] R, byte[] G, byte[] B) BuildChannelTables(AdjustOptions options)
+    {
+        var o = options.Normalize();
+        var tone = BuildToneTable(o);
+        if (o.Temperature == 0) return (tone, tone, tone);
+        double t = o.Temperature / 100.0 * TemperatureStrength;
+        return (Scaled(tone, 1 + t), tone, Scaled(tone, 1 - t));
+
+        static byte[] Scaled(byte[] tone, double gain)
+        {
+            var table = new byte[256];
+            for (int i = 0; i < 256; i++) table[i] = tone[(int)Math.Round(Math.Clamp(i * gain, 0, 255))];
+            return table;
+        }
+    }
+
     /// <summary>画像に補正をかける（透明度はそのまま）</summary>
     public static void Apply(Image<Rgba32> image, AdjustOptions options)
     {
         if (options.IsIdentity) return;
-        var table = BuildToneTable(options);
+        var (rt, gt, bt) = BuildChannelTables(options);
         int saturation = SaturationFactor(options);
         image.ProcessPixelRows(rows =>
         {
             for (int y = 0; y < rows.Height; y++)
             {
                 foreach (ref var p in rows.GetRowSpan(y))
-                    AdjustPixel(ref p.R, ref p.G, ref p.B, table, saturation);
+                    AdjustPixel(ref p.R, ref p.G, ref p.B, rt, gt, bt, saturation);
             }
         });
     }
@@ -111,13 +137,13 @@ public static class Adjuster
     public static void ApplyBgra(Span<byte> pixels, int width, int height, int stride, AdjustOptions options)
     {
         if (options.IsIdentity) return;
-        var table = BuildToneTable(options);
+        var (rt, gt, bt) = BuildChannelTables(options);
         int saturation = SaturationFactor(options);
         for (int y = 0; y < height; y++)
         {
             var row = pixels.Slice(y * stride, width * 4);
             for (int x = 0; x < row.Length; x += 4)
-                AdjustPixel(ref row[x + 2], ref row[x + 1], ref row[x], table, saturation);
+                AdjustPixel(ref row[x + 2], ref row[x + 1], ref row[x], rt, gt, bt, saturation);
         }
     }
 
@@ -210,9 +236,9 @@ public static class Adjuster
     /// <summary>明るさ（BT.709 の重み。整数で計算）</summary>
     private static int Luma(int r, int g, int b) => (r * 218 + g * 732 + b * 74 + 512) >> 10;
 
-    private static void AdjustPixel(ref byte r, ref byte g, ref byte b, byte[] table, int saturation)
+    private static void AdjustPixel(ref byte r, ref byte g, ref byte b, byte[] rt, byte[] gt, byte[] bt, int saturation)
     {
-        int tr = table[r], tg = table[g], tb = table[b];
+        int tr = rt[r], tg = gt[g], tb = bt[b];
         if (saturation != 1024)
         {
             // 明るさを保ったまま、灰色からの離れ具合を倍率で変える
