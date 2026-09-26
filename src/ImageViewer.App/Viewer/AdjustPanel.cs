@@ -227,7 +227,7 @@ public sealed class AdjustPanel : ScrollableControl
         Invalidate(); // 手で描いている文字（項目名・値）を描き直す
     }
 
-    /// <summary>パネルの上のホイールは 1 枚表示へ回さない（画像が送られないように）</summary>
+    /// <summary>パネルの上のホイールは親（1 枚表示・後ろの一覧）へ回さない</summary>
     protected override void OnMouseWheel(MouseEventArgs e)
     {
         base.OnMouseWheel(e);

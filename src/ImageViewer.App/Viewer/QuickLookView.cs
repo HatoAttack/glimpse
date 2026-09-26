@@ -8,7 +8,7 @@
 //   （Windows の「アニメーション効果」がオフなら動かさない）
 // - Z を押している間だけ 100%（画像の 1 画素を画面の 1 画素で、ぼかさずに）。見える範囲はカーソルの位置で決まる。
 //   ピントやノイズの確認用。原寸で読み直すのはこのときだけで、読んだものは次の画像へ移る・閉じるまで持つ
-// - フィルムストリップ（前後の画像のサムネイルを下に 1 列）は、← → やホイールで送り始めたら下から出して、画像はその分縮む。
+// - フィルムストリップ（前後の画像のサムネイルを下に 1 列）は、← → で送り始めたら下から出して、画像はその分縮む。
 //   一度出したら閉じるまで出したまま。Space を押し続けて見ているときは出さない。クリックでその画像へ
 // - GIF / WEBP のアニメは再生する（先に先頭のコマの静止画を見せ、裏で全部のコマを読む）。P で止める / 再開、, . で 1 コマずつ、
 //   Ctrl+S で今のコマを原寸の PNG で保存（フレーム保存）。持つのは今の画像のコマだけで、次の画像へ移る・閉じると捨てる
@@ -697,7 +697,7 @@ public sealed class QuickLookView : Control
         }
     }
 
-    /// <summary>← → やホイールで送る。送り始めたらフィルムストリップを出す（Space を押し続けて見ているときは出さない）</summary>
+    /// <summary>← → などで送る。送り始めたらフィルムストリップを出す（Space を押し続けて見ているときは出さない）</summary>
     private async void Navigate(int index)
     {
         if (!await ConfirmLeaveAsync()) return;
@@ -1384,12 +1384,11 @@ public sealed class QuickLookView : Control
         if (_openedByKey && _openedFor.ElapsedMilliseconds >= HoldThresholdMs) Close();
     }
 
+    /// <summary>ホイールでは送らない（うっかり回して次の画像へ移らないように）。後ろの一覧へも回さない</summary>
     protected override void OnMouseWheel(MouseEventArgs e)
     {
         base.OnMouseWheel(e);
-        if (_closing) return;
-        if (e.Delta < 0 && _index < _items.Count - 1) Navigate(_index + 1);
-        else if (e.Delta > 0 && _index > 0) Navigate(_index - 1);
+        if (e is HandledMouseEventArgs handled) handled.Handled = true;
     }
 
     protected override void OnMouseDown(MouseEventArgs e)
