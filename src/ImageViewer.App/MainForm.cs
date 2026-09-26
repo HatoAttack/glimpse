@@ -807,15 +807,21 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         if (dlg.ShowDialog(this) == DialogResult.OK) SetHome(dlg.SelectedPath);
     }
 
+    // 戻る / 進むは履歴を動かしてから読みに行くので、保存していない補正の確認は履歴を動かす前にする（やめたら履歴もそのまま）
     private async Task GoBackAsync()
     {
+        if (!_history.CanGoBack || !await ConfirmUnsavedAdjustAsync()) return;
         if (_history.GoBack() is string path) await LoadFolderAsync(path, NavKind.Back);
     }
 
     private async Task GoForwardAsync()
     {
+        if (!_history.CanGoForward || !await ConfirmUnsavedAdjustAsync()) return;
         if (_history.GoForward() is string path) await LoadFolderAsync(path, NavKind.Forward);
     }
+
+    /// <summary>1 枚表示に保存していない補正があれば、保存するか聞く。先へ進んでよければ true</summary>
+    private async Task<bool> ConfirmUnsavedAdjustAsync() => !_quickLook.HasUnsavedAdjust || await _quickLook.ConfirmLeaveAsync();
 
     private async Task GoUpAsync()
     {
@@ -1721,8 +1727,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     private async Task LoadFolderAsync(string folder, NavKind kind = NavKind.New)
     {
         // 別のフォルダへ移ると 1 枚表示は閉じるので、保存していない補正があれば先に聞く（やめたらツリーの選択を今のフォルダに戻す）
-        if (!string.Equals(_folder, folder, StringComparison.OrdinalIgnoreCase)
-            && _quickLook.HasUnsavedAdjust && !await _quickLook.ConfirmLeaveAsync())
+        if (!string.Equals(_folder, folder, StringComparison.OrdinalIgnoreCase) && !await ConfirmUnsavedAdjustAsync())
         {
             if (_folder != null) await _tree.RevealAsync(_folder);
             return;
