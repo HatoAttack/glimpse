@@ -35,8 +35,8 @@ static class AdjustTests
         check(high[64] < 64 && high[192] > 192 && high[128] is >= 127 and <= 129, "コントラスト +: 暗いところはより暗く、明るいところはより明るく");
         check(low[0] > 0 && low[255] < 255, "コントラスト -: 黒と白が灰色に寄る");
 
-        var wild = new AdjustOptions { Brightness = 500, BlackPoint = 300, WhitePoint = -5, Gamma = double.NaN }.Normalize();
-        check(wild.Brightness == 100 && wild.BlackPoint == 254 && wild.WhitePoint == 255 && wild.Gamma == 1, "範囲外の値は丸める");
+        var wild = new AdjustOptions { Brightness = 500, Temperature = -300, BlackPoint = 300, WhitePoint = -5, Gamma = double.NaN }.Normalize();
+        check(wild.Brightness == 100 && wild.Temperature == -100 && wild.BlackPoint == 254 && wild.WhitePoint == 255 && wild.Gamma == 1, "範囲外の値は丸める");
 
         // ---- 彩度 ----
         using (var img = new Image<Rgba32>(1, 1, new Rgba32(200, 80, 40, 128)))
@@ -52,8 +52,23 @@ static class AdjustTests
             check(p.R - p.B > 60, $"彩度 +100 で色の差が広がる（{p}）");
         }
 
+        // ---- 色温度 ----
+        using (var img = new Image<Rgba32>(2, 1, new Rgba32(128, 128, 128)))
+        {
+            img[1, 0] = new Rgba32(255, 255, 255);
+            Adjuster.Apply(img, new AdjustOptions { Temperature = 100 });
+            var gray = img[0, 0];
+            check(gray.R > 128 && gray.G == 128 && gray.B < 128, $"色温度 +: 赤みが増えて青みが減る（{gray}）");
+            check(img[1, 0].R == 255 && img[1, 0].B < 255, "色温度 +: 白も暖かい色になる（赤は 255 で止まる）");
+        }
+        using (var img = new Image<Rgba32>(1, 1, new Rgba32(128, 128, 128)))
+        {
+            Adjuster.Apply(img, new AdjustOptions { Temperature = -100 });
+            check(img[0, 0].R < 128 && img[0, 0].B > 128, $"色温度 -: 青みが増える（{img[0, 0]}）");
+        }
+
         // ---- BGRA（プレビュー用）と ImageSharp の結果が同じ ----
-        var opts = new AdjustOptions { Brightness = 30, Contrast = -20, Saturation = 40, BlackPoint = 10, WhitePoint = 240, Gamma = 1.3 };
+        var opts = new AdjustOptions { Brightness = 30, Contrast = -20, Saturation = 40, Temperature = 25, BlackPoint = 10, WhitePoint = 240, Gamma = 1.3 };
         using (var img = new Image<Rgba32>(3, 2))
         {
             var colors = new[] { new Rgba32(255, 0, 0), new Rgba32(10, 200, 90), new Rgba32(128, 128, 128), new Rgba32(0, 0, 0), new Rgba32(250, 250, 5), new Rgba32(33, 66, 99) };
