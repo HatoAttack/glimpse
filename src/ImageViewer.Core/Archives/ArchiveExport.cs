@@ -55,7 +55,25 @@ public static class ArchiveExport
         string safe = new string(chars).TrimEnd('.', ' ');
         string head = safe.Split('.')[0].TrimEnd(' ');
         if (ReservedNames.Contains(head)) safe = "_" + safe;
-        return safe.Length == 0 || Path.GetFileNameWithoutExtension(safe).Length == 0 ? "_" + safe : safe;
+        if (safe.Length == 0 || Path.GetFileNameWithoutExtension(safe).Length == 0) safe = "_" + safe;
+        return Truncate(safe);
+    }
+
+    /// <summary>
+    /// 書き出す名前の長さの上限。Windows の 1 つの名前の上限（255）より短くして、重なったときの「 (2)」と、
+    /// 一時フォルダのパスを足しても、多くのアプリが扱えるパスの長さ（260）に収まるようにする
+    /// </summary>
+    public const int MaxNameLength = 150;
+
+    /// <summary>長すぎる名前は、拡張子を残して名前の部分を切り詰める（サロゲートペアの途中では切らない）</summary>
+    private static string Truncate(string name)
+    {
+        if (name.Length <= MaxNameLength) return name;
+        string ext = Path.GetExtension(name);
+        if (ext.Length > 16) ext = ""; // 拡張子に見えない長い末尾は名前として切る
+        int keep = MaxNameLength - ext.Length;
+        if (char.IsHighSurrogate(name[keep - 1])) keep--;
+        return name[..keep].TrimEnd('.', ' ') + ext;
     }
 
     /// <summary>前に書き出したもののうち、古いものを消す（使用中などで消せないものは残す）</summary>

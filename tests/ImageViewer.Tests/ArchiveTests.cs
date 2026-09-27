@@ -154,6 +154,15 @@ static class ArchiveTests
         check(ArchiveExport.SafeFileName("CON.preview.jpg") == "_CON.preview.jpg" && ArchiveExport.SafeFileName("com¹.png") == "_com¹.png"
               && ArchiveExport.SafeFileName("LPT0.x.png") == "_LPT0.x.png" && ArchiveExport.SafeFileName("CONSOLE.jpg") == "CONSOLE.jpg",
             "予約名は最初の . より前で見る（CON.preview.jpg・COM¹・LPT0。CONSOLE は違う）");
+        string longStem = new string('あ', 240);
+        string cut = ArchiveExport.SafeFileName(longStem + ".jpg");
+        check(cut.Length == ArchiveExport.MaxNameLength && cut.EndsWith(".jpg") && ArchiveExport.SafeFileName(string.Concat(Enumerable.Repeat("😀", 100)) + ".png") is { } emoji
+              && emoji.Length <= ArchiveExport.MaxNameLength && emoji.EndsWith(".png") && !char.IsHighSurrogate(emoji[^5]),
+            "長すぎる名前は拡張子を残して切り詰める（絵文字の途中では切らない）");
+        string longZip = Path.Combine(dir, "long.zip");
+        Write(longZip, null, (longStem + ".png", Png(3, 3)), ("a/" + longStem + ".png", Png(3, 3)));
+        var longOut = ArchiveExport.ToFiles(new[] { ArchivePath.Combine(longZip, longStem + ".png"), ArchivePath.Combine(longZip, @"a\" + longStem + ".png") });
+        check(longOut.All(File.Exists) && longOut[1].EndsWith(" (2).png"), "長い名前の画像も、名前が重なっても書き出せる");
         string odd = Path.Combine(dir, "odd.zip");
         Write(odd, null, ("what?.png", Png(3, 3)), ("NUL.png", Png(3, 3)));
         var oddOut = ArchiveExport.ToFiles(new[] { ArchivePath.Combine(odd, "what?.png"), ArchivePath.Combine(odd, "NUL.png") });
