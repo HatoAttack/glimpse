@@ -204,6 +204,53 @@ static class AdjustTests
         using (var img = Image.Load<Rgba32>(B("b1.png")))
             check(img[50, 0].R > 110, $"まとめて: 元の画像に上書きで補正がかかる（{img[50, 0].R}）");
 
+        // ---- 回転 ----
+        string R(string name) => Path.Combine(dir, "rot_" + name);
+        void Marked(string path)
+        {
+            // 4×2 の左上だけ赤
+            using var img = new Image<Rgba32>(4, 2, new Rgba32(0, 0, 255));
+            img[0, 0] = new Rgba32(255, 0, 0);
+            img.SaveAsPng(path);
+        }
+        bool RedAt(string path, int w, int h, int x, int y)
+        {
+            using var img = Image.Load<Rgba32>(path);
+            return img.Width == w && img.Height == h && img[x, y].R > 200 && img[x, y].B < 50;
+        }
+        Marked(R("r.png"));
+        Rotator.RotateFile(R("r.png"), RotateDirection.Right90);
+        check(RedAt(R("r.png"), 2, 4, 1, 0), "回転: 右に 90° で左上が右上へ（縦横が入れ替わる）");
+        Marked(R("l.png"));
+        Rotator.RotateFile(R("l.png"), RotateDirection.Left90);
+        check(RedAt(R("l.png"), 2, 4, 0, 3), "回転: 左に 90° で左上が左下へ");
+        Marked(R("h.png"));
+        Rotator.RotateFile(R("h.png"), RotateDirection.Half);
+        check(RedAt(R("h.png"), 4, 2, 3, 1), "回転: 180° で左上が右下へ");
+
+        // EXIF の向き（6 = 右に 90° 回して見る）が付いた写真: 見えている向きから回し、向きの値は「そのまま」にする。撮影情報は残す
+        using (var img = new Image<Rgba32>(40, 20, new Rgba32(90, 90, 90)))
+        {
+            img.Metadata.ExifProfile = new ExifProfile();
+            img.Metadata.ExifProfile.SetValue(ExifTag.Orientation, (ushort)6);
+            img.Metadata.ExifProfile.SetValue(ExifTag.Model, "TestCam");
+            img.SaveAsJpeg(R("exif.jpg"));
+        }
+        Rotator.RotateFile(R("exif.jpg"), RotateDirection.Right90);
+        using (var img = Image.Load<Rgba32>(R("exif.jpg")))
+        {
+            ushort orientation = img.Metadata.ExifProfile?.TryGetValue(ExifTag.Orientation, out var o) == true ? o.Value : (ushort)1;
+            bool model = img.Metadata.ExifProfile?.TryGetValue(ExifTag.Model, out var m) == true && m.Value == "TestCam";
+            // 見えていたのは 20×40（縦長）。右に回すと 40×20 になり、向きの値は 1
+            check(img.Width == 40 && img.Height == 20 && orientation == 1 && model,
+                $"回転: EXIF の向き付きの写真は見えている向きから回し、向きは「そのまま」・撮影情報は残す（{img.Width}×{img.Height}・向き {orientation}）");
+        }
+
+        var rotated = Rotator.RotateFiles(new[] { P("anim.gif"), P("pages.tif"), R("missing.heic"), R("r.png") }, RotateDirection.Right90);
+        check(rotated.Converted == 1 && rotated.Errors.Count == 3 && File.ReadAllBytes(P("anim.gif")).SequenceEqual(gifBefore),
+            $"回転: アニメ・複数ページ・書き出せない形式は回さず、ほかは回す（{rotated.Converted} 枚・失敗 {rotated.Errors.Count}）");
+        check(Directory.GetFiles(dir, "*.tmp").Length == 0, "回転: 一時ファイルを残さない");
+
         // ---- ファイル: WIC で読む画像はメタデータを残せないので、許可が無ければ保存しない ----
         string jxr = P("wic.jxr");
         if (!ImageViewer.Core.Imaging.WicCodecs.DecoderExtensions.Contains(".jxr"))

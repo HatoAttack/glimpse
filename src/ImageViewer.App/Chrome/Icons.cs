@@ -64,6 +64,14 @@ public static class Icons
         p.AddLines(new PointF[] { new(1.5f, 4), new(12, 4), new(12, 14.5f) });
     });
 
+    /// <summary>回転（右回りの矢印）</summary>
+    public static readonly IconPainter Rotate = (g, r, c) => Stroke(g, r, c, 1.5f, p =>
+    {
+        p.AddArc(2.5f, 3, 11, 11, 300, -270); // 右上から左回りに 3/4 周（矢じりは右上）
+        p.StartFigure();
+        p.AddLines(new PointF[] { new(9.5f, 1.5f), new(11.5f, 4.2f), new(8.6f, 5.6f) });
+    });
+
     /// <summary>補正（左半分を塗った円。コントラストの印）</summary>
     public static readonly IconPainter Adjust = (g, r, c) =>
     {
