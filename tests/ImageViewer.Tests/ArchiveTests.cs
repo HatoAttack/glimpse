@@ -129,6 +129,14 @@ static class ArchiveTests
         check(ZipStore.List(utf8, "").Images.Select(f => f.Name).SequenceEqual(new[] { "한국어.png" })
               && ZipStore.List(utf8, "写真").Images.Select(f => f.Name).SequenceEqual(new[] { "夏.png" }), "UTF-8 の名前（Shift_JIS にない文字も）");
 
+        // ---- 「.」を含むパス（今のフォルダ）は除いて読み、「..」は出さない ----
+        string dots = Path.Combine(dir, "dots.zip");
+        Write(dots, null, ("./top.png", Png(4, 4)), ("album/./in.png", Png(5, 5)), ("../escape.png", Png(3, 3)), ("a/../b.png", Png(3, 3)));
+        check(ZipStore.List(dots, "").Images.Select(f => f.Name).SequenceEqual(new[] { "top.png" })
+              && ZipStore.List(dots, "album").Images.Select(f => f.Name).SequenceEqual(new[] { "in.png" })
+              && ImageLoader.Identify(ArchivePath.Combine(dots, @"album\in.png")) is { Width: 5 },
+            "./top.png・album/./in.png は読み、.. を含むものは出さない");
+
         // ---- 書き出し（コピー・ドラッグ用） ----
         ArchiveExport.Root = Path.Combine(dir, "export");
         var exported = ArchiveExport.ToFiles(new[] { Z("001.jpg"), Z("sub/002.png"), Path.Combine(dir, "photo.jpg") });

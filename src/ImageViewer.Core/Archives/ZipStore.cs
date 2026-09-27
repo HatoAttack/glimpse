@@ -78,16 +78,23 @@ public static class ZipStore
             lock (this)
             {
                 ObjectDisposedException.ThrowIf(Disposed, this);
-                if (!Files.TryGetValue(inner, out var info)) throw new FileNotFoundException("ZIP の中にファイルが見つかりません", path);
-                if (info.Length > MaxEntryBytes) throw new NotSupportedException("ZIP の中のファイルが大きすぎます");
+                if (!Files.ContainsKey(inner)) throw new FileNotFoundException("ZIP の中にファイルが見つかりません", path);
                 if (_entries == null) Open();
                 // 閉じている間に書き換えられて、その名前が無くなった
                 if (!_entries!.TryGetValue(inner, out var entry)) throw new FileNotFoundException("ZIP の中にファイルが見つかりません", path);
                 try
                 {
+                    // 大きさは今開いた ZIP の項目で確かめる（目次を作った後に置き換えられていることがある）。
+                    // 項目に書かれた大きさが偽りでも、上限を超えて展開しない
+                    if (entry.Length > MaxEntryBytes) throw new NotSupportedException("ZIP の中のファイルが大きすぎます");
                     using var stream = entry.Open();
-                    var buffer = new MemoryStream((int)Math.Min(entry.Length, MaxEntryBytes));
-                    stream.CopyTo(buffer);
+                    var buffer = new MemoryStream((int)entry.Length);
+                    var chunk = new byte[81920];
+                    for (int n; (n = stream.Read(chunk)) > 0; )
+                    {
+                        if (buffer.Length + n > MaxEntryBytes) throw new NotSupportedException("ZIP の中のファイルが大きすぎます");
+                        buffer.Write(chunk, 0, n);
+                    }
                     return buffer.Length == buffer.Capacity ? buffer.GetBuffer() : buffer.ToArray();
                 }
                 finally
@@ -300,16 +307,16 @@ public static class ZipStore
     }
 
     /// <summary>
-    /// 中のパスを \ 区切りにする。macOS が付ける __MACOSX（元のファイルの付属情報で、画像ではない）・
+    /// 中のパスを \ 区切りにする。「.」（今のフォルダ）は除く。macOS が付ける __MACOSX（元のファイルの付属情報で、画像ではない）・
     /// 「..」やドライブ名を含むおかしなパスは null（一覧に出さない）
     /// </summary>
     private static string? Normalize(string fullName)
     {
-        var parts = fullName.Split('/', '\\', StringSplitOptions.RemoveEmptyEntries);
+        var parts = fullName.Split('/', '\\', StringSplitOptions.RemoveEmptyEntries).Where(p => p != ".").ToArray();
         if (parts.Length == 0) return null;
         foreach (var part in parts)
         {
-            if (part is "." or ".." || part.Contains(':') || string.Equals(part, "__MACOSX", StringComparison.OrdinalIgnoreCase))
+            if (part == ".." || part.Contains(':') || string.Equals(part, "__MACOSX", StringComparison.OrdinalIgnoreCase))
                 return null;
         }
         if (parts[^1].StartsWith("._", StringComparison.Ordinal)) return null;
