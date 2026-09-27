@@ -1877,6 +1877,8 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
                     ArchiveListing listing;
                     try
                     {
+                        // 読み直し（F5）は目次から。大きさも日時も変えずに置き換えられた ZIP にも追いつく
+                        if (reload) ZipStore.Forget(zip);
                         listing = ZipStore.List(zip, inner, cts.Token);
                     }
                     catch (InvalidDataException ex)

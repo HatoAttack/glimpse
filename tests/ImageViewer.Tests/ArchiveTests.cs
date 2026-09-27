@@ -143,6 +143,9 @@ static class ArchiveTests
         check(ArchiveExport.SafeFileName("photo?.jpg") == "photo_.jpg" && ArchiveExport.SafeFileName("a:b*.png") == "a_b_.png"
               && ArchiveExport.SafeFileName("CON.jpg") == "_CON.jpg" && ArchiveExport.SafeFileName("x.png. ") == "x.png"
               && ArchiveExport.SafeFileName("普通.jpg") == "普通.jpg", "書き出す名前を Windows で使える名前にする（? : * ・予約名・末尾の .）");
+        check(ArchiveExport.SafeFileName("CON.preview.jpg") == "_CON.preview.jpg" && ArchiveExport.SafeFileName("com¹.png") == "_com¹.png"
+              && ArchiveExport.SafeFileName("LPT0.x.png") == "_LPT0.x.png" && ArchiveExport.SafeFileName("CONSOLE.jpg") == "CONSOLE.jpg",
+            "予約名は最初の . より前で見る（CON.preview.jpg・COM¹・LPT0。CONSOLE は違う）");
         string odd = Path.Combine(dir, "odd.zip");
         Write(odd, null, ("what?.png", Png(3, 3)), ("NUL.png", Png(3, 3)));
         var oddOut = ArchiveExport.ToFiles(new[] { ArchivePath.Combine(odd, "what?.png"), ArchivePath.Combine(odd, "NUL.png") });
@@ -201,6 +204,15 @@ static class ArchiveTests
         var after = ZipStore.List(same, "").Images.Single();
         check(before.Length == after.Length && before.LastWriteTimeUtc == after.LastWriteTimeUtc && before.Version != after.Version
               && ThumbnailKey.From(before) != ThumbnailKey.From(after), "中のファイルの日時が同じでも、中身が変われば別物（サムネイルを作り直す）");
+        // ZIP そのものの大きさ・更新日時も変えずに置き換えられた: 覚えている目次のままだが、読み直し（Forget）で追いつく
+        var zipTime = File.GetLastWriteTimeUtc(same);
+        Thread.Sleep(700);
+        WriteStamped(3);
+        File.SetLastWriteTimeUtc(same, zipTime);
+        bool stale = ZipStore.List(same, "").Images.Single().Version == after.Version;
+        ZipStore.Forget(same);
+        var refreshed = ZipStore.List(same, "").Images.Single();
+        check(stale && refreshed.Version != after.Version, "大きさも日時も同じまま置き換えられた ZIP も、読み直せば新しい中身");
 
         // ---- 壊れた ZIP ----
         string broken = Path.Combine(dir, "broken.zip");

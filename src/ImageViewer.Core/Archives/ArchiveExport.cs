@@ -37,22 +37,24 @@ public static class ArchiveExport
         return result;
     }
 
+    /// <summary>Windows の予約された名前（COM¹ などの上付き数字も）</summary>
     private static readonly HashSet<string> ReservedNames = new(
         new[] { "CON", "PRN", "AUX", "NUL" }
-            .Concat(Enumerable.Range(1, 9).SelectMany(i => new[] { $"COM{i}", $"LPT{i}" })),
+            .Concat("0123456789¹²³".SelectMany(d => new[] { $"COM{d}", $"LPT{d}" })),
         StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Windows で使える名前にする（ほかの OS で作った ZIP には ? * : などを含む名前がある）。
-    /// 使えない文字は _ に、末尾の . と空白は除き、CON などの予約された名前には _ を前に付ける（拡張子は残す）
+    /// 使えない文字は _ に、末尾の . と空白は除き、CON などの予約された名前には _ を前に付ける（拡張子は残す）。
+    /// 予約名かは最初の . より前で決まる（CON.preview.jpg も予約名）
     /// </summary>
     public static string SafeFileName(string name)
     {
         var invalid = Path.GetInvalidFileNameChars();
         var chars = name.Select(c => Array.IndexOf(invalid, c) >= 0 ? '_' : c).ToArray();
         string safe = new string(chars).TrimEnd('.', ' ');
-        string stem = Path.GetFileNameWithoutExtension(safe);
-        if (ReservedNames.Contains(stem.TrimEnd(' '))) safe = "_" + safe;
+        string head = safe.Split('.')[0].TrimEnd(' ');
+        if (ReservedNames.Contains(head)) safe = "_" + safe;
         return safe.Length == 0 || Path.GetFileNameWithoutExtension(safe).Length == 0 ? "_" + safe : safe;
     }
 

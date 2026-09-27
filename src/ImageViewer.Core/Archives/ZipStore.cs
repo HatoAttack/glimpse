@@ -213,6 +213,21 @@ public static class ZipStore
     /// <summary>ZIP の中のファイルを destination に書き出す（コピー・ドラッグでほかのアプリへ渡す用）</summary>
     public static void Extract(string path, string destination) => File.WriteAllBytes(destination, Read(path));
 
+    /// <summary>
+    /// その ZIP の目次を忘れる（F5 で読み直すとき）。大きさも更新日時も変えずに置き換えられた ZIP は
+    /// 覚えている目次との違いが分からないので、読み直すときは目次から読み直す
+    /// </summary>
+    public static void Forget(string archive)
+    {
+        List<Opened> forgotten;
+        lock (CacheLock)
+        {
+            forgotten = Cache.Where(z => string.Equals(z.Archive, archive, StringComparison.OrdinalIgnoreCase)).ToList();
+            Cache.RemoveAll(forgotten.Contains);
+        }
+        foreach (var z in forgotten) z.Dispose();
+    }
+
     /// <summary>覚えている ZIP を閉じて忘れる（ZIP の外のフォルダへ移ったとき）</summary>
     public static void CloseAll()
     {
