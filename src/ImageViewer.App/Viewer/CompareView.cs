@@ -85,8 +85,7 @@ public sealed class CompareView : Control
         _actualSize = false;
         Visible = false;
         _loadCts?.Cancel();
-        _fullCts?.Cancel();
-        _fullCts = null;
+        CancelFull();
         Clear(_fit);
         Clear(_full);
         _sizes.Clear();
@@ -133,7 +132,8 @@ public sealed class CompareView : Control
         if (reload)
         {
             _ = LoadAsync();
-            if (_actualSize) _ = LoadFullAsync();
+            if (_actualSize) _ = LoadFullAsync(restart: true);
+            else CancelFull();
         }
         Invalidate();
 
@@ -212,36 +212,80 @@ public sealed class CompareView : Control
         }
     }
 
-    /// <summary>100% 用に 2 枚を原寸で読む（読み終わるまでは画面に合わせたものを引き伸ばして見せる）</summary>
-    private async Task LoadFullAsync()
+    /// <summary>
+    /// 100% 用に並べている 2 枚を原寸で読む（読み終わるまでは画面に合わせたものを引き伸ばして見せる）。
+    /// restart なら読んでいる途中のものを打ち切って読み直す（送って画像が変わったとき）。そうでなければ、読んでいる途中ならそのまま待つ。
+    /// 原寸は重いので 1 枚ずつ読み、読み終えたときに並べていない画像になっていたら捨てる（持つのは 2 枚分だけ）
+    /// </summary>
+    private async Task LoadFullAsync(bool restart = false)
     {
-        var cts = _fullCts ??= new CancellationTokenSource();
-        foreach (var path in new[] { PathOf(0), PathOf(1) })
+        if (!restart && _fullCts is { IsCancellationRequested: false }) return;
+        _fullCts?.Cancel();
+        var cts = _fullCts = new CancellationTokenSource();
+        try
         {
-            if (_full.ContainsKey(path) || _fullFailed.Contains(path)) continue;
-            try
+            foreach (var path in new[] { PathOf(0), PathOf(1) })
             {
-                var bmp = await Task.Run(() =>
+                if (_full.ContainsKey(path) || _fullFailed.Contains(path)) continue;
+                Bitmap bmp;
+                try
                 {
-                    using var image = ImageLoader.Load(path, LoadOptions.Full);
-                    return ThumbnailGenerator.ToPArgbBitmap(image);
-                });
-                if (cts.IsCancellationRequested || !Visible || _full.ContainsKey(path))
+                    await _decodeGate.WaitAsync(cts.Token);
+                    try
+                    {
+                        cts.Token.ThrowIfCancellationRequested();
+                        bmp = await Task.Run(() =>
+                        {
+                            using var image = ImageLoader.Load(path, LoadOptions.Full);
+                            return ThumbnailGenerator.ToPArgbBitmap(image);
+                        });
+                    }
+                    finally
+                    {
+                        _decodeGate.Release();
+                    }
+                }
+                catch (OperationCanceledException) when (cts.IsCancellationRequested)
                 {
-                    bmp.Dispose();
+                    return;
+                }
+                catch (Exception) // 大きすぎてメモリが足りない場合も含む
+                {
+                    if (cts.IsCancellationRequested) return;
+                    _fullFailed.Add(path);
+                    Invalidate();
+                    continue;
+                }
+                if (cts.IsCancellationRequested || !Visible || !IsShown(path) || _full.ContainsKey(path))
+                {
+                    bmp.Dispose(); // 送った・閉じた後に読み終わった
                     if (cts.IsCancellationRequested || !Visible) return;
                     continue;
                 }
                 _full[path] = bmp;
                 _sizes[path] = bmp.Size;
+                Invalidate();
             }
-            catch (Exception) // 大きすぎてメモリが足りない場合も含む
-            {
-                if (cts.IsCancellationRequested) return;
-                _fullFailed.Add(path);
-            }
-            Invalidate();
         }
+        finally
+        {
+            // 読み終えた（打ち切られていない）なら、次の BeginActualSize で読み直せるようにしておく
+            if (_fullCts == cts && !cts.IsCancellationRequested)
+            {
+                _fullCts = null;
+                cts.Dispose();
+            }
+        }
+    }
+
+    private bool IsShown(string path) =>
+        _index[0] >= 0 && _index[1] >= 0 && _items.Count > Math.Max(_index[0], _index[1])
+        && (string.Equals(PathOf(0), path, StringComparison.OrdinalIgnoreCase) || string.Equals(PathOf(1), path, StringComparison.OrdinalIgnoreCase));
+
+    private void CancelFull()
+    {
+        _fullCts?.Cancel();
+        _fullCts = null;
     }
 
     /// <summary>並べていない画像の原寸を捨てる（原寸は重いので、2 枚分だけ持つ）</summary>
@@ -275,7 +319,8 @@ public sealed class CompareView : Control
         TrimFull();
         ShownChanged?.Invoke(this, EventArgs.Empty);
         _ = LoadAsync();
-        if (_actualSize) _ = LoadFullAsync();
+        if (_actualSize) _ = LoadFullAsync(restart: true);
+        else CancelFull(); // 100% でなければ、前の画像の原寸を読み続けない
         Invalidate();
     }
 
