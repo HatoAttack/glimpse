@@ -139,9 +139,30 @@ static class EditingTests
         check(cx == 50 && cy == 0 && cw == 300 && ch == 300, "切り抜き: 中央の 1:1");
         check(Cropper.Flip(4.0 / 3, true) == 0.75, "切り抜き: 縦横の入れ替え");
         check(Cropper.ClampBox(-3, 2.4, 500, 99.6, 400, 300) == Rectangle.FromLTRB(0, 2, 400, 100), "切り抜き: 画像の範囲に丸める");
+
+        // 枠の引き継ぎ（iPhone のスクショを 1:2 で、中央より少し下を切り抜く例）
+        var shot = (X0: 0.0, Y0: 150.0, X1: 1179.0, Y1: 2508.0); // 1179 × 2556 の画像の、中央より少し下の 1:2
+        check(Cropper.CarryRect(shot, 1179, 2556, 1179, 2556) == (0, 150, 1179, 2508), "切り抜き: 同じ大きさの画像には同じ範囲");
+        var half = Cropper.CarryRect(shot, 1179, 2556, 590, 1278); // 同じ縦横比で半分の大きさ
+        check(Math.Abs(half.Y0 - 75) < 1 && Math.Abs((half.X1 - half.X0) * 2 - (half.Y1 - half.Y0)) < 0.01,
+            $"切り抜き: 大きさが違えば割合で合わせ、アスペクト比は保つ（{half}）");
+        var wide = Cropper.CarryRect(shot, 1179, 2556, 1000, 1000); // 縦横比が違う画像
+        check(wide.X0 >= 0 && wide.Y0 >= 0 && wide.X1 <= 1000 && wide.Y1 <= 1000
+              && Math.Abs((wide.X1 - wide.X0) * 2 - (wide.Y1 - wide.Y0)) < 0.01, $"切り抜き: 縦横比が違っても画像からはみ出さない（{wide}）");
+        var edge = Cropper.CarryRect((300, 200, 400, 300), 400, 300, 200, 300); // 右端の枠を幅の狭い画像へ
+        check(edge.X1 <= 200 && edge.X0 >= 0, $"切り抜き: 端に寄せた枠も画像の中に収める（{edge}）");
         Cropper.CropCenter(src, 1.0, Cropper.OutputPathFor(src, dir));
         string second = Cropper.OutputPathFor(src, dir);
         check(second == P("photo_crop (2).jpg"), "切り抜き: 同名があれば (2) を付ける");
+        Cropper.CropCarried(src, (0, 0, 100, 50), 200, 100, P("carried.png"));
+        using (var img = Image.Load<Rgba32>(P("carried.png")))
+        {
+            using var whole = ImageViewer.Core.Imaging.ImageLoader.Load(src); // 回転を反映した大きさで比べる
+            // 200 × 100 の画像での 100 × 50 の枠を、縦横同じ倍率（小さい方の比）で合わせた大きさになる
+            double carry = Math.Min(whole.Width / 200.0, whole.Height / 100.0);
+            check(Math.Abs(img.Width - 100 * carry) <= 1 && Math.Abs(img.Height - 50 * carry) <= 1,
+                $"切り抜き: 一括で枠を引き継いで切り抜く（{whole.Width}x{whole.Height} → {img.Width}x{img.Height}）");
+        }
         using (var img = Image.Load<Rgba32>(P("photo_crop.jpg")))
             check(img.Width == 1000 && img.Height == 1000, $"切り抜き: 回転を反映した画像の中央 1:1（{img.Width}x{img.Height}）");
 
