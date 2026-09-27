@@ -57,7 +57,7 @@ public sealed class AdjustBatchDialog : ThemedForm
     private readonly Button _close = new() { Text = "閉じる", AutoSize = true };
     private readonly Control[] _inputs;
 
-    /// <summary>実行したときの補正の値（「前回の補正」として覚える用）。実行していなければ null</summary>
+    /// <summary>実行したときの補正の値（「前回の補正」として覚える用。1 枚ずつ自動のときレベルは既定）。実行していなければ null</summary>
     public AdjustOptions? UsedAdjust { get; private set; }
 
     /// <summary>実行したときの設定（次回の初期値として保存する用）。実行していなければ null</summary>
@@ -400,7 +400,8 @@ public sealed class AdjustBatchDialog : ThemedForm
                 Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
             return;
 
-        UsedAdjust = _panel.Options;
+        // 実際にかけた値を覚える（1 枚ずつ自動のときは、隠れているレベルの値は使っていないので既定にしておく）
+        UsedAdjust = adjust;
         UsedOptions = options;
         foreach (var c in _inputs) c.Enabled = false;
         _run.Enabled = false;
