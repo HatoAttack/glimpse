@@ -23,8 +23,8 @@ public static class ZipStore
     /// <summary>最後に読んでからファイルを閉じるまでの時間</summary>
     public static TimeSpan IdleClose { get; set; } = TimeSpan.FromSeconds(3);
 
-    /// <summary>目次の 1 項目（中のパスは \ 区切り）</summary>
-    private sealed record Entry(string FullName, long Length, DateTime LastWriteTimeUtc);
+    /// <summary>目次の 1 項目（中のパスは \ 区切り。Crc は中身の目印）</summary>
+    private sealed record Entry(string FullName, long Length, DateTime LastWriteTimeUtc, uint Crc);
 
     private sealed class Opened : IDisposable
     {
@@ -66,7 +66,7 @@ public static class ZipStore
                     // パスの途中のフォルダは、フォルダの項目が無くても作る
                     for (string parent = ParentOf(name); parent.Length > 0 && Folders.Add(parent); parent = ParentOf(parent)) { }
                     if (isFolder) Folders.Add(name);
-                    else Files.TryAdd(name, new Entry(name, entry.Length, entry.LastWriteTime.UtcDateTime));
+                    else Files.TryAdd(name, new Entry(name, entry.Length, entry.LastWriteTime.UtcDateTime, entry.Crc32));
                 }
                 Touch();
             }
@@ -175,7 +175,7 @@ public static class ZipStore
         {
             ct.ThrowIfCancellationRequested();
             if (!string.Equals(ParentOf(entry.FullName), inner, StringComparison.OrdinalIgnoreCase) || !ImageFormats.IsSupported(entry.FullName)) continue;
-            images.Add(new ImageFile(ArchivePath.Combine(archive, entry.FullName), entry.Length, entry.LastWriteTimeUtc));
+            images.Add(new ImageFile(ArchivePath.Combine(archive, entry.FullName), entry.Length, entry.LastWriteTimeUtc) { Version = entry.Crc });
         }
         return new ArchiveListing(folders, images);
     }

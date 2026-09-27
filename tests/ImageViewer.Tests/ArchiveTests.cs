@@ -140,6 +140,14 @@ static class ArchiveTests
         Write(Path.Combine(dir, "dup.zip"), null, ("a/x.png", Png(3, 3)), ("b/x.png", Png(4, 4)));
         var dup = ArchiveExport.ToFiles(new[] { ArchivePath.Combine(Path.Combine(dir, "dup.zip"), @"a\x.png"), ArchivePath.Combine(Path.Combine(dir, "dup.zip"), @"b\x.png") });
         check(dup.Select(Path.GetFileName).SequenceEqual(new[] { "x.png", "x (2).png" }), "同じ名前が重なったら (2) を付ける");
+        check(ArchiveExport.SafeFileName("photo?.jpg") == "photo_.jpg" && ArchiveExport.SafeFileName("a:b*.png") == "a_b_.png"
+              && ArchiveExport.SafeFileName("CON.jpg") == "_CON.jpg" && ArchiveExport.SafeFileName("x.png. ") == "x.png"
+              && ArchiveExport.SafeFileName("普通.jpg") == "普通.jpg", "書き出す名前を Windows で使える名前にする（? : * ・予約名・末尾の .）");
+        string odd = Path.Combine(dir, "odd.zip");
+        Write(odd, null, ("what?.png", Png(3, 3)), ("NUL.png", Png(3, 3)));
+        var oddOut = ArchiveExport.ToFiles(new[] { ArchivePath.Combine(odd, "what?.png"), ArchivePath.Combine(odd, "NUL.png") });
+        check(oddOut.Select(Path.GetFileName).SequenceEqual(new[] { "what_.png", "_NUL.png" }) && oddOut.All(File.Exists),
+            "Windows で使えない名前の画像も書き出せる");
         var plain = new[] { Path.Combine(dir, "photo.jpg") };
         check(ReferenceEquals(ArchiveExport.ToFiles(plain), plain), "ZIP の中が無ければ書き出さない");
 
@@ -172,6 +180,27 @@ static class ArchiveTests
         File.SetLastWriteTimeUtc(zip, DateTime.UtcNow.AddMinutes(1));
         check(ZipStore.List(zip, "").Images.Select(f => f.Name).SequenceEqual(new[] { "new.png" }) && ImageLoader.Identify(Z("new.png")) is { Width: 7 },
             "ZIP が書き換えられたら開き直す");
+
+        // ---- 名前・大きさ・日時が同じでも、中身が変われば別物 ----
+        string same = Path.Combine(dir, "same.zip");
+        var stamp = new DateTimeOffset(2024, 1, 2, 3, 4, 6, TimeSpan.Zero);
+        void WriteStamped(byte fill)
+        {
+            using var fs = File.Create(same);
+            using var z = new ZipArchive(fs, ZipArchiveMode.Create);
+            var e = z.CreateEntry("v.jpg", CompressionLevel.NoCompression);
+            e.LastWriteTime = stamp;
+            using var s = e.Open();
+            s.Write(Enumerable.Repeat(fill, 100).ToArray());
+        }
+        WriteStamped(1);
+        var before = ZipStore.List(same, "").Images.Single();
+        Thread.Sleep(700); // 読み終わったファイルが閉じるのを待つ
+        WriteStamped(2);
+        File.SetLastWriteTimeUtc(same, DateTime.UtcNow.AddMinutes(2));
+        var after = ZipStore.List(same, "").Images.Single();
+        check(before.Length == after.Length && before.LastWriteTimeUtc == after.LastWriteTimeUtc && before.Version != after.Version
+              && ThumbnailKey.From(before) != ThumbnailKey.From(after), "中のファイルの日時が同じでも、中身が変われば別物（サムネイルを作り直す）");
 
         // ---- 壊れた ZIP ----
         string broken = Path.Combine(dir, "broken.zip");

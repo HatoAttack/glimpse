@@ -27,7 +27,7 @@ public static class ArchiveExport
                 result.Add(path);
                 continue;
             }
-            string name = Path.GetFileName(path);
+            string name = SafeFileName(Path.GetFileName(path));
             string stem = Path.GetFileNameWithoutExtension(name), ext = Path.GetExtension(name);
             for (int i = 2; !used.Add(name); i++) name = $"{stem} ({i}){ext}";
             string dest = Path.Combine(dir, name);
@@ -35,6 +35,25 @@ public static class ArchiveExport
             result.Add(dest);
         }
         return result;
+    }
+
+    private static readonly HashSet<string> ReservedNames = new(
+        new[] { "CON", "PRN", "AUX", "NUL" }
+            .Concat(Enumerable.Range(1, 9).SelectMany(i => new[] { $"COM{i}", $"LPT{i}" })),
+        StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Windows で使える名前にする（ほかの OS で作った ZIP には ? * : などを含む名前がある）。
+    /// 使えない文字は _ に、末尾の . と空白は除き、CON などの予約された名前には _ を前に付ける（拡張子は残す）
+    /// </summary>
+    public static string SafeFileName(string name)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var chars = name.Select(c => Array.IndexOf(invalid, c) >= 0 ? '_' : c).ToArray();
+        string safe = new string(chars).TrimEnd('.', ' ');
+        string stem = Path.GetFileNameWithoutExtension(safe);
+        if (ReservedNames.Contains(stem.TrimEnd(' '))) safe = "_" + safe;
+        return safe.Length == 0 || Path.GetFileNameWithoutExtension(safe).Length == 0 ? "_" + safe : safe;
     }
 
     /// <summary>前に書き出したもののうち、古いものを消す（使用中などで消せないものは残す）</summary>

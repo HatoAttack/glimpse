@@ -263,7 +263,7 @@ public sealed class QuickLookView : Control
         {
             try
             {
-                return before.LastWriteTimeUtc != after.LastWriteTimeUtc || before.Length != after.Length;
+                return before.LastWriteTimeUtc != after.LastWriteTimeUtc || before.Length != after.Length || before.Version != after.Version;
             }
             catch (IOException)
             {

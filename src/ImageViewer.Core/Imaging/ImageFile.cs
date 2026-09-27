@@ -6,6 +6,12 @@ public sealed record ImageFile(string FullName, long Length, DateTime LastWriteT
 {
     public string Name { get; } = Path.GetFileName(FullName);
 
+    /// <summary>
+    /// 中身の目印（ZIP の中の画像は CRC-32、普通のファイルは 0）。ZIP のツールは中のファイルの日時を保つことが多いので、
+    /// 名前・大きさ・日時が同じでも中身が変わったことを、これで見分ける
+    /// </summary>
+    public long Version { get; init; }
+
     public string Extension => Path.GetExtension(FullName);
 
     public string? DirectoryName => Path.GetDirectoryName(FullName);
