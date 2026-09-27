@@ -49,6 +49,12 @@ public interface IImageCommand
     Task ExecuteAsync(CommandContext context);
 }
 
+/// <summary>
+/// ZIP の中の画像にも使えるコマンドの印（コピー・フォルダーへコピーなど、ZIP を書き換えないもの）。
+/// 印の無いコマンドは、ZIP の中を開いている間は使えない
+/// </summary>
+public interface IWorksInArchive { }
+
 /// <summary>選択枚数の条件だけで実行可否が決まるコマンドの基底クラス</summary>
 public abstract class ImageCommandBase : IImageCommand
 {

@@ -7,6 +7,7 @@ using ImageViewer.App.Grid;
 using ImageViewer.App.Jump;
 using ImageViewer.App.Theming;
 using ImageViewer.App.Viewer;
+using ImageViewer.Core.Archives;
 using ImageViewer.Core.Commands;
 using ImageViewer.Core.Editing;
 using ImageViewer.Core.Imaging;
@@ -49,9 +50,10 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     // 直前の名前の変更（元に戻す用）。変更前の手動の並び順と並び順の種類も一緒に覚えておく
     private (IReadOnlyList<RenameOp> Ops, IReadOnlyList<string>? SavedOrder, SortMode Mode)? _lastRename;
     private ToolStripMenuItem _undoItem = null!;
-    private readonly List<ToolStripMenuItem> _renameFolderItems = new();
+    private readonly List<ToolStripMenuItem> _renameFolderItems = new(), _newFolderItems = new();
 
     private string? _folder;
+    private bool _inArchive; // ZIP の中を開いている（見るだけ。書き換える操作は使えない）
     private CancellationTokenSource? _loadCts;
 
     // ---- ファイラ（移動） ----
@@ -166,6 +168,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             _thumbnails.Dispose();
             _jump.SaveVisits();
             _everything?.Dispose();
+            ZipStore.CloseAll();
         };
 
         _footer.UpdateClicked += (_, _) => ShowUpdateDialog();
@@ -245,7 +248,9 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         string start = initialFolder ?? HomeFolder;
         if (_settings.HomeFolder != null && !Directory.Exists(_settings.HomeFolder) && initialFolder == null)
             Shown += (_, _) => Notify($"ホームフォルダが見つからないのでピクチャを開きました: {_settings.HomeFolder}");
-        if (Directory.Exists(start)) Shown += async (_, _) => await LoadFolderAsync(start);
+        if (FolderListing.CanOpen(start)) Shown += async (_, _) => await LoadFolderAsync(start);
+        // 前にコピー・ドラッグで ZIP から書き出したもののうち、古いものを片付ける
+        _ = Task.Run(() => ArchiveExport.CleanUp(TimeSpan.FromDays(1)));
         SetUpUpdateCheck();
     }
 
@@ -376,7 +381,10 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
         if (images.Count == 0 && folders.Count == 1)
         {
-            SetSelectionText($"フォルダー ・ {folders[0].LastWriteTime:yyyy/MM/dd HH:mm}");
+            var folder = folders[0];
+            SetSelectionText(_inArchive ? "フォルダー（ZIP の中）"
+                : FolderListing.IsArchiveTile(folder) ? $"ZIP ・ {folder.LastWriteTime:yyyy/MM/dd HH:mm}"
+                : $"フォルダー ・ {folder.LastWriteTime:yyyy/MM/dd HH:mm}");
             foreach (var panel in panels) panel.ShowFolder(folders[0]);
             return;
         }
@@ -433,9 +441,22 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
     // ---- 新しいフォルダー ----
 
+    /// <summary>「新しいフォルダー」のメニュー項目（ZIP の中では使えないので、有効 / 無効を切り替えられるよう覚えておく）</summary>
+    private ToolStripMenuItem NewFolderItem(ToolStripMenuItem item)
+    {
+        item.Click += async (_, _) => await CreateFolderAsync();
+        _newFolderItems.Add(item);
+        return item;
+    }
+
     private async Task CreateFolderAsync()
     {
         if (_folder == null) return;
+        if (_inArchive)
+        {
+            Notify(ArchiveReadOnlyMessage);
+            return;
+        }
         string parent = _folder;
         string? Validate(string name) =>
             RenamePlanner.ValidateName(name)
@@ -479,6 +500,13 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     private async Task RenameFolderAsync()
     {
         if (SelectedSingleFolder() is not { Parent: { } parentDir } dir || _folder == null) return;
+        if (_inArchive)
+        {
+            Notify(ArchiveReadOnlyMessage);
+            return;
+        }
+        // ZIP のタイルは ZIP ファイルの名前を変える（中身はそのまま）
+        bool zip = FolderListing.IsArchiveTile(dir);
         string parent = parentDir.FullName, oldName = dir.Name, oldPath = dir.FullName;
         string? Validate(string name) =>
             RenamePlanner.ValidateName(name)
@@ -486,13 +514,15 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
                 && (Directory.Exists(Path.Combine(parent, name)) || File.Exists(Path.Combine(parent, name)))
                 ? "同じ名前のフォルダーまたはファイルがすでにあります" : null);
 
-        using var dlg = new TextInputDialog("フォルダー名の変更", $"「{oldName}」の新しい名前:", oldName, Validate);
+        using var dlg = new TextInputDialog(zip ? "名前の変更" : "フォルダー名の変更", $"「{oldName}」の新しい名前:", oldName, Validate);
         if (dlg.ShowDialog(this) != DialogResult.OK || dlg.Value == oldName) return;
 
         string newPath = Path.Combine(parent, dlg.Value);
         try
         {
-            Directory.Move(oldPath, newPath); // 大文字小文字だけの変更もこれでできる
+            // 大文字小文字だけの変更もこれでできる
+            if (zip) File.Move(oldPath, newPath);
+            else Directory.Move(oldPath, newPath);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -508,7 +538,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         if (_settings.HomeFolder is string home && FolderListing.Retarget(home, oldPath, newPath) is string newHome) SetHome(newHome);
         await LoadFolderAsync(_folder, NavKind.Reload);
         _grid.SelectPath(newPath);
-        Notify($"フォルダー名を変更しました: {oldName} → {dlg.Value}");
+        Notify(zip ? $"名前を変更しました: {oldName} → {dlg.Value}" : $"フォルダー名を変更しました: {oldName} → {dlg.Value}");
     }
 
     /// <summary>「新しいフォルダー」、あれば「新しいフォルダー (2)」…（エクスプローラーと同じ付け方）</summary>
@@ -1038,7 +1068,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         menu.Items.Add(new ToolStripMenuItem(quick.Name, null, async (_, _) => await ExecuteAsync(quick))
         {
             ShortcutKeyDisplayString = ShortcutText(quick),
-            Enabled = quick.CanExecute(paths),
+            Enabled = CanRun(quick, paths),
             ToolTipText = options == null ? "前回の設定がまだありません（設定画面を開きます）" : null,
         });
         menu.Items.Add(new ToolStripMenuItem(options == null ? "（前回の設定なし）"
@@ -1047,7 +1077,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         menu.Items.Add(new ToolStripMenuItem("設定を開く...", null, async (_, _) => await ExecuteAsync(dialog))
         {
             ShortcutKeyDisplayString = ShortcutText(dialog),
-            Enabled = dialog.CanExecute(paths),
+            Enabled = CanRun(dialog, paths),
         });
     }
 
@@ -1058,6 +1088,8 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         var recent = (_settings.RecentDestinations ?? Array.Empty<string>())
             .Where(f => Directory.Exists(f) && !string.Equals(f, _folder, StringComparison.OrdinalIgnoreCase))
             .Take(9).ToList();
+        if (_inArchive)
+            _moveMenu.Items.Add(new ToolStripMenuItem("ZIP の中の画像はコピーします") { Enabled = false });
         if (recent.Count == 0)
             _moveMenu.Items.Add(new ToolStripMenuItem("最近の移動先はまだありません") { Enabled = false });
         for (int i = 0; i < recent.Count; i++)
@@ -1078,7 +1110,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             _moveMenu.Items.Add(new ToolStripMenuItem(cmd.Name.Replace("フォルダーへ", "フォルダーを探して"), null, async (_, _) => await ExecuteAsync(cmd))
             {
                 ShortcutKeyDisplayString = ShortcutText(cmd),
-                Enabled = cmd.CanExecute(TargetPaths()),
+                Enabled = CanRun(cmd, TargetPaths()),
             });
         }
     }
@@ -1090,6 +1122,12 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         ((ISettingsAccess)this).UpdateSettings(s => s.WithRecentDestination(folder));
         try
         {
+            // ZIP の中の画像は移動できないので、一時フォルダへ書き出したものをコピーする
+            if (_inArchive)
+            {
+                move = false;
+                paths = await Task.Run(() => ArchiveExport.ToFiles(paths));
+            }
             await FileTransfer.RunAsync(this, paths, folder, move, Handle);
         }
         catch (Exception ex)
@@ -1251,8 +1289,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         var fileMenu = new ToolStripMenuItem("ファイル(&F)");
         fileMenu.DropDownItems.Add(new ToolStripMenuItem("フォルダを開く(&O)...", null,
             async (_, _) => await ChooseFolderAsync()) { ShortcutKeys = Keys.Control | Keys.O });
-        fileMenu.DropDownItems.Add(new ToolStripMenuItem("新しいフォルダー(&N)...", null,
-            async (_, _) => await CreateFolderAsync()) { ShortcutKeys = Keys.Control | Keys.N });
+        fileMenu.DropDownItems.Add(NewFolderItem(new ToolStripMenuItem("新しいフォルダー(&N)...") { ShortcutKeys = Keys.Control | Keys.N }));
         fileMenu.DropDownItems.Add(RenameFolderItem("フォルダー名の変更(&M)..."));
         fileMenu.DropDownItems.Add(new ToolStripMenuItem("再読み込み(&R)", null,
             (_, _) => RequestRefresh()) { ShortcutKeys = Keys.F5 });
@@ -1334,7 +1371,11 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             _backItem, _forwardItem, _upItem,
             new ToolStripMenuItem("ホームへ(&H)", null, async (_, _) => await LoadFolderAsync(HomeFolder)) { ShortcutKeys = Keys.Alt | Keys.Home },
             new ToolStripSeparator(),
-            new ToolStripMenuItem("今のフォルダをホームに設定(&S)", null, (_, _) => { if (_folder != null) SetHome(_folder); }),
+            new ToolStripMenuItem("今のフォルダをホームに設定(&S)", null, (_, _) =>
+            {
+                if (_inArchive) Notify("ZIP の中はホームにできません");
+                else if (_folder != null) SetHome(_folder);
+            }),
             new ToolStripMenuItem("ホームフォルダを選ぶ(&C)...", null, (_, _) => ChooseHome()),
             new ToolStripSeparator(),
             new ToolStripMenuItem("アドレスバーに入力(&A)", null, (_, _) => _addressBox.BeginEdit()) { ShortcutKeys = Keys.Control | Keys.L },
@@ -1519,8 +1560,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     private void BuildContextMenu()
     {
         _contextMenu.Opening += (_, _) => UpdateCommandEnabled();
-        _contextMenu.Items.Add(new ToolStripMenuItem("新しいフォルダー...", null, async (_, _) => await CreateFolderAsync())
-            { ShortcutKeyDisplayString = "Ctrl+N" });
+        _contextMenu.Items.Add(NewFolderItem(new ToolStripMenuItem("新しいフォルダー...") { ShortcutKeyDisplayString = "Ctrl+N" }));
         _contextMenu.Items.Add(RenameFolderItem("フォルダー名の変更..."));
         _contextMenu.Items.Add(new ToolStripSeparator());
         _contextMenu.Items.Add(new ToolStripMenuItem("チェックを付ける", null, (_, _) => _grid.SetMarkOnSelected(true))
@@ -1584,17 +1624,24 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     {
         paths ??= TargetPaths();
         foreach (var (item, cmd) in _commandItems)
-            item.Enabled = cmd.CanExecute(paths);
+            item.Enabled = CanRun(cmd, paths);
         foreach (var (button, cmd) in _actionButtons)
-            button.Enabled = cmd.CanExecute(paths);
-        bool oneFolder = SelectedSingleFolder() != null;
+            button.Enabled = CanRun(cmd, paths);
+        bool oneFolder = SelectedSingleFolder() != null && !_inArchive;
         foreach (var item in _renameFolderItems) item.Enabled = oneFolder;
+        foreach (var item in _newFolderItems) item.Enabled = _folder != null && !_inArchive;
     }
+
+    private const string ArchiveReadOnlyMessage = "ZIP の中は見るだけです（コピー・フォルダーへコピーはできます）";
+
+    /// <summary>今このコマンドを使えるか。ZIP の中では、ZIP を書き換えないコマンド（コピーなど）だけ</summary>
+    private bool CanRun(IImageCommand cmd, IReadOnlyList<string> paths) =>
+        cmd.CanExecute(paths) && (!_inArchive || cmd is IWorksInArchive);
 
     private async Task ExecuteAsync(IImageCommand cmd)
     {
         var paths = TargetPaths();
-        if (!cmd.CanExecute(paths)) return;
+        if (!CanRun(cmd, paths)) return;
         try
         {
             await cmd.ExecuteAsync(new CommandContext(paths, this));
@@ -1814,17 +1861,42 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         List<DirectoryInfo> folders;
         List<ImageFile> files;
         SortMode mode;
+        bool inArchive = false;
         try
         {
             // 大きなフォルダでも UI を止めないよう列挙は別スレッドで行う。
             // 別のフォルダを開いたときは、手動の並び順が保存されていれば手動、無ければ名前順で始める
-            (folders, files, mode) = await Task.Run(() =>
+            (folders, files, mode, inArchive) = await Task.Run(() =>
             {
-                var listed = ImageFormats.ListImages(folder, cts.Token);
-                var subfolders = FolderListing.ListSubfolders(folder, cts.Token);
+                bool archive = ArchivePath.TrySplit(folder, out string zip, out string inner);
+                List<ImageFile> listed;
+                List<DirectoryInfo> subfolders;
+                if (archive)
+                {
+                    // ZIP そのもの・ZIP の中のフォルダ: 中の一覧から作る（ZIP の中の ZIP は開かない）
+                    ArchiveListing listing;
+                    try
+                    {
+                        listing = ZipStore.List(zip, inner, cts.Token);
+                    }
+                    catch (InvalidDataException ex)
+                    {
+                        throw new IOException($"ZIP を開けませんでした（壊れているか、ZIP ではありません）: {ex.Message}", ex);
+                    }
+                    listed = listing.Images.ToList();
+                    subfolders = listing.Folders.Select(f => new DirectoryInfo(f))
+                        .OrderBy(d => d.Name, FileSorting.NaturalNameComparer).ToList();
+                }
+                else
+                {
+                    listed = ImageFormats.ListImages(folder, cts.Token);
+                    // ZIP はフォルダのタイルとして、サブフォルダの後ろに並べる
+                    subfolders = FolderListing.ListSubfolders(folder, cts.Token);
+                    subfolders.AddRange(FolderListing.ListArchives(folder, cts.Token));
+                }
                 var saved = _orderStore.Load(folder);
                 var m = reload ? _sortMode : saved != null ? SortMode.Manual : SortMode.Name;
-                return (subfolders, Arrange(listed, m, saved), m);
+                return (subfolders, Arrange(listed, m, saved), m, archive);
             }, cts.Token);
         }
         catch (OperationCanceledException)
@@ -1833,7 +1905,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         }
         catch (Exception ex)
         {
-            _watcher.Watch(_folder); // 今のフォルダのまま
+            _watcher.Watch(_inArchive ? null : _folder); // 今のフォルダのまま
             if (quiet)
             {
                 Notify($"フォルダを読み直せませんでした: {ex.Message}");
@@ -1846,10 +1918,14 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
         if (!reload) ClearUndo();
         _folder = folder;
-        _watcher.Watch(folder);
+        // ZIP の中は見張らない（ZIP が外で書き換えられたら F5 で読み直す）。ZIP の外へ出たら開いていた ZIP を閉じる
+        if (_inArchive && !inArchive) ZipStore.CloseAll();
+        _inArchive = _grid.ArchiveMode = _quickLook.ArchiveMode = inArchive;
+        _watcher.Watch(inArchive ? null : folder);
         _sortMode = mode;
         if (kind == NavKind.New) _history.Navigate(folder);
-        if (!reload)
+        // フォルダジャンプの記録は本当のフォルダだけ
+        if (!reload && !inArchive)
         {
             _jump.RecordVisit(folder);
             if (++_visitsSinceSave >= 10)
@@ -1915,6 +1991,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     }
 
     private static string? DroppedFolder(DragEventArgs e) =>
-        e.Data?.GetData(DataFormats.FileDrop) is string[] { Length: > 0 } paths && Directory.Exists(paths[0])
+        // 一覧から出たドラッグ（ZIP の中の画像だと中身を求めると書き出してしまう）は見ない。ZIP を落とせば開く
+        !ThumbnailGrid.IsGridDrag(e.Data) && e.Data?.GetData(DataFormats.FileDrop) is string[] { Length: > 0 } paths && FolderListing.IsFolderOrArchive(paths[0])
             ? paths[0] : null;
 }

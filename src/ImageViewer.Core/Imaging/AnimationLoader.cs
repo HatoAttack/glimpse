@@ -55,10 +55,10 @@ public static class AnimationLoader
         if (!MayBeAnimated(path)) return 0;
         try
         {
-            return Image.Identify(path).FrameMetadataCollection.Count;
+            return ImageLoader.IdentifyImageSharp(path).FrameMetadataCollection.Count;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException
-                                       or UnknownImageFormatException or InvalidImageContentException)
+                                       or UnknownImageFormatException or InvalidImageContentException or InvalidDataException)
         {
             return 0;
         }
@@ -71,12 +71,13 @@ public static class AnimationLoader
     public static AnimationFrames? Load(string path, int maxEdge, CancellationToken ct = default)
     {
         if (!MayBeAnimated(path)) return null;
-        var info = Image.Identify(path);
+        var info = ImageLoader.IdentifyImageSharp(path);
         int count = info.FrameMetadataCollection.Count;
         if (count < 2 || (long)info.Width * info.Height * 4 * count > MaxDecodeBytes) return null;
         ct.ThrowIfCancellationRequested();
 
-        var image = Image.Load<Rgba32>(new DecoderOptions(), path);
+        Image<Rgba32> image;
+        using (var stream = ImageSource.OpenRead(path)) image = Image.Load<Rgba32>(new DecoderOptions(), stream);
         try
         {
             ct.ThrowIfCancellationRequested();
@@ -113,7 +114,8 @@ public static class AnimationLoader
     public static Image<Rgba32> LoadFrame(string path, int index)
     {
         // そのコマまでだけ展開する（重ね合わせのため、前のコマは読む必要がある）
-        using var image = Image.Load<Rgba32>(new DecoderOptions { MaxFrames = (uint)index + 1 }, path);
+        using var stream = ImageSource.OpenRead(path);
+        using var image = Image.Load<Rgba32>(new DecoderOptions { MaxFrames = (uint)index + 1 }, stream);
         if (index >= image.Frames.Count) throw new ArgumentOutOfRangeException(nameof(index), "そのコマはありません");
         ImageLoader.AutoOrient(image, path, partial: true); // 再生と同じ向きで（EXIF の回転を直す）
         return image.Frames.CloneFrame(index);

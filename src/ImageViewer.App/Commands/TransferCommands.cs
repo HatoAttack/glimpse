@@ -1,5 +1,6 @@
 // フォルダーへ移動 / フォルダーへコピー。移動先はフォルダジャンプと同じ検索で選ぶ
 using ImageViewer.App.Dialogs;
+using ImageViewer.Core.Archives;
 using ImageViewer.Core.Commands;
 
 namespace ImageViewer.App.Commands;
@@ -20,7 +21,9 @@ public abstract class TransferToFolderCommand(Form owner, ISettingsAccess settin
             folder = picked;
         }
         settings.UpdateSettings(s => s.WithRecentDestination(folder));
-        await FileTransfer.RunAsync(context.Host, context.Paths, folder, move, owner.Handle);
+        // ZIP の中の画像（コピーだけ）は、一時フォルダへ書き出したものをコピーする
+        var paths = move ? context.Paths : await Task.Run(() => ArchiveExport.ToFiles(context.Paths));
+        await FileTransfer.RunAsync(context.Host, paths, folder, move, owner.Handle);
     }
 }
 
@@ -33,7 +36,7 @@ public sealed class MoveToFolderCommand(Form owner, ISettingsAccess settings, Fo
 }
 
 public sealed class CopyToFolderCommand(Form owner, ISettingsAccess settings, FolderSearch search)
-    : TransferToFolderCommand(owner, settings, search, move: false)
+    : TransferToFolderCommand(owner, settings, search, move: false), IWorksInArchive
 {
     public override string Id => "file.copyTo";
     public override string Name => "フォルダーへコピー...";

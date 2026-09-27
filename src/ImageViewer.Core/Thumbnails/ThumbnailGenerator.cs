@@ -15,7 +15,8 @@ public static class ThumbnailGenerator
     /// <summary>長辺 size 以下のサムネイル（描画が速い 32bppPArgb）。読めなければ例外</summary>
     public static Bitmap Generate(string path, int size)
     {
-        if (ShellThumbnail.TryGet(path, size) is Bitmap shell) return shell;
+        // ZIP の中の画像はシェルが扱えないので、いつも自前で読む
+        if (!Archives.ArchivePath.IsInside(path) && ShellThumbnail.TryGet(path, size) is Bitmap shell) return shell;
 
         DecodeGate.Wait();
         try

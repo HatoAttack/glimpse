@@ -5,7 +5,9 @@
 using System.Drawing.Drawing2D;
 using ImageViewer.App.Commands;
 using ImageViewer.App.Theming;
+using ImageViewer.Core.Archives;
 using ImageViewer.Core.Imaging;
+using ImageViewer.Core.Navigation;
 using ImageViewer.Core.Ordering;
 using ImageViewer.Core.Thumbnails;
 
@@ -23,8 +25,8 @@ public sealed class ThumbnailGrid : Control
     private IReadOnlyList<ImageFile> _items = Array.Empty<ImageFile>();
     private ThumbnailKey[] _keys = Array.Empty<ThumbnailKey>();
     private Dictionary<string, int> _indexByPath = new(StringComparer.OrdinalIgnoreCase); // パス → セル番号
-    private Bitmap? _folderIcon;
-    private bool _folderIconLoaded;
+    private Bitmap? _folderIcon, _archiveIcon;
+    private bool _folderIconLoaded, _archiveIconLoaded;
 
     private int F => _folders.Count;
     private int CellCount => _folders.Count + _items.Count;
@@ -67,6 +69,12 @@ public sealed class ThumbnailGrid : Control
     /// <summary>チェックを付け外しするキー（その場に留まる）/ 付け外しして次へ進むキー</summary>
     public Keys MarkKey { get; set; } = Keys.Oem5;
     public Keys MarkNextKey { get; set; } = Keys.Oem7;
+
+    /// <summary>
+    /// ZIP の中を表示している（見るだけ）。フォルダのタイルへのドロップを受けず、
+    /// ほかのアプリへのドラッグは一時フォルダへ書き出したコピーを渡す
+    /// </summary>
+    public bool ArchiveMode { get; set; }
 
     /// <summary>フォルダのタイルをダブルクリックまたは Enter（そのフォルダへ移動）</summary>
     public event EventHandler<DirectoryInfo>? FolderActivated;
@@ -223,8 +231,9 @@ public sealed class ThumbnailGrid : Control
         _thumb = device;
         _thumbnails.SetSize(GenerationSizeFor(device)); // 段階が同じなら何もしない（作ってあるものを縮小して描く）
         _folderIcon?.Dispose();
-        _folderIcon = null;
-        _folderIconLoaded = false;
+        _archiveIcon?.Dispose();
+        _folderIcon = _archiveIcon = null;
+        _folderIconLoaded = _archiveIconLoaded = false;
 
         UpdateScrollBar();
         if (CellCount > 0) SetScroll(CurrentLayout.CellBounds(Math.Min(first, CellCount - 1)).Top - _gap);
@@ -548,7 +557,8 @@ public sealed class ThumbnailGrid : Control
         var area = ThumbArea(cell);
         if (IsFolder(index))
         {
-            DrawFolderIcon(g, FolderIconBounds(area));
+            if (IsArchiveTile(index)) DrawArchiveIcon(g, FolderIconBounds(area), CellPath(index));
+            else DrawFolderIcon(g, FolderIconBounds(area));
             TextRenderer.DrawText(g, CellName(index), Font, NameArea(cell), nameColor,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
             return;
@@ -607,6 +617,31 @@ public sealed class ThumbnailGrid : Control
         using var tab = new SolidBrush(Color.FromArgb(224, 170, 50));
         g.FillRectangle(tab, r.X, r.Y + r.Height / 6, r.Width * 2 / 5, r.Height / 6);
         g.FillRectangle(body, r.X, r.Y + r.Height / 4, r.Width, r.Height * 5 / 8);
+    }
+
+    /// <summary>ZIP のタイル（ZIP の中のフォルダは普通のフォルダのタイル）</summary>
+    private bool IsArchiveTile(int cell) => IsFolder(cell) && !ArchiveMode && FolderListing.IsArchiveTile(_folders[cell]);
+
+    /// <summary>
+    /// ZIP のアイコン。フォルダと同じく、最初の ZIP のアイコンを 1 回だけ取って使い回す。
+    /// 取れなければフォルダの形にファスナーの線を重ねる
+    /// </summary>
+    private void DrawArchiveIcon(Graphics g, Rectangle r, string path)
+    {
+        if (!_archiveIconLoaded)
+        {
+            _archiveIconLoaded = true;
+            _archiveIcon = ShellThumbnail.TryGetIcon(path, r.Width);
+        }
+        if (_archiveIcon != null)
+        {
+            g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            g.DrawImage(_archiveIcon, Fit(_archiveIcon.Size, r));
+            return;
+        }
+        DrawFolderIcon(g, r);
+        using var zipper = new Pen(Color.FromArgb(120, 90, 30), Math.Max(1f, r.Width / 24f)) { DashStyle = DashStyle.Dash };
+        g.DrawLine(zipper, r.X + r.Width / 2, r.Y + r.Height / 4, r.X + r.Width / 2, r.Y + r.Height * 7 / 8);
     }
 
     /// <summary>サムネイル枠の左上に丸いチェックの印（画像の上に重ねても見えるよう白い縁取り付き）</summary>
@@ -753,6 +788,9 @@ public sealed class ThumbnailGrid : Control
     // エクスプローラー等に落とせばそちらで移動 / コピー（どちらもエクスプローラーと同じく、同じドライブなら移動・Ctrl でコピー）
 
     private const string ReorderFormat = "ImaGeViewer.Reorder";
+
+    /// <summary>一覧から出たドラッグか（ZIP の中の画像は、中身を求めると一時フォルダへ書き出すので、先にこれで見分ける）</summary>
+    public static bool IsGridDrag(IDataObject? data) => data?.GetDataPresent(ReorderFormat) == true;
     private readonly string _dragToken = Guid.NewGuid().ToString("N"); // 自分から出たドラッグかの判定用
     private bool _dragCandidate;
     private Point _dragOrigin;
@@ -770,13 +808,15 @@ public sealed class ThumbnailGrid : Control
         var paths = SelectedImages.Select(f => f.FullName).ToArray();
         if (paths.Length == 0) return; // フォルダだけを掴んだときは何もしない
 
-        var data = new DataObject();
-        data.SetData(DataFormats.FileDrop, paths);
+        // ZIP の中の画像は、一時フォルダへ書き出したものをコピーで渡す（移動はできない）
+        bool archive = ArchiveMode;
+        var data = archive ? new ArchiveDragData(paths) : new DataObject();
+        if (!archive) data.SetData(DataFormats.FileDrop, paths);
         data.SetData(ReorderFormat, _dragToken);
         _droppedInside = false;
         try
         {
-            DoDragDrop(data, DragDropEffects.Copy | DragDropEffects.Move);
+            DoDragDrop(data, archive ? DragDropEffects.Copy : DragDropEffects.Copy | DragDropEffects.Move);
         }
         finally
         {
@@ -787,18 +827,21 @@ public sealed class ThumbnailGrid : Control
         // エクスプローラー等が移動した分は一覧から外す。移動したかは戻り値では分からない（移動を自分で行った相手は
         // 「何もしていない」を返す）ので、ファイルが残っているかで確かめる。
         // このグリッドのフォルダ・ツリーへ落とした分は、ドロップを終えてから本体が移動して反映する
-        if (!_droppedInside)
+        if (!_droppedInside && !archive)
         {
             var gone = paths.Where(p => !File.Exists(p)).ToList();
             if (gone.Count > 0) FilesMovedOut?.Invoke(this, gone);
         }
     }
 
-    /// <summary>ドラッグ中のマウスの下にあるフォルダのタイル（無ければ -1）。タイルのどこでも受け付ける</summary>
+    /// <summary>
+    /// ドラッグ中のマウスの下にあるフォルダのタイル（無ければ -1）。タイルのどこでも受け付ける。
+    /// ZIP のタイルと ZIP の中のフォルダには落とせない（ZIP は書き換えない）
+    /// </summary>
     private int FolderCellAt(Point client)
     {
         int i = CurrentLayout.IndexAt(client.X, client.Y + ScrollY);
-        return i >= 0 && IsFolder(i) ? i : -1;
+        return i >= 0 && IsFolder(i) && !ArchiveMode && !IsArchiveTile(i) ? i : -1;
     }
 
     private void SetDropFolder(int cell)
@@ -812,7 +855,7 @@ public sealed class ThumbnailGrid : Control
         e.Data?.GetDataPresent(ReorderFormat) == true && e.Data.GetData(ReorderFormat) as string == _dragToken;
 
     private static string? DroppedFolder(DragEventArgs e) =>
-        e.Data?.GetData(DataFormats.FileDrop) is string[] { Length: > 0 } p && Directory.Exists(p[0]) ? p[0] : null;
+        e.Data?.GetData(DataFormats.FileDrop) is string[] { Length: > 0 } p && FolderListing.IsFolderOrArchive(p[0]) ? p[0] : null;
 
     protected override void OnDragEnter(DragEventArgs e)
     {
@@ -1076,6 +1119,7 @@ public sealed class ThumbnailGrid : Control
             _thumbnails.ThumbnailReady -= OnThumbnailReady;
             _autoScroll.Dispose();
             _folderIcon?.Dispose();
+            _archiveIcon?.Dispose();
         }
         base.Dispose(disposing);
     }

@@ -7,10 +7,12 @@ namespace ImageViewer.App.Commands;
 internal static class FileTransfer
 {
     /// <summary>
-    /// ドラッグ＆ドロップで落とせるか。自分自身・自分の中へ、今あるフォルダへの移動は受け付けない
+    /// ドラッグ＆ドロップで落とせるか。自分自身・自分の中へ、今あるフォルダへの移動は受け付けない。
+    /// ZIP のタイル・ZIP の中のフォルダ（本当のフォルダではない）には落とせない
     /// </summary>
     public static bool CanDrop(IReadOnlyList<string> sources, string folder, bool move) =>
         sources.Count > 0
+        && Directory.Exists(folder)
         && !sources.Any(p => Directory.Exists(p) && FolderListing.IsSameOrInside(folder, p))
         && !(move && sources.All(p => FolderListing.IsDirectlyIn(p, folder)));
 

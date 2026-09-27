@@ -92,6 +92,11 @@ public sealed class QuickLookView : Control
     /// <summary>右側の補正パネル（E で開け閉め）。前回の補正（Adjust.Last）は本体が入れる</summary>
     public AdjustPanel Adjust { get; } = new() { Dock = DockStyle.Right, Visible = false };
 
+    /// <summary>ZIP の中の画像を見ている（見るだけ。補正・フレーム保存はできない）</summary>
+    public bool ArchiveMode { get; set; }
+
+    private const string ArchiveNotice = "ZIP の中の画像は見るだけです（補正・保存はできません）";
+
     /// <summary>補正して保存した（本体が一覧を読み直し、前回の補正を設定に書く）。引数は保存したファイル</summary>
     public event EventHandler<string>? ImageAdjusted;
 
@@ -1005,7 +1010,7 @@ public sealed class QuickLookView : Control
             if (_animFrames == null) return "";
             string pause = KeyFree(PauseKey) ? $"    P {(_animPaused ? "再生" : "一時停止")}" : "";
             string step = KeyFree(Keys.Oemcomma) && KeyFree(Keys.OemPeriod) ? "    , . コマ送り" : "";
-            return $"{pause}{step}    Ctrl+S フレーム保存";
+            return ArchiveMode ? $"{pause}{step}" : $"{pause}{step}    Ctrl+S フレーム保存";
         }
     }
 
@@ -1014,6 +1019,11 @@ public sealed class QuickLookView : Control
     {
         // 保存中の Ctrl+S（押し続けたときのキーリピートも）は受けない。原寸で読み直すので、重なるとメモリを使いすぎる
         if (_animFrames == null || _animPath == null || _savingFrame) return;
+        if (ArchiveMode)
+        {
+            ShowNotice(ArchiveNotice);
+            return;
+        }
         string source = _animPath;
         int frame = _animFrame, count = _animFrames.Length;
         _savingFrame = true;
@@ -1060,6 +1070,11 @@ public sealed class QuickLookView : Control
         }
         // Space を押し続けて見ているとき（離したら閉じる）は開かない。ちらっと見るだけの表示なので
         if (!_spaceReleased || _zooming || _index < 0 || _failed.Contains(_items[_index].FullName)) return;
+        if (ArchiveMode)
+        {
+            ShowNotice(ArchiveNotice);
+            return;
+        }
         // アニメや複数ページの TIFF かどうかは、再生の読み込みを待たずにヘッダーで調べる（読み込み中や、大きすぎて再生しないアニメもあるため）
         string path = _items[_index].FullName;
         bool animated = _animFrames != null || await Task.Run(() => Adjuster.FrameCount(path)) > 1;
@@ -1194,7 +1209,7 @@ public sealed class QuickLookView : Control
     private string AdjustStatus => !HasUnsavedAdjust ? "" : _comparing ? "    補正前を表示中" : "    補正中（未保存）";
 
     /// <summary>下の操作の案内に足す補正の操作</summary>
-    private string AdjustGuide => !KeyFree(AdjustKey) ? "" : Adjust.Visible ? "    Ctrl+S 保存    E 補正を閉じる" : "    E 補正";
+    private string AdjustGuide => !KeyFree(AdjustKey) || ArchiveMode ? "" : Adjust.Visible ? "    Ctrl+S 保存    E 補正を閉じる" : "    E 補正";
 
     /// <summary>
     /// 画像（またはその一部）に補正をかけたもの。元の画像・範囲・値が同じ間は作り直さない。

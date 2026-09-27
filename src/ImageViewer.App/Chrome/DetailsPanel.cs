@@ -1,7 +1,9 @@
 // 詳細パネル（一覧の右側のインスペクタと、1 枚表示の右側で共通）。文字だけ（画像はサムネイル・1 枚表示で見えているので出さない）。
 // 1 枚: ファイル名・大きさ・形式・ファイルサイズ・更新日時・撮影情報・場所 / 複数: 枚数と合計サイズ / フォルダ: 名前と更新日時
 using ImageViewer.App.Theming;
+using ImageViewer.Core.Archives;
 using ImageViewer.Core.Imaging;
+using ImageViewer.Core.Navigation;
 
 namespace ImageViewer.App.Chrome;
 
@@ -80,11 +82,20 @@ public sealed class DetailsPanel : Control
     public void ShowFolder(DirectoryInfo folder)
     {
         _title = folder.Name;
-        _rows = new[] { ("種類", "フォルダー"), ("更新", SafeTime(folder)) };
+        // ZIP の中のフォルダには更新日時が無い（フォルダの項目が無いことも多い）
+        _rows = ArchivePath.IsInside(folder.FullName) ? new[] { ("種類", "フォルダー（ZIP の中）") }
+            : FolderListing.IsArchiveTile(folder) ? new[] { ("種類", "ZIP"), ("ファイル", FormatBytes(SafeLength(folder.FullName))), ("更新", SafeTime(folder)) }
+            : new[] { ("種類", "フォルダー"), ("更新", SafeTime(folder)) };
         _location = folder.Parent?.FullName;
         _message = "";
         _toolTip.SetToolTip(this, folder.FullName);
         Invalidate();
+    }
+
+    private static long SafeLength(string file)
+    {
+        try { return new FileInfo(file).Length; }
+        catch (IOException) { return 0; }
     }
 
     private static string SafeTime(FileSystemInfo f)

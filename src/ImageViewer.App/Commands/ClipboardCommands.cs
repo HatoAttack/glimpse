@@ -1,6 +1,7 @@
 // コピー / 切り取り / 貼り付け。クリップボードはエクスプローラーと同じ形式（ファイルの一覧 + コピーか移動か）なので、
 // エクスプローラーとの間でもそのまま貼り付けられる
 using System.Collections.Specialized;
+using ImageViewer.Core.Archives;
 using ImageViewer.Core.Commands;
 
 namespace ImageViewer.App.Commands;
@@ -47,18 +48,19 @@ internal static class FileClipboard
     }
 }
 
-public sealed class CopyFilesCommand : ImageCommandBase
+/// <summary>ZIP の中の画像は、一時フォルダへ書き出したものをクリップボードに載せる</summary>
+public sealed class CopyFilesCommand : ImageCommandBase, IWorksInArchive
 {
     public override string Id => "edit.copy";
     public override string Name => "コピー";
     public override string Category => "編集";
     public override string? DefaultShortcut => "Ctrl+C";
 
-    public override Task ExecuteAsync(CommandContext context)
+    public override async Task ExecuteAsync(CommandContext context)
     {
-        FileClipboard.Set(context.Paths, cut: false);
+        var paths = await Task.Run(() => ArchiveExport.ToFiles(context.Paths));
+        FileClipboard.Set(paths, cut: false);
         context.Host.Notify($"{context.Paths.Count} 枚をコピーしました（貼り付けは Ctrl+V。エクスプローラーにも貼り付けられます）");
-        return Task.CompletedTask;
     }
 }
 

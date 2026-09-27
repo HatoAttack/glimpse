@@ -1,5 +1,6 @@
 // 動作確認用の基本コマンド。リサイズ・切り抜き・連結も同じ形で追加していく
 using System.Diagnostics;
+using ImageViewer.Core.Archives;
 using ImageViewer.Core.Commands;
 
 namespace ImageViewer.App.Commands;
@@ -20,8 +21,8 @@ public sealed class CopyPathsCommand : ImageCommandBase
     }
 }
 
-/// <summary>選択した画像をエクスプローラーで表示（1枚のみ）</summary>
-public sealed class RevealInExplorerCommand : ImageCommandBase
+/// <summary>選択した画像をエクスプローラーで表示（1枚のみ）。ZIP の中の画像なら、その ZIP を表示する</summary>
+public sealed class RevealInExplorerCommand : ImageCommandBase, IWorksInArchive
 {
     public override string Id => "file.revealInExplorer";
     public override string Name => "エクスプローラーで表示";
@@ -31,7 +32,8 @@ public sealed class RevealInExplorerCommand : ImageCommandBase
 
     public override Task ExecuteAsync(CommandContext context)
     {
-        Process.Start("explorer.exe", $"/select,\"{context.Paths[0]}\"");
+        string path = ArchivePath.TrySplit(context.Paths[0], out string archive, out _) ? archive : context.Paths[0];
+        Process.Start("explorer.exe", $"/select,\"{path}\"");
         return Task.CompletedTask;
     }
 }

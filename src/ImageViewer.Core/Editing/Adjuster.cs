@@ -187,7 +187,7 @@ public static class Adjuster
         {
             try
             {
-                return Math.Max(1, Image.Identify(path).FrameMetadataCollection.Count);
+                return Math.Max(1, ImageLoader.IdentifyImageSharp(path).FrameMetadataCollection.Count);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException
                                            or UnknownImageFormatException or InvalidImageContentException)
