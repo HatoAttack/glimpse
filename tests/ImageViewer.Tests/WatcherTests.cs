@@ -7,8 +7,7 @@ static class WatcherTests
     public static void Run(Action<bool, string> check, string dir)
     {
         Directory.CreateDirectory(dir);
-        check(FolderWatcher.Relevant("a.jpg") && FolderWatcher.Relevant("B.PNG") && FolderWatcher.Relevant("sub"),
-            "見張り: 画像と拡張子の無い名前（フォルダ）は読み直す");
+        check(FolderWatcher.Relevant("a.jpg") && FolderWatcher.Relevant("B.PNG"), "見張り: 画像の変化で読み直す");
         check(!FolderWatcher.Relevant("a.jpg.0123abcd.tmp") && !FolderWatcher.Relevant("memo.txt"),
             "見張り: 保存中の一時ファイルや画像でないファイルでは読み直さない");
 
@@ -52,6 +51,16 @@ static class WatcherTests
                 File.Delete(Path.Combine(dir, "w0.png"));
                 Pump(900);
                 check(events.Count == 1, "見張り: 画像の削除を知らせる");
+
+                // 名前に . があるフォルダも、拡張子で絞らずに知らせる
+                events.Clear();
+                Directory.CreateDirectory(Path.Combine(dir, "trip.2026"));
+                Pump(900);
+                check(events.Count == 1, "見張り: 名前に . があるフォルダの追加も知らせる");
+                events.Clear();
+                Directory.Delete(Path.Combine(dir, "trip.2026"));
+                Pump(900);
+                check(events.Count == 1, "見張り: 名前に . があるフォルダの削除も知らせる");
 
                 events.Clear();
                 watcher.Watch(null);
