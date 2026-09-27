@@ -162,7 +162,14 @@ static class ArchiveTests
         string longZip = Path.Combine(dir, "long.zip");
         Write(longZip, null, (longStem + ".png", Png(3, 3)), ("a/" + longStem + ".png", Png(3, 3)));
         var longOut = ArchiveExport.ToFiles(new[] { ArchivePath.Combine(longZip, longStem + ".png"), ArchivePath.Combine(longZip, @"a\" + longStem + ".png") });
-        check(longOut.All(File.Exists) && longOut[1].EndsWith(" (2).png"), "長い名前の画像も、名前が重なっても書き出せる");
+        check(longOut.All(File.Exists) && longOut[1].EndsWith(" (2).png") && longOut.All(p => p.Length < 260), "長い名前の画像も、名前が重なっても書き出せる");
+        // 一時フォルダが長い場所にあるとき: 名前をさらに縮めて、パス全体を 260 文字未満にする
+        string savedRoot = ArchiveExport.Root;
+        ArchiveExport.Root = Path.Combine(dir, new string('d', 120));
+        var deepOut = ArchiveExport.ToFiles(new[] { ArchivePath.Combine(longZip, longStem + ".png"), ArchivePath.Combine(longZip, @"a\" + longStem + ".png") });
+        check(deepOut.All(File.Exists) && deepOut.All(p => p.Length < 260 && p.EndsWith(".png")),
+            $"一時フォルダが長い場所でも、パス全体を 260 文字未満にする（{deepOut.Max(p => p.Length)} 文字）");
+        ArchiveExport.Root = savedRoot;
         string odd = Path.Combine(dir, "odd.zip");
         Write(odd, null, ("what?.png", Png(3, 3)), ("NUL.png", Png(3, 3)));
         var oddOut = ArchiveExport.ToFiles(new[] { ArchivePath.Combine(odd, "what?.png"), ArchivePath.Combine(odd, "NUL.png") });
