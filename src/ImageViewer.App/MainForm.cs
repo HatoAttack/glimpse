@@ -28,6 +28,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     private readonly ThumbnailService _thumbnails;
     private readonly ThumbnailGrid _grid;
     private readonly QuickLookView _quickLook = new() { Dock = DockStyle.Fill };
+    private readonly FolderWatcher _watcher;
     private readonly FooterBar _footer = new();
     private readonly DetailsPanel _inspector = new() { Dock = DockStyle.Right };
     private readonly IconButton _inspectorButton = new() { Icon = Icons.Info, AccessibleName = "詳細パネル" };
@@ -128,6 +129,9 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         ApplySaveQuality();
         RegisterCommands();
         _addressBox = new AddressBox(_address);
+        // 開いているフォルダの外での変化（削除・追加・編集）を見張り、落ち着いたら読み直す
+        _watcher = new FolderWatcher(this);
+        _watcher.Changed += async (_, folder) => await OnFolderChangedAsync(folder);
 
         // サムネイルはメモリ上に最大 128MB まで持つ（大きさは表示サイズに合わせて段階的に決まる）
         _thumbnails = new ThumbnailService(LogicalToDeviceUnits(160), 128L * 1024 * 1024,
@@ -156,6 +160,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _grid.FilesMovedOut += (_, paths) => FilesRemoved(paths);
         FormClosed += (_, _) =>
         {
+            _watcher.Dispose();
             _http?.Dispose();
             _thumbnails.Dispose();
             _jump.SaveVisits();
@@ -1713,6 +1718,25 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         }
     }
 
+    /// <summary>
+    /// 開いているフォルダが外で変わった（エクスプローラーでの削除・ほかのアプリでの編集など）: 選択と位置を保ったまま読み直す。
+    /// フォルダそのものが無くなっていたら、残っている親のフォルダへ移る
+    /// </summary>
+    private async Task OnFolderChangedAsync(string folder)
+    {
+        if (!string.Equals(folder, _folder, StringComparison.OrdinalIgnoreCase)) return;
+        if (Directory.Exists(folder))
+        {
+            await LoadFolderAsync(folder, NavKind.Reload, quiet: true);
+            return;
+        }
+        string? parent = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(folder));
+        while (parent != null && !Directory.Exists(parent)) parent = Path.GetDirectoryName(parent);
+        if (parent == null) return;
+        await LoadFolderAsync(parent);
+        Notify($"{Path.GetFileName(Path.TrimEndingDirectorySeparator(folder))} が無くなったので、上のフォルダを開きました");
+    }
+
     public async void RequestRefresh()
     {
         if (_folder != null) await LoadFolderAsync(_folder);
@@ -1726,7 +1750,8 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         if (dlg.ShowDialog(this) == DialogResult.OK) await LoadFolderAsync(dlg.SelectedPath);
     }
 
-    private async Task LoadFolderAsync(string folder, NavKind kind = NavKind.New)
+    /// <param name="quiet">外での変化を受けた読み直し（「読み込み中…」を出さず、読めなければフッターに出すだけ）</param>
+    private async Task LoadFolderAsync(string folder, NavKind kind = NavKind.New, bool quiet = false)
     {
         // 別のフォルダへ移ると 1 枚表示は閉じるので、保存していない補正があれば先に聞く（やめたらツリーの選択を今のフォルダに戻す）
         if (!string.Equals(_folder, folder, StringComparison.OrdinalIgnoreCase) && !await ConfirmUnsavedAdjustAsync())
@@ -1738,7 +1763,9 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         var cts = _loadCts = new CancellationTokenSource();
         bool reload = string.Equals(_folder, folder, StringComparison.OrdinalIgnoreCase);
         if (!reload) _noticeActive = false; // 別のフォルダへ移ったら、前のフォルダでのお知らせは消す
-        if (!_noticeActive) _footer.Status = "読み込み中…";
+        // 別のフォルダへ移る間は見張りを止める（前のフォルダの変化で読み直して、移る途中の読み込みを打ち切らないように）
+        if (!reload) _watcher.Watch(null);
+        if (!_noticeActive && !quiet) _footer.Status = "読み込み中…";
         List<DirectoryInfo> folders;
         List<FileInfo> files;
         SortMode mode;
@@ -1761,6 +1788,12 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         }
         catch (Exception ex)
         {
+            _watcher.Watch(_folder); // 今のフォルダのまま
+            if (quiet)
+            {
+                Notify($"フォルダを読み直せませんでした: {ex.Message}");
+                return;
+            }
             MessageBox.Show(this, ex.Message, "フォルダを開けません", MessageBoxButtons.OK, MessageBoxIcon.Error);
             UpdateCommandStates();
             return;
@@ -1768,6 +1801,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
         if (!reload) ClearUndo();
         _folder = folder;
+        _watcher.Watch(folder);
         _sortMode = mode;
         if (kind == NavKind.New) _history.Navigate(folder);
         if (!reload)

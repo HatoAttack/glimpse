@@ -100,6 +100,10 @@ Directory.Delete(dir, true);
 AdjustTests.Run(Check, dir);
 Directory.Delete(dir, true);
 
+// ---- フォルダの見張り ----
+WatcherTests.Run(Check, dir);
+Directory.Delete(dir, true);
+
 // ---- ファイラとしての移動 ----
 NavigationTests.Run(Check, dir);
 Directory.Delete(dir, true);
