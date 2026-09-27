@@ -214,12 +214,57 @@ public sealed class QuickLookView : Control
         int found = current == null ? -1 : items.ToList().FindIndex(f => string.Equals(f.FullName, current, StringComparison.OrdinalIgnoreCase));
         if (found < 0)
         {
-            Close(animate: false); // 一覧が変わったので、戻る先のサムネイルも無い
+            // 同じフォルダで表示中の画像だけが消えた（エクスプローラーで削除した など）: 同じ位置の次の画像を表示する
+            if (items.Count > 0 && current != null && SameFolder(items[0].FullName, current))
+            {
+                ResetAdjust(); // 消えた画像の補正は保存できない
+                ReleaseFull();
+                _items = items;
+                ShowIndex(Math.Clamp(_index, 0, items.Count - 1));
+                return;
+            }
+            Close(animate: false); // 別のフォルダへ移った・空になった。戻る先のサムネイルも無い
             return;
         }
+        var old = _items.ToDictionary(f => f.FullName, StringComparer.OrdinalIgnoreCase);
         _items = items;
         _index = found;
+        // ほかのアプリで書き換えられた画像は読み直す（更新日時か大きさが変わったもの）
+        bool reload = false;
+        foreach (var f in items)
+        {
+            if (!old.TryGetValue(f.FullName, out var before) || !Modified(before, f)) continue;
+            _failed.Remove(f.FullName);
+            if (_cache.Remove(f.FullName, out var stale)) stale.Dispose();
+            if (string.Equals(f.FullName, current, StringComparison.OrdinalIgnoreCase))
+            {
+                ReleaseFull();
+                _adjustedView.Dispose();
+                if (string.Equals(_animPath, current, StringComparison.OrdinalIgnoreCase))
+                {
+                    ReleaseAnimation();
+                    _ = LoadAnimationAsync(current, 0, paused: false);
+                }
+            }
+            reload = true;
+        }
+        if (reload) _ = LoadAroundAsync();
         Invalidate();
+
+        static bool SameFolder(string a, string b) =>
+            string.Equals(Path.GetDirectoryName(a), Path.GetDirectoryName(b), StringComparison.OrdinalIgnoreCase);
+
+        static bool Modified(FileInfo before, FileInfo after)
+        {
+            try
+            {
+                return before.LastWriteTimeUtc != after.LastWriteTimeUtc || before.Length != after.Length;
+            }
+            catch (IOException)
+            {
+                return true;
+            }
+        }
     }
 
     private void ShowIndex(int index)
