@@ -28,6 +28,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     private readonly ThumbnailService _thumbnails;
     private readonly ThumbnailGrid _grid;
     private readonly QuickLookView _quickLook = new() { Dock = DockStyle.Fill };
+    private readonly CompareView _compare = new() { Dock = DockStyle.Fill };
     private readonly FolderWatcher _watcher;
     private readonly FooterBar _footer = new();
     private readonly DetailsPanel _inspector = new() { Dock = DockStyle.Right };
@@ -195,7 +196,9 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _split.Panel1.Padding = new Padding(0, 0, 1, 0); // サイドバーの右端の線（Panel1 の地の色で描く）
         _split.Panel2.Controls.Add(_grid);
         _split.Panel2.Controls.Add(_quickLook);
+        _split.Panel2.Controls.Add(_compare);
         SetUpQuickLook();
+        SetUpCompare();
 
         // Dock は後から追加したものから順に場所を取るので、Fill → 右の詳細パネル → ツールバー → フッター の順に追加
         _mainMenu = BuildMainMenu();
@@ -207,9 +210,11 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         // 1 枚表示の間は一覧の右の詳細パネルを隠す（1 枚表示には I で出す自分の詳細パネルがある。画像を広く見せる）
         _quickLook.VisibleChanged += (_, _) =>
         {
-            _inspector.Visible = _inspectorItem.Checked && !_quickLook.Visible;
+            _inspector.Visible = _inspectorItem.Checked && !_quickLook.Visible && !_compare.Visible;
             _inspectorButton.Active = _quickLook.Visible ? _quickLook.Details.Visible : _inspectorItem.Checked;
         };
+        // 2 枚並べて比べる間も、画像を広く見せるために隠す
+        _compare.VisibleChanged += (_, _) => _inspector.Visible = _inspectorItem.Checked && !_quickLook.Visible && !_compare.Visible;
         _quickLook.Details.Visible = _settings.QuickLookDetailsVisible ?? false;
         _quickLook.DetailsToggled += (_, _) =>
         {
@@ -268,7 +273,11 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             PerformLayout();
         };
 
-        _grid.PeekRequested += (_, index) => _quickLook.Open(_grid.Items, index, byKey: true);
+        // 画像を 2 枚だけ選んで Space なら、並べて比べる
+        _grid.PeekRequested += (_, index) =>
+        {
+            if (!TryOpenCompare(index)) _quickLook.Open(_grid.Items, index, byKey: true);
+        };
         _grid.ItemActivated += (_, index) => _quickLook.Open(_grid.Items, index, byKey: false);
         _quickLook.CurrentChanged += (_, index) => _grid.SelectImage(index);
         _quickLook.ToggleMarkRequested += (_, index) => _grid.ToggleImageMark(index);
@@ -298,6 +307,37 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _thumbnails.ThumbnailReady += _ => _quickLook.OnThumbnailReady(); // フィルムストリップに出ているサムネイル
         // 別のフォルダへ移った・表示中の画像が消えたら閉じる。並べ替え・リネームなら同じ画像を表示し続ける
         _grid.ContentsChanged += (_, _) => _quickLook.ItemsChanged(_grid.Items);
+    }
+
+    // ---- 2 枚並べて比べる（2 枚選んで Space） ----
+
+    private void SetUpCompare()
+    {
+        _compare.MarkKey = _quickLook.MarkKey;
+        _compare.MarkNextKey = _quickLook.MarkNextKey;
+        _compare.IsMarked = _grid.IsImageMarked;
+        _compare.MarkedCount = () => _grid.MarkedCount;
+        _compare.PlaceholderProvider = _quickLook.PlaceholderProvider;
+        _compare.ToggleMarkRequested += (_, index) => _grid.ToggleImageMark(index);
+        // 並べている 2 枚を一覧でも選んでおく（閉じたときにどれを見ていたか分かるように。そのまま Space でまた開ける）
+        _compare.ShownChanged += (_, _) => _grid.SelectPaths(_compare.ShownItems.Select(f => f.FullName));
+        _compare.Closed += (_, _) => _grid.Focus();
+        _grid.MarksChanged += (_, _) => _compare.Invalidate();
+        _thumbnails.ThumbnailReady += _ => _compare.OnThumbnailReady();
+        _grid.ContentsChanged += (_, _) => _compare.ItemsChanged(_grid.Items);
+    }
+
+    /// <summary>画像がちょうど 2 枚選ばれていて、Space を押した画像がそのどちらかなら、並べて比べる（左が並びの先のもの）</summary>
+    private bool TryOpenCompare(int index)
+    {
+        var selected = _grid.SelectedImages;
+        if (selected.Count != 2 || _grid.SelectedFolders.Count > 0) return false;
+        var items = _grid.Items;
+        var indices = selected.Select(f => items.ToList().FindIndex(i => string.Equals(i.FullName, f.FullName, StringComparison.OrdinalIgnoreCase)))
+            .OrderBy(i => i).ToArray();
+        if (indices[0] < 0 || !indices.Contains(index)) return false;
+        _compare.Open(items, indices[0], indices[1], byKey: true);
+        return true;
     }
 
     // ---- サムネイルの大きさ（フッターのスライダー / Ctrl+ホイール） ----
@@ -1144,7 +1184,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     private void SetInspectorVisible(bool visible)
     {
         _inspectorItem.Checked = _inspectorButton.Active = visible;
-        _inspector.Visible = visible && !_quickLook.Visible;
+        _inspector.Visible = visible && !_quickLook.Visible && !_compare.Visible;
         _footer.SelectionInfo = visible ? "" : _selectionText;
         ((ISettingsAccess)this).UpdateSettings(s => s with { InspectorVisible = visible ? null : false });
     }
