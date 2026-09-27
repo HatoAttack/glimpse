@@ -154,6 +154,56 @@ static class AdjustTests
         check(Adjuster.FrameCount(P("photo.jpg")) == 1, "コマの数: 静止画は 1");
         check(ImageViewer.Core.Imaging.ImageLoader.WicFrameCount(P("pages.tif")) == 2, "コマの数: WIC でも複数ページの TIFF を数えられる（ImageSharp で読めない亜種用）");
 
+        // ---- まとめて補正 ----
+        string batchDir = P("batch");
+        Directory.CreateDirectory(batchDir);
+        string B(string name) => Path.Combine(batchDir, name);
+        foreach (var (name, from, to) in new[] { ("b1.png", 60, 140), ("b2.png", 100, 200) })
+        {
+            // 左から右へ from → to の灰色（自動補正で 0〜255 に広がる）
+            using var img = new Image<Rgba32>(100, 4);
+            for (int x = 0; x < 100; x++)
+            for (int y = 0; y < 4; y++)
+            {
+                byte v = (byte)(from + (to - from) * x / 99);
+                img[x, y] = new Rgba32(v, v, v);
+            }
+            img.SaveAsPng(B(name));
+        }
+        File.Copy(P("anim.gif"), B("anim.gif"));
+        var sources = new[] { B("b1.png"), B("b2.png"), B("anim.gif") };
+        byte[] b1Before = File.ReadAllBytes(B("b1.png"));
+
+        check(!BatchAdjuster.HasWork(new AdjustOptions(), new AdjustBatchOptions())
+              && BatchAdjuster.HasWork(new AdjustOptions(), new AdjustBatchOptions { AutoLevels = true })
+              && BatchAdjuster.HasWork(new AdjustOptions { Contrast = 10 }, new AdjustBatchOptions()),
+            "まとめて: 値が既定のままで自動もしないなら、することが無い");
+
+        var batch = new AdjustBatchOptions { AutoLevels = true };
+        var plan = BatchAdjuster.Plan(sources, batch);
+        check(plan.All(p => p.Status == ConvertStatus.Ok && Path.GetDirectoryName(p.Target) == Path.Combine(batchDir, "adjusted") && p.TargetName == p.SourceName),
+            "まとめて: 既定は中の adjusted フォルダへ、同じ名前・同じ形式で");
+        var result = BatchAdjuster.Run(plan, new AdjustOptions(), batch);
+        check(result.Converted == 2 && result.Errors.Count == 1 && result.Errors[0].StartsWith("anim.gif"),
+            $"まとめて: アニメは失敗として数え、ほかは補正する（{result.Converted} 枚・失敗 {result.Errors.Count}）");
+        foreach (var name in new[] { "b1.png", "b2.png" })
+        {
+            using var img = Image.Load<Rgba32>(Path.Combine(batchDir, "adjusted", name));
+            check(img[0, 0].R < 10 && img[99, 0].R > 245, $"まとめて: 1 枚ずつ自動でレベルを決める（{name}: {img[0, 0].R}〜{img[99, 0].R}）");
+        }
+        check(File.ReadAllBytes(B("b1.png")).SequenceEqual(b1Before) && !File.Exists(Path.Combine(batchDir, "adjusted", "anim.gif")),
+            "まとめて: 元の画像は変えず、失敗したものは書かない");
+
+        var again = BatchAdjuster.Run(BatchAdjuster.Plan(sources[..2], batch), new AdjustOptions(), batch);
+        check(again.Converted == 0 && again.Skipped == 2, "まとめて: 同名のファイルがあれば飛ばす");
+
+        var inPlace = new AdjustBatchOptions { OutputMode = OutputFolderMode.Same, Overwrite = true };
+        var inPlacePlan = BatchAdjuster.Plan(sources[..1], inPlace);
+        check(inPlacePlan[0].ReplacesSource, "まとめて: 同じフォルダ＋上書きなら元の画像を置き換える計画");
+        BatchAdjuster.Run(inPlacePlan, new AdjustOptions { Brightness = 60 }, inPlace);
+        using (var img = Image.Load<Rgba32>(B("b1.png")))
+            check(img[50, 0].R > 110, $"まとめて: 元の画像に上書きで補正がかかる（{img[50, 0].R}）");
+
         // ---- ファイル: WIC で読む画像はメタデータを残せないので、許可が無ければ保存しない ----
         string jxr = P("wic.jxr");
         if (!ImageViewer.Core.Imaging.WicCodecs.DecoderExtensions.Contains(".jxr"))

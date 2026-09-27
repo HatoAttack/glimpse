@@ -64,6 +64,13 @@ public static class Icons
         p.AddLines(new PointF[] { new(1.5f, 4), new(12, 4), new(12, 14.5f) });
     });
 
+    /// <summary>補正（左半分を塗った円。コントラストの印）</summary>
+    public static readonly IconPainter Adjust = (g, r, c) =>
+    {
+        Stroke(g, r, c, 1.4f, p => p.AddEllipse(2, 2, 12, 12));
+        Fill(g, r, c, p => p.AddPie(2, 2, 12, 12, 90, 180));
+    };
+
     public static readonly IconPainter Combine = (g, r, c) => Stroke(g, r, c, 1.4f, p =>
     {
         p.AddRectangle(new RectangleF(1.5f, 4, 6, 8));

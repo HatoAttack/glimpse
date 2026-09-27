@@ -1186,7 +1186,7 @@ public sealed class QuickLookView : Control
     {
         if (_index < 0 || ShownBitmap(_items[_index]) is not Bitmap bmp) return;
         var auto = AdjustedBitmap.Auto(bmp);
-        Adjust.Options = Adjust.Options with { BlackPoint = auto.BlackPoint, WhitePoint = auto.WhitePoint, Gamma = auto.Gamma };
+        Adjust.Options = Adjust.Options.WithLevels(auto);
         if (auto.IsIdentity) ShowNotice("自動補正: 直すところが見つかりませんでした");
     }
 
