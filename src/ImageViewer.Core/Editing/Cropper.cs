@@ -43,6 +43,42 @@ public static class Cropper
         return Rectangle.FromLTRB(ix0, iy0, ix1, iy1);
     }
 
+    /// <summary>
+    /// 前の画像の切り抜き枠を、次の画像へ引き継ぐ（画像座標 x0, y0, x1, y1）。
+    /// 大きさが同じならそのまま。違えば、枠の中心は画像に対する割合で、枠の大きさは縦横同じ倍率で合わせる
+    /// （倍率は縦・横の比の小さい方なので、アスペクト比が保たれて画像からはみ出さない）。最後に画像の中へ収める
+    /// </summary>
+    public static (double X0, double Y0, double X1, double Y1) CarryRect(
+        (double X0, double Y0, double X1, double Y1) rect, int fromWidth, int fromHeight, int toWidth, int toHeight)
+    {
+        double w = rect.X1 - rect.X0, h = rect.Y1 - rect.Y0;
+        double cx = (rect.X0 + rect.X1) / 2, cy = (rect.Y0 + rect.Y1) / 2;
+        if (fromWidth != toWidth || fromHeight != toHeight)
+        {
+            double scale = Math.Min((double)toWidth / fromWidth, (double)toHeight / fromHeight);
+            w *= scale;
+            h *= scale;
+            cx = cx / fromWidth * toWidth;
+            cy = cy / fromHeight * toHeight;
+        }
+        // 大きすぎれば（前の枠が画像いっぱいだった など）縦横同じ倍率で縮めてから、はみ出さないように寄せる
+        double fit = Math.Min(1, Math.Min(toWidth / w, toHeight / h));
+        w *= fit;
+        h *= fit;
+        double x0 = Math.Clamp(cx - w / 2, 0, toWidth - w), y0 = Math.Clamp(cy - h / 2, 0, toHeight - h);
+        return (x0, y0, x0 + w, y0 + h);
+    }
+
+    /// <summary>ファイルを読み、ほかの画像（fromWidth × fromHeight）で決めた枠を引き継いで切り抜き、保存する（一括用）</summary>
+    public static void CropCarried(string src, (double X0, double Y0, double X1, double Y1) rect, int fromWidth, int fromHeight, string dst)
+    {
+        using var image = ImageLoader.Load(src);
+        var (x0, y0, x1, y1) = CarryRect(rect, fromWidth, fromHeight, image.Width, image.Height);
+        var box = ClampBox(x0, y0, x1, y1, image.Width, image.Height);
+        image.Mutate(c => c.Crop(box));
+        ImageSaver.Save(image, dst);
+    }
+
     /// <summary>切り抜いた画像の保存先: 出力フォルダ\元の名前_crop.拡張子（書き出せない形式は .jpg）。既にあれば (2)… を付ける</summary>
     public static string OutputPathFor(string source, string outputFolder) =>
         ImageSaver.UniquePath(Path.Combine(outputFolder,

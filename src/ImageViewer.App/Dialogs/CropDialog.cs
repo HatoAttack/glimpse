@@ -2,6 +2,8 @@
 // - 画像の上をドラッグで範囲を選ぶ。枠の中をドラッグで移動、四隅で大きさを変える
 // - アスペクト比（自由 / 1:1 / 4:3 / 3:2 / 16:9 / 指定）と縦横の入れ替え
 // - 選択した画像を ◀ ▶（PageUp / PageDown）で切り替え。Enter で保存して次へ
+// - 「次の画像も同じ位置で切り抜く」なら、切り替えても枠を引き継ぐ（大きさが違う画像には割合で合わせる）。
+//   一括も「全部を今の範囲で切り抜き」になる（スクリーンショットのように構成が同じ画像向け）
 // - 持つのは表示中の 1 枚（切り抜き用の原寸）と、画面の大きさに縮小した表示用のビットマップだけ
 using System.Drawing.Drawing2D;
 using ImageViewer.Core.Editing;
@@ -20,7 +22,7 @@ public sealed class CropDialog : ThemedForm
     /// <summary>このアプリを起動している間は前回の設定を引き継ぐ</summary>
     private static int _lastAspect;
     private static decimal _lastCustomW = 16, _lastCustomH = 10;
-    private static bool _lastFlip, _lastToCustomFolder;
+    private static bool _lastFlip, _lastToCustomFolder, _lastKeepPosition;
     private static string _lastFolder = "";
 
     private readonly IReadOnlyList<string> _paths;
@@ -35,6 +37,9 @@ public sealed class CropDialog : ThemedForm
 
     // 切り抜き枠（画像座標 x0, y0, x1, y1）とドラッグの状態
     private double[]? _rect;
+    // 引き継ぐ元の枠: 最後に自分で決めた（動かした・大きさを変えた・比を変えて作り直した）枠と、その画像の大きさ。
+    // 前の画像からではなくここから引き継ぐので、大きさの違う画像を行き来しても枠がずれていかない
+    private ((double, double, double, double) Rect, int Width, int Height)? _anchor;
     private enum DragMode { None, Move, Resize }
     private DragMode _mode;
     private (double X, double Y) _fixed;   // 大きさを変えるときに動かない角
@@ -49,6 +54,7 @@ public sealed class CropDialog : ThemedForm
     private readonly NumericUpDown _customW = new() { Minimum = 1, Maximum = 999, Width = 52, TextAlign = HorizontalAlignment.Right };
     private readonly NumericUpDown _customH = new() { Minimum = 1, Maximum = 999, Width = 52, TextAlign = HorizontalAlignment.Right };
     private readonly CheckBox _flip = new() { Text = "縦横を入れ替え（4:3 → 3:4）", AutoSize = true };
+    private readonly CheckBox _keepPosition = new() { Text = "次の画像も同じ位置で切り抜く", AutoSize = true, Margin = new Padding(3, 6, 3, 3) };
     private readonly Label _selectionSize = new() { AutoSize = true, Margin = new Padding(3, 8, 3, 3) };
     private readonly RadioButton _toSame = new() { Text = "元と同じフォルダ", AutoSize = true };
     private readonly RadioButton _toCustom = new() { Text = "指定のフォルダ", AutoSize = true };
@@ -58,6 +64,8 @@ public sealed class CropDialog : ThemedForm
     private readonly Button _saveAll = new() { Text = "全部を同じ比で中央から切り抜き", Width = 200, Height = 30 };
     private readonly Label _status = new() { AutoSize = true, MaximumSize = new Size(210, 0), Margin = new Padding(3, 8, 3, 3) };
     private readonly System.Windows.Forms.Timer _resizeDelay = new() { Interval = 80 };
+    private readonly ToolTip _toolTip = new();
+    private const string CarriedNoticePrefix = "枠を決めた画像";
 
     /// <summary>保存したファイルの数（一覧の読み直しの判断用）</summary>
     public int SavedCount { get; private set; }
@@ -100,6 +108,9 @@ public sealed class CropDialog : ThemedForm
         _customH.Value = _lastCustomH;
         (_lastAspect < _aspectRadios.Count ? _aspectRadios[_lastAspect].Radio : _customAspect).Checked = true;
         _flip.Checked = _lastFlip;
+        _keepPosition.Checked = _lastKeepPosition;
+        _keepPosition.Visible = paths.Count > 1;
+        _keepPosition.CheckedChanged += (_, _) => UpdateButtons();
         _folder.Text = _lastFolder;
         (_lastToCustomFolder && _lastFolder.Length > 0 ? _toCustom : _toSame).Checked = true;
         // 「指定」は別の行（別の親）にあるので、ラジオボタンの排他は自分で行う
@@ -124,10 +135,12 @@ public sealed class CropDialog : ThemedForm
             _loadCts?.Cancel();
             _image?.Dispose();
             _display?.Dispose();
+            _toolTip.Dispose();
             _lastAspect = _aspectRadios.FindIndex(a => a.Radio.Checked) is int i and >= 0 ? i : _aspectRadios.Count;
             _lastCustomW = _customW.Value;
             _lastCustomH = _customH.Value;
             _lastFlip = _flip.Checked;
+            _lastKeepPosition = _keepPosition.Checked;
             _lastFolder = _folder.Text.Trim();
             _lastToCustomFolder = _toCustom.Checked;
         };
@@ -155,6 +168,9 @@ public sealed class CropDialog : ThemedForm
         var aspectBox = new GroupBox { Text = "アスペクト比", AutoSize = true, Width = 210, Padding = new Padding(8) };
         aspectBox.Controls.Add(aspectStack);
         side.Controls.Add(aspectBox);
+        side.Controls.Add(_keepPosition);
+        _toolTip.SetToolTip(_keepPosition, "スクリーンショットのように、大きさと構成が同じ画像をまとめて切り抜くとき用です。\n" +
+                                           "大きさが違う画像には、画像に対する割合で合わせます");
         side.Controls.Add(_selectionSize);
 
         var browse = new Button { Text = "参照...", AutoSize = true };
@@ -178,7 +194,11 @@ public sealed class CropDialog : ThemedForm
 
         _save.Click += async (_, _) => await SaveCurrentAsync(advance: false);
         _saveNext.Click += async (_, _) => await SaveCurrentAsync(advance: true);
-        _saveAll.Click += async (_, _) => await SaveAllCenterAsync();
+        _saveAll.Click += async (_, _) =>
+        {
+            if (_keepPosition.Checked) await SaveAllCarriedAsync();
+            else await SaveAllCenterAsync();
+        };
         side.Controls.AddRange(new Control[] { _save, _saveNext, _saveAll, _status });
         return side;
     }
@@ -246,7 +266,26 @@ public sealed class CropDialog : ThemedForm
         _image?.Dispose();
         _image = image;
         _name.Text = $"[{index + 1}/{_paths.Count}] {Path.GetFileName(path)}  （{image.Width} × {image.Height}）";
-        ResetRect();
+        if (_keepPosition.Checked && _anchor is { } from)
+        {
+            var (x0, y0, x1, y1) = Cropper.CarryRect(from.Rect, from.Width, from.Height, image.Width, image.Height);
+            _rect = new[] { x0, y0, x1, y1 };
+            bool resized = from.Width != image.Width || from.Height != image.Height;
+            if (resized)
+            {
+                _status.ForeColor = Theme.Current.TextMuted;
+                _status.Text = $"{CarriedNoticePrefix}（{from.Width} × {from.Height}）と大きさが違うので、枠は割合で合わせました";
+            }
+            else if (_status.Text.StartsWith(CarriedNoticePrefix, StringComparison.Ordinal))
+            {
+                _status.Text = ""; // 前の画像で出したお知らせは消す
+            }
+        }
+        else
+        {
+            ResetRect();
+            SetAnchor();
+        }
         RebuildDisplay();
         UpdateButtons();
     }
@@ -255,7 +294,9 @@ public sealed class CropDialog : ThemedForm
     {
         _save.Enabled = _saveNext.Enabled = !_busy && _image != null;
         _saveNext.Visible = _paths.Count > 1;
-        _saveAll.Enabled = !_busy && CurrentAspect() != null;
+        // 位置を引き継ぐなら「今の範囲で」（自由な比でもよい）、そうでなければ「同じ比で中央から」
+        _saveAll.Text = _keepPosition.Checked ? "全部を今の範囲で切り抜き" : "全部を同じ比で中央から切り抜き";
+        _saveAll.Enabled = !_busy && (_keepPosition.Checked ? _anchor != null : CurrentAspect() != null);
         _prev.Enabled = _next.Enabled = !_busy && _paths.Count > 1;
     }
 
@@ -274,6 +315,7 @@ public sealed class CropDialog : ThemedForm
         UpdateButtons();
         if (_image == null) return;
         ResetRect();
+        SetAnchor();
         _canvas.Invalidate();
     }
 
@@ -290,6 +332,12 @@ public sealed class CropDialog : ThemedForm
         {
             _rect = new[] { 0.0, 0.0, _image.Width, (double)_image.Height };
         }
+    }
+
+    /// <summary>今の枠を、次の画像へ引き継ぐ元にする</summary>
+    private void SetAnchor()
+    {
+        if (_rect != null && _image != null) _anchor = ((_rect[0], _rect[1], _rect[2], _rect[3]), _image.Width, _image.Height);
     }
 
     // ---- 座標の変換 ----
@@ -407,6 +455,7 @@ public sealed class CropDialog : ThemedForm
         if (_mode == DragMode.None || _image == null || _rect == null) return;
         if (_mode == DragMode.Move) DoMove(e);
         else DoResize(e);
+        SetAnchor();
         _canvas.Invalidate();
     }
 
@@ -494,6 +543,19 @@ public sealed class CropDialog : ThemedForm
     private async Task SaveAllCenterAsync()
     {
         if (_busy || CurrentAspect() is not double aspect) return;
+        await SaveAllAsync((src, dst) => Cropper.CropCenter(src, aspect, dst));
+    }
+
+    /// <summary>最後に決めた枠を全部の画像へ引き継いで切り抜く（大きさが違う画像には割合で合わせる）</summary>
+    private async Task SaveAllCarriedAsync()
+    {
+        if (_busy || _anchor is not { } from) return;
+        await SaveAllAsync((src, dst) => Cropper.CropCarried(src, from.Rect, from.Width, from.Height, dst));
+    }
+
+    /// <summary>選んだ画像を全部、crop(元, 保存先) で切り抜いて保存する</summary>
+    private async Task SaveAllAsync(Action<string, string> crop)
+    {
         if (!_toSame.Checked && OutputFolderFor(_paths[0]) == null) return;
         var targets = _paths.Select(p => (Src: p, Folder: _toSame.Checked ? Path.GetDirectoryName(p)! : _folder.Text.Trim())).ToList();
         SetBusy(true);
@@ -508,7 +570,7 @@ public sealed class CropDialog : ThemedForm
                 _status.Text = $"切り抜き中 {i + 1} / {targets.Count}: {Path.GetFileName(src)}";
                 try
                 {
-                    await Task.Run(() => Cropper.CropCenter(src, aspect, Cropper.OutputPathFor(src, folder)));
+                    await Task.Run(() => crop(src, Cropper.OutputPathFor(src, folder)));
                     ok++;
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
