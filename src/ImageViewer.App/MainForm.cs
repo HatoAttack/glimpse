@@ -90,7 +90,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     private readonly IconButton _targetSelection = new() { AccessibleName = "選択中の画像を対象にする" };
     private readonly IconButton _targetChecked = new() { AccessibleName = "チェックした画像を対象にする" };
     private readonly List<(IconButton Button, IImageCommand Command)> _actionButtons = new();
-    private readonly ContextMenuStrip _moveMenu = new(), _moreMenu = new();
+    private readonly ContextMenuStrip _moveMenu = new(), _moreMenu = new(), _rotateMenu = new();
 
     // ---- フォルダジャンプ ----
     private readonly FolderJumpService _jump = new(FolderJumpService.DefaultDataDir);
@@ -919,11 +919,18 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         var move = new IconButton { Text = "移動", Icon = Icons.Move, DropDown = true, AccessibleName = "移動" };
         _toolTip.SetToolTip(move, "最近の移動先へ移動（Ctrl を押しながら選ぶとコピー）");
         move.Click += (_, _) => ShowFooterMenu(move, _moveMenu, BuildMoveMenu);
+        // 回転 ▾: 右に 90°・左に 90°・180° を選ぶ
+        var rotate = new IconButton { Text = "回転", Icon = Icons.Rotate, DropDown = true, AccessibleName = "回転" };
+        _toolTip.SetToolTip(rotate, "選んだ画像を回転して上書き保存");
+        rotate.Click += (_, _) => ShowFooterMenu(rotate, _rotateMenu, null);
+        foreach (var id in new[] { "image.rotateRight", "image.rotateLeft", "image.rotate180" })
+            if (_registry.Find(id) is { } cmd) _rotateMenu.Items.Add(CreateCommandItem(cmd, withShortcut: false));
+        _rotateMenu.Opening += (_, _) => UpdateCommandEnabled();
         var more = new IconButton { Icon = Icons.More, AccessibleName = "その他の操作" };
         _toolTip.SetToolTip(more, "その他の操作");
         more.Click += (_, _) => ShowFooterMenu(more, _moreMenu, null);
-        bar.AddActions(Action("image.resize", "リサイズ", Icons.Resize), resizeMore, Action("image.crop", "切り抜き", Icons.Crop),
-            Action("image.adjust", "補正", Icons.Adjust),             Action("image.combine", "連結", Icons.Combine), Action("file.rename", "名前", Icons.Rename), move, more);
+        bar.AddActions(Action("image.resize", "リサイズ", Icons.Resize), resizeMore, Action("image.crop", "切り抜き", Icons.Crop), rotate,
+            Action("image.adjust", "補正", Icons.Adjust), Action("image.combine", "連結", Icons.Combine), Action("file.rename", "名前", Icons.Rename), move, more);
 
         var clear = new IconButton { Icon = Icons.Close, AccessibleName = "選択を解除" };
         _toolTip.SetToolTip(clear, "選択を解除 (Esc)");
@@ -1185,6 +1192,9 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _registry.Register(new QuickResizeCommand(this, this, resize));
         _registry.Register(new CropCommand(this));
         _registry.Register(new AdjustCommand(this, this));
+        _registry.Register(new RotateCommand(this, RotateDirection.Right90));
+        _registry.Register(new RotateCommand(this, RotateDirection.Left90));
+        _registry.Register(new RotateCommand(this, RotateDirection.Half));
         _registry.Register(new CombineCommand(this, this));
         _registry.Register(new RenameCommand(this));
         _registry.Register(new MoveToFolderCommand(this, this, SearchFoldersAsync));

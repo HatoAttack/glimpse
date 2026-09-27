@@ -121,6 +121,58 @@ public sealed class AdjustCommand(Form owner, ISettingsAccess settings) : ImageC
     }
 }
 
+/// <summary>選んだ画像を 90° 単位で回して上書き保存する（画素を回す。JPEG / WEBP は保存の画質で圧縮し直す）</summary>
+public sealed class RotateCommand(Form owner, RotateDirection direction) : ImageCommandBase
+{
+    /// <summary>
+    /// 回転は 1 つずつ順に行う（右・左・180° で共通）。終わる前にもう一度押されたら、前のが終わってから回す
+    /// （同じファイルを同時に読んで書くと、回した結果の片方が消えて、押した回数どおりに回らないため）
+    /// </summary>
+    private static readonly SemaphoreSlim Gate = new(1, 1);
+
+    public override string Id => direction switch
+    {
+        RotateDirection.Right90 => "image.rotateRight",
+        RotateDirection.Left90 => "image.rotateLeft",
+        _ => "image.rotate180",
+    };
+
+    public override string Name => direction switch
+    {
+        RotateDirection.Right90 => "右に 90° 回転",
+        RotateDirection.Left90 => "左に 90° 回転",
+        _ => "180° 回転",
+    };
+
+    public override async Task ExecuteAsync(CommandContext context)
+    {
+        var paths = context.Paths;
+        var progress = new Progress<ConvertProgress>(p =>
+        {
+            if (p.Done < p.Total && p.Total > 1) context.Host.Notify($"回転中 {p.Done + 1} / {p.Total}: {p.Name}");
+        });
+        if (!Gate.Wait(0))
+        {
+            context.Host.Notify("前の回転が終わってから回します…");
+            await Gate.WaitAsync();
+        }
+        ConvertResult result;
+        try
+        {
+            result = await Task.Run(() => Rotator.RotateFiles(paths, direction, progress));
+        }
+        finally
+        {
+            Gate.Release();
+        }
+        if (result.Converted > 0) context.Host.RequestRefresh();
+        context.Host.Notify($"{result.Converted} 枚を{Name.Replace(" 回転", "")}回転しました" + (result.Errors.Count > 0 ? $"・{result.Errors.Count} 枚は回転できませんでした" : ""));
+        if (result.Errors.Count > 0)
+            MessageBox.Show(owner, string.Join("\n", result.Errors.Take(15)) + (result.Errors.Count > 15 ? $"\n…ほか {result.Errors.Count - 15} 件" : ""),
+                $"回転できなかった画像（{result.Errors.Count} 枚）", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+    }
+}
+
 public sealed class CombineCommand(Form owner, ISettingsAccess settings) : ImageCommandBase
 {
     public override string Id => "image.combine";
