@@ -39,6 +39,10 @@ public sealed record AdjustOptions
     /// <summary>レベル補正のガンマ（0.1〜10）。1 より大きいと中間が明るくなる</summary>
     public double Gamma { get; init; } = 1;
 
+    /// <summary>レベル補正（黒点・白点・ガンマ）だけを levels の値に入れ替えたもの（自動補正の結果を入れるとき）</summary>
+    public AdjustOptions WithLevels(AdjustOptions levels) =>
+        this with { BlackPoint = levels.BlackPoint, WhitePoint = levels.WhitePoint, Gamma = levels.Gamma };
+
     /// <summary>何も変えない値か</summary>
     [System.Text.Json.Serialization.JsonIgnore]
     public bool IsIdentity => Normalize() == new AdjustOptions();
@@ -154,7 +158,9 @@ public static class Adjuster
     /// <param name="allowMetadataLoss">
     /// false なら、メタデータを残せないときは保存せずに MetadataLossException（ユーザーに確かめてから true で呼び直す）
     /// </param>
-    public static void ApplyToFile(string src, string dst, AdjustOptions options, bool overwrite = true, bool allowMetadataLoss = false)
+    /// <param name="autoLevels">レベル補正（黒点・白点・ガンマ）は options の値でなく、この画像から自動補正で決める（まとめて補正用）</param>
+    public static void ApplyToFile(string src, string dst, AdjustOptions options, bool overwrite = true, bool allowMetadataLoss = false,
+        bool autoLevels = false)
     {
         // 読むのは先頭のコマだけなので、アニメや複数ページの TIFF を保存すると残りが消えてしまう。受けない
         int? frames = FrameCount(src);
@@ -164,6 +170,7 @@ public static class Adjuster
             throw new NotSupportedException("ページの数を確かめられない画像なので、上書きしませんでした");
         using var image = ImageLoader.Load(src); // 回転補正済み
         if (!allowMetadataLoss && !KeepsMetadata(image)) throw new MetadataLossException(src);
+        if (autoLevels) options = options.WithLevels(Auto(image));
         Apply(image, options);
         ImageSaver.Save(image, dst, overwrite);
     }

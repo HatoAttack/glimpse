@@ -92,6 +92,35 @@ public sealed class CropCommand(Form owner) : ImageCommandBase
     }
 }
 
+/// <summary>選んだ画像にまとめて色調補正をかける。値は 1 枚表示の補正と「前回の補正」を共有する</summary>
+public sealed class AdjustCommand(Form owner, ISettingsAccess settings) : ImageCommandBase
+{
+    public override string Id => "image.adjust";
+    public override string Name => "補正...";
+    public override string? DefaultShortcut => "Ctrl+Shift+E";
+
+    public override Task ExecuteAsync(CommandContext context)
+    {
+        using var dialog = new AdjustBatchDialog(context.Paths, settings.Settings.LastAdjust?.Normalize(), settings.Settings.AdjustBatch ?? new AdjustBatchOptions());
+        dialog.ShowDialog(owner);
+        if (dialog.UsedOptions is { } used)
+        {
+            var adjust = dialog.UsedAdjust;
+            settings.UpdateSettings(s => s with
+            {
+                AdjustBatch = used,
+                LastAdjust = adjust is { IsIdentity: false } ? adjust : s.LastAdjust,
+            });
+        }
+        if (dialog.Result is { } result)
+        {
+            if (result.Converted > 0) context.Host.RequestRefresh();
+            context.Host.Notify(AdjustBatchDialog.Summarize(result));
+        }
+        return Task.CompletedTask;
+    }
+}
+
 public sealed class CombineCommand(Form owner, ISettingsAccess settings) : ImageCommandBase
 {
     public override string Id => "image.combine";

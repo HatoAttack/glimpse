@@ -53,8 +53,11 @@ public sealed record AppSettings
     /// <summary>1 枚表示で詳細パネルを表示する（null は既定 = 表示しない。I キーで切り替え）</summary>
     public bool? QuickLookDetailsVisible { get; init; }
 
-    /// <summary>1 枚表示の補正で最後に保存したときの値（「前回の補正」。null ならまだ無い）</summary>
+    /// <summary>補正で最後に保存したときの値（「前回の補正」。1 枚表示とまとめて補正で共通。null ならまだ無い）</summary>
     public Editing.AdjustOptions? LastAdjust { get; init; }
+
+    /// <summary>まとめて補正で前回使った設定（出力先・同名の扱い・レベルを 1 枚ずつ自動で決めるか。null ならまだ無い）</summary>
+    public Editing.AdjustBatchOptions? AdjustBatch { get; init; }
 
     /// <summary>JPEG で保存するときの画質（1〜100。null は既定の 90）</summary>
     public int? JpegQuality { get; init; }
