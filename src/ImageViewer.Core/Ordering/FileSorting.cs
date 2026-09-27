@@ -1,5 +1,6 @@
 // 並び順（名前・更新日時・サイズ・手動）
 using System.Runtime.InteropServices;
+using ImageViewer.Core.Imaging;
 
 namespace ImageViewer.Core.Ordering;
 
@@ -14,7 +15,7 @@ public static class FileSorting
     /// 指定の順に並べた新しいリスト。Manual はここでは名前順（手動の並びは ManualOrder.Apply で当てる）。
     /// 同じ値のものは名前順にして、表示が毎回揺れないようにする
     /// </summary>
-    public static List<FileInfo> Sort(IEnumerable<FileInfo> files, SortMode mode)
+    public static List<ImageFile> Sort(IEnumerable<ImageFile> files, SortMode mode)
     {
         var byName = files.OrderBy(f => f.Name, NaturalNameComparer);
         return mode switch

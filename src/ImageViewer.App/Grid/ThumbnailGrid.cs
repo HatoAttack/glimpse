@@ -5,6 +5,7 @@
 using System.Drawing.Drawing2D;
 using ImageViewer.App.Commands;
 using ImageViewer.App.Theming;
+using ImageViewer.Core.Imaging;
 using ImageViewer.Core.Ordering;
 using ImageViewer.Core.Thumbnails;
 
@@ -19,7 +20,7 @@ public sealed class ThumbnailGrid : Control
     private readonly ThumbnailService _thumbnails;
 
     private IReadOnlyList<DirectoryInfo> _folders = Array.Empty<DirectoryInfo>();
-    private IReadOnlyList<FileInfo> _items = Array.Empty<FileInfo>();
+    private IReadOnlyList<ImageFile> _items = Array.Empty<ImageFile>();
     private ThumbnailKey[] _keys = Array.Empty<ThumbnailKey>();
     private Dictionary<string, int> _indexByPath = new(StringComparer.OrdinalIgnoreCase); // パス → セル番号
     private Bitmap? _folderIcon;
@@ -123,11 +124,11 @@ public sealed class ThumbnailGrid : Control
     }
 
     /// <summary>画像（フォルダのタイルは含まない）</summary>
-    public IReadOnlyList<FileInfo> Items => _items;
+    public IReadOnlyList<ImageFile> Items => _items;
     public IReadOnlyList<DirectoryInfo> Folders => _folders;
 
     /// <summary>選択中の画像（画面の並び順）。コマンドの対象</summary>
-    public IReadOnlyList<FileInfo> SelectedImages =>
+    public IReadOnlyList<ImageFile> SelectedImages =>
         _selection.SelectedIndices.Where(i => !IsFolder(i)).Select(i => _items[i - F]).ToList();
 
     /// <summary>選択中のフォルダのタイル</summary>
@@ -140,12 +141,12 @@ public sealed class ThumbnailGrid : Control
     public int SelectedCount => _selection.Count;
 
     /// <summary>画像だけを入れ替える（フォルダのタイルはそのまま）。並べ替え・リネーム後に使う</summary>
-    public void SetItems(IReadOnlyList<FileInfo> items, bool reload = false, IReadOnlyDictionary<string, string>? renamed = null) =>
+    public void SetItems(IReadOnlyList<ImageFile> items, bool reload = false, IReadOnlyDictionary<string, string>? renamed = null) =>
         SetContents(_folders, items, reload, renamed);
 
     /// <param name="reload">同じフォルダの読み直し（F5・並べ替え・リネーム後）なら true。チェック・選択・スクロール位置を引き継ぐ</param>
     /// <param name="renamed">名前を変えたファイル（元のパス → 新しいパス）。チェックと選択を付け替える</param>
-    public void SetContents(IReadOnlyList<DirectoryInfo> folders, IReadOnlyList<FileInfo> items, bool reload = false,
+    public void SetContents(IReadOnlyList<DirectoryInfo> folders, IReadOnlyList<ImageFile> items, bool reload = false,
         IReadOnlyDictionary<string, string>? renamed = null)
     {
         EndBand();
@@ -289,7 +290,7 @@ public sealed class ThumbnailGrid : Control
     public int MarkedCount => _marks.Count;
 
     /// <summary>チェックした画像（画面の並び順）</summary>
-    public IReadOnlyList<FileInfo> MarkedImages => _items.Where(f => _marks.IsMarked(f.FullName)).ToList();
+    public IReadOnlyList<ImageFile> MarkedImages => _items.Where(f => _marks.IsMarked(f.FullName)).ToList();
 
     /// <summary>選択を解除する（フォーカスの位置は残す）</summary>
     public void ClearSelection()

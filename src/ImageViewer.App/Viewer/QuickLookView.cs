@@ -30,7 +30,7 @@ public sealed class QuickLookView : Control
 {
     private const int HoldThresholdMs = 350; // これより長く Space を押していたら「押している間だけ」
 
-    private IReadOnlyList<FileInfo> _items = Array.Empty<FileInfo>();
+    private IReadOnlyList<ImageFile> _items = Array.Empty<ImageFile>();
     private int _index = -1;
     private readonly Dictionary<string, Bitmap> _cache = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _failed = new(StringComparer.OrdinalIgnoreCase);
@@ -41,7 +41,7 @@ public sealed class QuickLookView : Control
     private bool _spaceReleased;
 
     /// <summary>サムネイル（読み込みが終わるまでの仮表示用）</summary>
-    public Func<FileInfo, Bitmap?>? PlaceholderProvider { get; set; }
+    public Func<ImageFile, Bitmap?>? PlaceholderProvider { get; set; }
 
     /// <summary>チェックの状態（一覧と共有する）</summary>
     public Func<int, bool>? IsMarked { get; set; }
@@ -134,7 +134,7 @@ public sealed class QuickLookView : Control
     }
 
     /// <param name="byKey">Space で開いた（押し続けたかどうかを離したときに判定する）</param>
-    public void Open(IReadOnlyList<FileInfo> items, int index, bool byKey)
+    public void Open(IReadOnlyList<ImageFile> items, int index, bool byKey)
     {
         if (index < 0 || index >= items.Count) return;
         if (_closing) FinishClose();
@@ -207,7 +207,7 @@ public sealed class QuickLookView : Control
     }
 
     /// <summary>一覧の中身が入れ替わった（並べ替え・リネーム等）。同じファイルを表示し続けられなければ閉じる</summary>
-    public void ItemsChanged(IReadOnlyList<FileInfo> items)
+    public void ItemsChanged(IReadOnlyList<ImageFile> items)
     {
         if (!Visible) return;
         string? current = _index >= 0 && _index < _items.Count ? _items[_index].FullName : null;
@@ -254,7 +254,7 @@ public sealed class QuickLookView : Control
         static bool SameFolder(string a, string b) =>
             string.Equals(Path.GetDirectoryName(a), Path.GetDirectoryName(b), StringComparison.OrdinalIgnoreCase);
 
-        static bool Modified(FileInfo before, FileInfo after)
+        static bool Modified(ImageFile before, ImageFile after)
         {
             try
             {
@@ -407,7 +407,7 @@ public sealed class QuickLookView : Control
     }
 
     /// <summary>今の画像として描くもの: アニメを読み終えていれば今のコマ、まだなら先頭のコマの静止画</summary>
-    private Bitmap? ShownBitmap(FileInfo file)
+    private Bitmap? ShownBitmap(ImageFile file)
     {
         if (_animFrames != null && string.Equals(_animPath, file.FullName, StringComparison.OrdinalIgnoreCase))
             return _animFrames[_animFrame];

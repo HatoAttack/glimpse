@@ -3,13 +3,14 @@
 // - 生成はワーカースレッド（シェルの COM を使うので STA）で行い、結果は UI スレッドに Post する
 // - キャッシュは UI スレッドだけが触る。描画中の Bitmap を別スレッドが Dispose する事故を構造的に防ぐ
 using System.Drawing;
+using ImageViewer.Core.Imaging;
 
 namespace ImageViewer.Core.Thumbnails;
 
 /// <summary>同じパスでも更新日時・サイズが変われば別物として扱う（編集後に古いサムネイルが出ない）</summary>
 public sealed record ThumbnailKey(string Path, long LastWriteTicks, long Length)
 {
-    public static ThumbnailKey From(FileInfo file) => new(file.FullName, file.LastWriteTimeUtc.Ticks, file.Length);
+    public static ThumbnailKey From(ImageFile file) => new(file.FullName, file.LastWriteTimeUtc.Ticks, file.Length);
 }
 
 public enum ThumbnailState { None, Pending, Ready, Failed }

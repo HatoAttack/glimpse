@@ -382,7 +382,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         }
         if (images.Count != 1)
         {
-            SetSelectionText(images.Count == 0 ? "" : $"{images.Count} 枚 ・ 合計 {FormatBytes(images.Sum(SafeLength))}");
+            SetSelectionText(images.Count == 0 ? "" : $"{images.Count} 枚 ・ 合計 {FormatBytes(images.Sum(f => f.Length))}");
             foreach (var panel in panels)
             {
                 if (images.Count == 0) panel.ShowNothing();
@@ -392,7 +392,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         }
 
         var file = images[0];
-        string rest = $"{FormatBytes(SafeLength(file))} ・ {file.LastWriteTime:yyyy/MM/dd HH:mm}";
+        string rest = $"{FormatBytes(file.Length)} ・ {file.LastWriteTime:yyyy/MM/dd HH:mm}";
         var key = ThumbnailKey.From(file);
         if (!_infoCache.TryGetValue(key, out var info))
         {
@@ -422,11 +422,6 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _footer.SelectionInfo = _inspectorItem.Checked ? "" : text;
     }
 
-    private static long SafeLength(FileInfo f)
-    {
-        try { return f.Length; }
-        catch (IOException) { return 0; }
-    }
 
     private static string FormatBytes(long bytes) => bytes switch
     {
@@ -1681,7 +1676,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         if (_folder == null) return;
         var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var op in ops) map[op.From] = op.To;
-        var items = _grid.Items.Select(f => map.TryGetValue(f.FullName, out var to) ? new FileInfo(to) : f).ToList();
+        var items = _grid.Items.Select(f => map.TryGetValue(f.FullName, out var to) ? ImageFile.From(new FileInfo(to)) : f).ToList();
 
         try
         {
@@ -1817,7 +1812,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         if (!reload) _watcher.Watch(null);
         if (!_noticeActive && !quiet) _footer.Status = "読み込み中…";
         List<DirectoryInfo> folders;
-        List<FileInfo> files;
+        List<ImageFile> files;
         SortMode mode;
         try
         {
@@ -1877,7 +1872,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     // ---- 並び順 ----
 
     /// <summary>並び順を当てる。手動は保存した並び（無ければ名前順）</summary>
-    private static List<FileInfo> Arrange(IReadOnlyList<FileInfo> files, SortMode mode, IReadOnlyList<string>? savedOrder)
+    private static List<ImageFile> Arrange(IReadOnlyList<ImageFile> files, SortMode mode, IReadOnlyList<string>? savedOrder)
     {
         var sorted = FileSorting.Sort(files, mode);
         return mode == SortMode.Manual && savedOrder != null ? ManualOrder.Apply(sorted, savedOrder) : sorted;
@@ -1896,7 +1891,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     /// <summary>ドラッグで並べ替えた: 手動に切り替えて今の並びを保存</summary>
     private void SaveManualOrder() => SaveManualOrder(_grid.Items);
 
-    private void SaveManualOrder(IReadOnlyList<FileInfo> items)
+    private void SaveManualOrder(IReadOnlyList<ImageFile> items)
     {
         if (_folder == null) return;
         _sortMode = SortMode.Manual;

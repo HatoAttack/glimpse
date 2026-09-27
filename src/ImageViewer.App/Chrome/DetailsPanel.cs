@@ -37,7 +37,7 @@ public sealed class DetailsPanel : Control
     }
 
     /// <param name="header">大きさ・形式・撮影情報（読んでいる間・読めなければ null）</param>
-    public void ShowImage(FileInfo file, ImageHeader? header, bool loading)
+    public void ShowImage(ImageFile file, ImageHeader? header, bool loading)
     {
         var rows = new List<(string, string)>();
         if (header != null)
@@ -50,8 +50,8 @@ public sealed class DetailsPanel : Control
         {
             rows.Add(("大きさ", "読み込み中…"));
         }
-        rows.Add(("ファイル", FormatBytes(SafeLength(file))));
-        rows.Add(("更新", SafeTime(file)));
+        rows.Add(("ファイル", FormatBytes(file.Length)));
+        rows.Add(("更新", $"{file.LastWriteTime:yyyy/MM/dd HH:mm}"));
         if (header?.Photo is { } photo)
         {
             if (photo.TakenAt is DateTime taken) rows.Add(("撮影", $"{taken:yyyy/MM/dd HH:mm}"));
@@ -67,10 +67,10 @@ public sealed class DetailsPanel : Control
         Invalidate();
     }
 
-    public void ShowMultiple(IReadOnlyList<FileInfo> files)
+    public void ShowMultiple(IReadOnlyList<ImageFile> files)
     {
         _title = $"{files.Count} 枚の画像";
-        _rows = new[] { ("合計", FormatBytes(files.Sum(SafeLength))) };
+        _rows = new[] { ("合計", FormatBytes(files.Sum(f => f.Length))) };
         _location = files.Select(f => f.DirectoryName).Distinct(StringComparer.OrdinalIgnoreCase).Count() == 1 ? files[0].DirectoryName : null;
         _message = "";
         _toolTip.SetToolTip(this, "");
@@ -85,12 +85,6 @@ public sealed class DetailsPanel : Control
         _message = "";
         _toolTip.SetToolTip(this, folder.FullName);
         Invalidate();
-    }
-
-    public static long SafeLength(FileInfo f)
-    {
-        try { return f.Length; }
-        catch (IOException) { return 0; }
     }
 
     private static string SafeTime(FileSystemInfo f)

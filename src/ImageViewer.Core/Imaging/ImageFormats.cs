@@ -23,13 +23,13 @@ public static class ImageFormats
 
     /// <summary>フォルダ直下の対応画像をファイル名順（エクスプローラーと同じ比較）で列挙。
     /// FileInfo のサイズ・更新日時は列挙時に取得済みなので追加のディスクアクセスは発生しない</summary>
-    public static List<FileInfo> ListImages(string folder, CancellationToken ct = default)
+    public static List<ImageFile> ListImages(string folder, CancellationToken ct = default)
     {
-        var list = new List<FileInfo>();
+        var list = new List<ImageFile>();
         foreach (var file in new DirectoryInfo(folder).EnumerateFiles())
         {
             ct.ThrowIfCancellationRequested();
-            if (IsSupported(file.Name)) list.Add(file);
+            if (IsSupported(file.Name)) list.Add(ImageFile.From(file));
         }
         list.Sort((a, b) => Ordering.FileSorting.NaturalNameComparer.Compare(a.Name, b.Name));
         return list;
