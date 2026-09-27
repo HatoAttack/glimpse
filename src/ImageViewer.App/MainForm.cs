@@ -918,7 +918,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _toolTip.SetToolTip(more, "その他の操作");
         more.Click += (_, _) => ShowFooterMenu(more, _moreMenu, null);
         bar.AddActions(Action("image.resize", "リサイズ", Icons.Resize), resizeMore, Action("image.crop", "切り抜き", Icons.Crop),
-            Action("image.combine", "連結", Icons.Combine), Action("file.rename", "名前", Icons.Rename), move, more);
+            Action("image.adjust", "補正", Icons.Adjust),             Action("image.combine", "連結", Icons.Combine), Action("file.rename", "名前", Icons.Rename), move, more);
 
         var clear = new IconButton { Icon = Icons.Close, AccessibleName = "選択を解除" };
         _toolTip.SetToolTip(clear, "選択を解除 (Esc)");
@@ -1179,6 +1179,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _registry.Register(resize);
         _registry.Register(new QuickResizeCommand(this, this, resize));
         _registry.Register(new CropCommand(this));
+        _registry.Register(new AdjustCommand(this, this));
         _registry.Register(new CombineCommand(this, this));
         _registry.Register(new RenameCommand(this));
         _registry.Register(new MoveToFolderCommand(this, this, SearchFoldersAsync));
@@ -1597,6 +1598,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     void ISettingsAccess.UpdateSettings(Func<AppSettings, AppSettings> change)
     {
         _settings = change(_settings);
+        _quickLook.Adjust.Last = _settings.LastAdjust?.Normalize(); // まとめて補正で覚えた値も、1 枚表示の「前回の補正」に
         try
         {
             _settingsStore.Save(_settings);

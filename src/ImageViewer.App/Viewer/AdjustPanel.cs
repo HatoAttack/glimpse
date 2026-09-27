@@ -1,5 +1,5 @@
-// 1 枚表示の右側の補正パネル（E で開け閉め）。スライダーとボタンだけで、画像にかけるのは 1 枚表示の側。
-// 1 枚表示は常に暗い地なのでダークの配色で描く。どの部品もフォーカスを取らない（← → などのキーは 1 枚表示が受ける）。
+// 補正パネル。1 枚表示の右側（E で開け閉め）と、まとめて補正のダイアログで使う。スライダーとボタンだけで、画像にかけるのは使う側。
+// 1 枚表示は常に暗い地なのでダークの配色で描く（ダイアログではそのときの配色）。どの部品もフォーカスを取らない（← → などのキーは 1 枚表示が受ける）。
 // ウィンドウが低くて入りきらないときは縦にスクロールする
 using System.Drawing.Drawing2D;
 using ImageViewer.App.Chrome;
@@ -10,12 +10,12 @@ namespace ImageViewer.App.Viewer;
 
 public sealed class AdjustPanel : ScrollableControl
 {
-    private static Palette P => Palette.Dark;
+    private readonly Palette P;
 
     private readonly List<SliderRow> _rows = new();
     private readonly SliderRow _brightness, _contrast, _saturation, _temperature, _black, _white, _gamma;
     private readonly PanelButton _auto, _last, _reset, _compare, _save;
-    private bool _updating;
+    private bool _updating, _levelsEnabled = true;
     private int _levelsTop;
 
     /// <summary>値が変わった（スライダー・自動補正・前回の補正・リセット）</summary>
@@ -41,6 +41,19 @@ public sealed class AdjustPanel : ScrollableControl
         }
     }
 
+    /// <summary>レベル補正（黒点・白点・ガンマ）のスライダーを動かせるか（1 枚ずつ自動で決めるときは動かせなくする）</summary>
+    public bool LevelsEnabled
+    {
+        get => _levelsEnabled;
+        set
+        {
+            _levelsEnabled = value;
+            UpdateSliders();
+            UpdateButtons();
+            Invalidate();
+        }
+    }
+
     /// <summary>保存中（ボタンを押せなくする）</summary>
     public bool Saving
     {
@@ -48,15 +61,18 @@ public sealed class AdjustPanel : ScrollableControl
         set
         {
             _saving = value;
-            foreach (var row in _rows) row.Slider.Enabled = !value;
+            UpdateSliders();
             UpdateButtons();
         }
     }
 
     private bool _saving;
 
-    public AdjustPanel()
+    /// <param name="palette">描く配色（null なら 1 枚表示と同じダーク）</param>
+    /// <param name="showSave">「保存」のボタンを出す（ダイアログでは出さず、ダイアログの「実行」で保存する）</param>
+    public AdjustPanel(Palette? palette = null, bool showSave = true)
     {
+        P = palette ?? Palette.Dark;
         SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
         SetStyle(ControlStyles.Selectable, false);
         Width = LogicalToDeviceUnits(264);
@@ -81,6 +97,7 @@ public sealed class AdjustPanel : ScrollableControl
         _compare = AddButton("補正前", "押している間だけ、補正する前の画像を表示します");
         _save = AddButton("保存（上書き）  Ctrl+S", "補正した画像で元のファイルを上書きします");
         _save.Primary = true;
+        _save.Visible = showSave;
 
         _auto.Click += (_, _) => AutoRequested?.Invoke(this, EventArgs.Empty);
         _last.Click += (_, _) => { if (Last != null) Options = Last; };
@@ -153,13 +170,20 @@ public sealed class AdjustPanel : ScrollableControl
 
     private PanelButton AddButton(string text, string hint)
     {
-        var button = new PanelButton { Text = text, AccessibleName = text, AccessibleDescription = hint };
+        var button = new PanelButton(P) { Text = text, AccessibleName = text, AccessibleDescription = hint };
         _toolTip.SetToolTip(button, hint);
         Controls.Add(button);
         return button;
     }
 
     private readonly ToolTip _toolTip = new();
+
+    private void UpdateSliders()
+    {
+        foreach (var row in _rows) row.Slider.Enabled = !_saving && (_levelsEnabled || !IsLevel(row));
+    }
+
+    private bool IsLevel(SliderRow row) => row == _black || row == _white || row == _gamma;
 
     private void Changed()
     {
@@ -174,8 +198,8 @@ public sealed class AdjustPanel : ScrollableControl
         bool identity = Options.IsIdentity;
         _save.Enabled = !identity && !_saving;
         _reset.Enabled = !identity && !_saving;
-        _compare.Enabled = !identity;
-        _auto.Enabled = !_saving;
+        _compare.Enabled = !identity || !_levelsEnabled; // 1 枚ずつ自動で決めるときは、値が既定のままでも変わる
+        _auto.Enabled = !_saving && _levelsEnabled;
         _last.Enabled = Last != null && !_saving;
     }
 
@@ -214,10 +238,15 @@ public sealed class AdjustPanel : ScrollableControl
         y += ButtonHeight + Gap;
         _reset.Bounds = At(x, y, half, ButtonHeight);
         _compare.Bounds = At(x + half + Gap, y, width - half - Gap, ButtonHeight);
-        y += ButtonHeight + Gap * 2;
-        _save.Bounds = At(x, y, width, ButtonHeight);
+        y += ButtonHeight;
+        if (_save.Visible)
+        {
+            y += Gap * 2;
+            _save.Bounds = At(x, y, width, ButtonHeight);
+            y += ButtonHeight;
+        }
         // 中身の高さ（ウィンドウがこれより低ければスクロールバーが出る）
-        var content = new Size(0, y + ButtonHeight + Pad);
+        var content = new Size(0, y + Pad);
         if (AutoScrollMinSize != content) AutoScrollMinSize = content;
     }
 
@@ -248,9 +277,11 @@ public sealed class AdjustPanel : ScrollableControl
         foreach (var row in _rows)
         {
             var r = new Rectangle(x, top + row.LabelTop, width, LabelHeight);
-            TextRenderer.DrawText(g, row.Label, Font, r, P.Text, Flags);
+            bool auto = !_levelsEnabled && IsLevel(row);
+            TextRenderer.DrawText(g, row.Label, Font, r, auto ? P.Disabled : P.Text, Flags);
             bool changed = row.Slider.Value != row.Default;
-            TextRenderer.DrawText(g, row.Format(row.Slider.Value), Font, r, changed ? P.Text : P.TextMuted, Flags | TextFormatFlags.Right);
+            TextRenderer.DrawText(g, auto ? "自動" : row.Format(row.Slider.Value), Font, r,
+                auto ? P.Disabled : changed ? P.Text : P.TextMuted, Flags | TextFormatFlags.Right);
         }
         if (_levelsTop > 0)
         {
@@ -278,13 +309,15 @@ public sealed class AdjustPanel : ScrollableControl
     /// <summary>パネルのボタン（フォーカスを取らない。暗い地で描く）</summary>
     private sealed class PanelButton : Control
     {
+        private readonly Palette P;
         private bool _hover, _down;
 
         /// <summary>主な操作（保存）。目立つ色で描く</summary>
         public bool Primary { get; set; }
 
-        public PanelButton()
+        public PanelButton(Palette palette)
         {
+            P = palette;
             SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             SetStyle(ControlStyles.Selectable | ControlStyles.StandardDoubleClick, false);
             TabStop = false;
