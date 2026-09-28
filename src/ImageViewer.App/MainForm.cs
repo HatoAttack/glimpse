@@ -246,14 +246,35 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _tree.SetHome(HomeFolder);
         SetUpJump();
         // 起動時は指定のフォルダ、無ければ前回のフォルダ（そう設定していて、まだあれば）、無ければホーム（未設定・見つからなければピクチャ）を開く
-        bool openLast = _settings.OpenLastFolder == true && initialFolder == null && _settings.LastFolder != null;
-        string start = initialFolder
-            ?? (openLast && FolderListing.CanOpen(_settings.LastFolder!) ? _settings.LastFolder! : HomeFolder);
-        if (openLast && start != _settings.LastFolder)
-            Shown += (_, _) => Notify($"前回のフォルダが見つからないのでホームを開きました: {_settings.LastFolder}");
-        else if (_settings.HomeFolder != null && !Directory.Exists(_settings.HomeFolder) && start == HomeFolder)
+        // 前回のフォルダが ZIP（の中）なら、ここでは ZIP があるかだけを見る（中の目次を読むと大きな ZIP でウィンドウが出るのが遅れる）
+        string? last = _settings.OpenLastFolder == true && initialFolder == null ? _settings.LastFolder : null;
+        bool lastInArchive = last != null && !Directory.Exists(last) && ArchivePath.IsArchiveFolder(last);
+        if (last != null && !Directory.Exists(last) && !lastInArchive)
+        {
+            Shown += (_, _) => Notify($"前回のフォルダが見つからないのでホームを開きました: {last}");
+            last = null;
+        }
+        string start = initialFolder ?? last ?? HomeFolder;
+        if (_settings.HomeFolder != null && !Directory.Exists(_settings.HomeFolder) && start == HomeFolder)
             Shown += (_, _) => Notify($"ホームフォルダが見つからないのでピクチャを開きました: {_settings.HomeFolder}");
-        if (FolderListing.CanOpen(start)) Shown += async (_, _) => await LoadFolderAsync(start);
+        if (lastInArchive)
+        {
+            // ZIP の中のフォルダがあるかは別スレッドで確かめる（読んだ目次は ZipStore に残るので、続けて開くときは読み直さない）
+            Shown += async (_, _) =>
+            {
+                if (await Task.Run(() => FolderListing.CanOpen(start)))
+                {
+                    await LoadFolderAsync(start);
+                    return;
+                }
+                Notify($"前回のフォルダが見つからないのでホームを開きました: {start}");
+                if (FolderListing.CanOpen(HomeFolder)) await LoadFolderAsync(HomeFolder);
+            };
+        }
+        else if (FolderListing.CanOpen(start))
+        {
+            Shown += async (_, _) => await LoadFolderAsync(start);
+        }
         // 前回のフォルダは終了時に 1 回だけ書く（開くたびには書かない）
         FormClosing += (_, _) =>
         {
