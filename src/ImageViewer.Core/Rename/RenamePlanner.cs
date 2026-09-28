@@ -88,7 +88,7 @@ public static class RenamePlanner
             if (run.Success)
             {
                 long number = o.Start + index * o.Step;
-                string digits = number.ToString(new string('0', Math.Min(run.Length, 18)));
+                string digits = number.ToString().PadLeft(run.Length, '0');
                 stem = o.Pattern[..run.Index] + digits + o.Pattern[(run.Index + run.Length)..];
             }
             else stem = o.Pattern;
@@ -119,12 +119,12 @@ public static class RenamePlanner
 
     /// <summary>
     /// ダイアログの名前欄の初期値を先頭のファイル名から推測する（末尾の数字を # に置き換える）。
-    /// 例: a260019 → a######、sunset → sunset_###
+    /// 例: a260019 → a######、sunset → sunset_###。元の名前の # は _ にする（番号の位置と取り違えないように）
     /// </summary>
     public static string GuessPattern(string fileName)
     {
-        string stem = Path.GetFileNameWithoutExtension(fileName);
+        string stem = Path.GetFileNameWithoutExtension(fileName).Replace('#', '_');
         var m = Regex.Match(stem, @"^(.*?)(\d+)$");
-        return m.Success ? m.Groups[1].Value + new string('#', Math.Min(m.Groups[2].Length, 18)) : stem + "_###";
+        return m.Success ? m.Groups[1].Value + new string('#', m.Groups[2].Length) : stem + "_###";
     }
 }

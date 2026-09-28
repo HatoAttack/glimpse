@@ -28,6 +28,10 @@ static class RenameTests
 
         check(RenamePlanner.GuessPattern("a260019.jpg") == "a######" && RenamePlanner.GuessPattern("sunset.png") == "sunset_###",
             "名前欄の初期値: 末尾の数字を # に / 数字が無ければ 名前_###");
+        check(RenamePlanner.GuessPattern("draft#copy.jpg") == "draft_copy_###" && RenamePlanner.GuessPattern("a#12.jpg") == "a_##",
+            "名前欄の初期値: 元の名前の # は _ に（番号の位置と混ざらない）");
+        check(RenamePlanner.NewName("a.jpg", 0, new RenameOptions { Pattern = new string('#', 20) }) == new string('0', 19) + "1.jpg",
+            "# が 18 個を超えても # の数どおりの桁数");
 
         // ---- 検査 ----
         Make("a.jpg", "b.jpg", "other.jpg");
