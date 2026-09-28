@@ -112,6 +112,11 @@ Directory.Delete(dir, true);
 JumpTests.Run(Check, dir);
 Directory.Delete(dir, true);
 
+// ---- ZIP の中を見る ----
+Directory.CreateDirectory(dir);
+ArchiveTests.Run(Check, dir);
+Directory.Delete(dir, true);
+
 // ---- 更新の確認・exe の入れ替え ----
 UpdateTests.Run(Check, dir);
 Directory.Delete(dir, true);

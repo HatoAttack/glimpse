@@ -1,7 +1,9 @@
 // 詳細パネル（一覧の右側のインスペクタと、1 枚表示の右側で共通）。文字だけ（画像はサムネイル・1 枚表示で見えているので出さない）。
 // 1 枚: ファイル名・大きさ・形式・ファイルサイズ・更新日時・撮影情報・場所 / 複数: 枚数と合計サイズ / フォルダ: 名前と更新日時
 using ImageViewer.App.Theming;
+using ImageViewer.Core.Archives;
 using ImageViewer.Core.Imaging;
+using ImageViewer.Core.Navigation;
 
 namespace ImageViewer.App.Chrome;
 
@@ -37,7 +39,7 @@ public sealed class DetailsPanel : Control
     }
 
     /// <param name="header">大きさ・形式・撮影情報（読んでいる間・読めなければ null）</param>
-    public void ShowImage(FileInfo file, ImageHeader? header, bool loading)
+    public void ShowImage(ImageFile file, ImageHeader? header, bool loading)
     {
         var rows = new List<(string, string)>();
         if (header != null)
@@ -50,8 +52,8 @@ public sealed class DetailsPanel : Control
         {
             rows.Add(("大きさ", "読み込み中…"));
         }
-        rows.Add(("ファイル", FormatBytes(SafeLength(file))));
-        rows.Add(("更新", SafeTime(file)));
+        rows.Add(("ファイル", FormatBytes(file.Length)));
+        rows.Add(("更新", $"{file.LastWriteTime:yyyy/MM/dd HH:mm}"));
         if (header?.Photo is { } photo)
         {
             if (photo.TakenAt is DateTime taken) rows.Add(("撮影", $"{taken:yyyy/MM/dd HH:mm}"));
@@ -67,10 +69,10 @@ public sealed class DetailsPanel : Control
         Invalidate();
     }
 
-    public void ShowMultiple(IReadOnlyList<FileInfo> files)
+    public void ShowMultiple(IReadOnlyList<ImageFile> files)
     {
         _title = $"{files.Count} 枚の画像";
-        _rows = new[] { ("合計", FormatBytes(files.Sum(SafeLength))) };
+        _rows = new[] { ("合計", FormatBytes(files.Sum(f => f.Length))) };
         _location = files.Select(f => f.DirectoryName).Distinct(StringComparer.OrdinalIgnoreCase).Count() == 1 ? files[0].DirectoryName : null;
         _message = "";
         _toolTip.SetToolTip(this, "");
@@ -80,16 +82,19 @@ public sealed class DetailsPanel : Control
     public void ShowFolder(DirectoryInfo folder)
     {
         _title = folder.Name;
-        _rows = new[] { ("種類", "フォルダー"), ("更新", SafeTime(folder)) };
+        // ZIP の中のフォルダには更新日時が無い（フォルダの項目が無いことも多い）
+        _rows = ArchivePath.IsInside(folder.FullName) ? new[] { ("種類", "フォルダー（ZIP の中）") }
+            : FolderListing.IsArchiveTile(folder) ? new[] { ("種類", "ZIP"), ("ファイル", FormatBytes(SafeLength(folder.FullName))), ("更新", SafeTime(folder)) }
+            : new[] { ("種類", "フォルダー"), ("更新", SafeTime(folder)) };
         _location = folder.Parent?.FullName;
         _message = "";
         _toolTip.SetToolTip(this, folder.FullName);
         Invalidate();
     }
 
-    public static long SafeLength(FileInfo f)
+    private static long SafeLength(string file)
     {
-        try { return f.Length; }
+        try { return new FileInfo(file).Length; }
         catch (IOException) { return 0; }
     }
 

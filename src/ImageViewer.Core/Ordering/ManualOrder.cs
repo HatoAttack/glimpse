@@ -1,4 +1,6 @@
 // 手動の並び順の計算（保存した並びの適用・ドラッグでの移動）
+using ImageViewer.Core.Imaging;
+
 namespace ImageViewer.Core.Ordering;
 
 public static class ManualOrder
@@ -7,12 +9,12 @@ public static class ManualOrder
     /// 保存した並び（ファイル名の列）を今のファイル一覧に当てる。
     /// 見つからない名前は捨て、保存後に増えたファイルは files の順（通常は名前順）で末尾に足す
     /// </summary>
-    public static List<FileInfo> Apply(IReadOnlyList<FileInfo> files, IReadOnlyList<string> savedNames)
+    public static List<ImageFile> Apply(IReadOnlyList<ImageFile> files, IReadOnlyList<string> savedNames)
     {
-        var byName = new Dictionary<string, FileInfo>(StringComparer.OrdinalIgnoreCase);
+        var byName = new Dictionary<string, ImageFile>(StringComparer.OrdinalIgnoreCase);
         foreach (var f in files) byName[f.Name] = f;
 
-        var result = new List<FileInfo>(files.Count);
+        var result = new List<ImageFile>(files.Count);
         var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var name in savedNames)
             if (byName.TryGetValue(name, out var f) && used.Add(name)) result.Add(f);

@@ -1,5 +1,6 @@
 // 並び順（名前順の比較・手動の並びの適用と移動・保存・挿入位置）の動作確認
 using ImageViewer.App.Grid;
+using ImageViewer.Core.Imaging;
 using ImageViewer.Core.Ordering;
 
 static class OrderingTests
@@ -13,11 +14,11 @@ static class OrderingTests
 
         // ---- 手動の並びの適用 ----
         Directory.CreateDirectory(dir);
-        FileInfo F(string name)
+        ImageFile F(string name)
         {
             var path = Path.Combine(dir, name);
             if (!File.Exists(path)) File.WriteAllBytes(path, new byte[] { 0 });
-            return new FileInfo(path);
+            return ImageFile.From(new FileInfo(path));
         }
         var files = new[] { F("a.jpg"), F("b.jpg"), F("c.jpg"), F("d.jpg") };
         var applied = ManualOrder.Apply(files, new[] { "C.JPG", "x.jpg", "a.jpg", "c.jpg" });

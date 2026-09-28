@@ -1,4 +1,5 @@
 // フォルダの中のサブフォルダの一覧（グリッドのフォルダタイル・フォルダツリーで共通）
+using ImageViewer.Core.Archives;
 using ImageViewer.Core.Ordering;
 
 namespace ImageViewer.Core.Navigation;
@@ -32,6 +33,48 @@ public static class FolderListing
         list.Sort((a, b) => FileSorting.NaturalNameComparer.Compare(a.Name, b.Name));
         return list;
     }
+
+    /// <summary>
+    /// 直下の ZIP（フォルダのタイルとしてサブフォルダの後ろに並べる）を名前順で。隠し・システムファイルは除く。
+    /// アクセスできなければ空
+    /// </summary>
+    public static List<DirectoryInfo> ListArchives(string folder, CancellationToken ct = default)
+    {
+        var list = new List<DirectoryInfo>();
+        try
+        {
+            var options = new EnumerationOptions
+            {
+                AttributesToSkip = FileAttributes.Hidden | FileAttributes.System,
+                IgnoreInaccessible = true,
+            };
+            foreach (var file in new DirectoryInfo(folder).EnumerateFiles("*", options))
+            {
+                ct.ThrowIfCancellationRequested();
+                // フォルダのタイルは DirectoryInfo で持つ（名前とパスしか使わない）
+                if (ArchivePath.IsArchiveName(file.Name)) list.Add(new DirectoryInfo(file.FullName));
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            return list;
+        }
+        list.Sort((a, b) => FileSorting.NaturalNameComparer.Compare(a.Name, b.Name));
+        return list;
+    }
+
+    /// <summary>
+    /// ZIP の外のフォルダのタイルが ZIP か（ListArchives で足したもの）。.zip という名前の本当のフォルダは違う。
+    /// DirectoryInfo.Exists は最初に 1 回だけ調べて覚えるので、描くたびに呼んでも軽い（ZIP の中のフォルダは呼ぶ側で除く）
+    /// </summary>
+    public static bool IsArchiveTile(DirectoryInfo tile) => ArchivePath.IsArchiveName(tile.Name) && !tile.Exists;
+
+    /// <summary>フォルダか ZIP か（ドロップされたものを開けるかの軽い判定。ZIP の中身は見ない）</summary>
+    public static bool IsFolderOrArchive(string path) =>
+        Directory.Exists(path) || (ArchivePath.IsArchiveName(path) && File.Exists(path));
+
+    /// <summary>フォルダとして開ける場所か（フォルダ、ZIP そのもの、ZIP の中のフォルダ）</summary>
+    public static bool CanOpen(string path) => Directory.Exists(path) || ZipStore.FolderExists(path);
 
     /// <summary>親フォルダ（ドライブのルートなら null）</summary>
     public static string? Parent(string folder) => Directory.GetParent(Path.TrimEndingDirectorySeparator(folder))?.FullName;
@@ -77,7 +120,7 @@ public static class FolderListing
     public static bool SameVolume(string a, string b) =>
         string.Equals(Path.GetPathRoot(Path.GetFullPath(a)), Path.GetPathRoot(Path.GetFullPath(b)), StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>入力されたパスを正規化（前後の空白・引用符を除き、環境変数を展開）。フォルダとして存在しなければ null</summary>
+    /// <summary>入力されたパスを正規化（前後の空白・引用符を除き、環境変数を展開）。フォルダ（ZIP も）として開けなければ null</summary>
     public static string? Normalize(string input)
     {
         string s = Environment.ExpandEnvironmentVariables(input.Trim().Trim('"').Trim());
@@ -89,7 +132,7 @@ public static class FolderListing
         try
         {
             string full = Path.GetFullPath(s);
-            return Directory.Exists(full) ? full : null;
+            return CanOpen(full) ? full : null;
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException or IOException)
         {

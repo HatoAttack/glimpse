@@ -67,7 +67,7 @@ public static class ImageLoader
             {
                 try
                 {
-                    var info = Image.Identify(path);
+                    var info = IdentifyImageSharp(path);
                     ushort o = info.Metadata.ExifProfile?.TryGetValue(ExifTag.Orientation, out var v) == true ? v.Value : (ushort)1;
                     string format = info.Metadata.DecodedImageFormat?.Name ?? FormatFromExtension(path);
                     var photo = PhotoInfo.FromExif(info.Metadata.ExifProfile);
@@ -81,7 +81,7 @@ public static class ImageLoader
             }
             if (!ImageFormats.IsWicFormat(path)) return null;
 
-            using var stream = File.OpenRead(path);
+            using var stream = ImageSource.OpenRead(path);
             var decoder = Wpf.BitmapDecoder.Create(stream,
                 Wpf.BitmapCreateOptions.DelayCreation | Wpf.BitmapCreateOptions.IgnoreColorProfile, Wpf.BitmapCacheOption.None);
             var frame = decoder.Frames[0];
@@ -93,7 +93,7 @@ public static class ImageLoader
                 : new ImageHeader(frame.PixelWidth, frame.PixelHeight, fmt)) with { Photo = ReadWicPhoto(frame) };
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException
-                                       or UnknownImageFormatException or InvalidImageContentException or FileFormatException
+                                       or UnknownImageFormatException or InvalidImageContentException or FileFormatException or InvalidDataException
                                        or ArgumentException or InvalidOperationException or System.Runtime.InteropServices.COMException)
         {
             return null;
@@ -142,14 +142,16 @@ public static class ImageLoader
     private static Image<Rgba32> LoadWithImageSharp(string path, LoadOptions options)
     {
         var decoderOptions = new DecoderOptions { MaxFrames = options.FirstFrameOnly ? 1 : uint.MaxValue };
+        using var stream = ImageSource.OpenRead(path);
         if (options.MaxEdge is int maxEdge)
         {
             // TargetSize は小さい画像を拡大してしまうので、上限を超えるときだけ指定する
-            var info = Image.Identify(path);
+            var info = Image.Identify(stream);
+            stream.Position = 0;
             if (Math.Max(info.Width, info.Height) > maxEdge)
                 decoderOptions = new DecoderOptions { MaxFrames = decoderOptions.MaxFrames, TargetSize = new Size(maxEdge, maxEdge) };
         }
-        var image = Image.Load<Rgba32>(decoderOptions, path);
+        var image = Image.Load<Rgba32>(decoderOptions, stream);
         AutoOrient(image, path, partial: options.FirstFrameOnly);
         // JPEG の縮小デコードは 1/2・1/4・1/8 単位なので、上限を超えた分はここで合わせる
         if (options.MaxEdge is int edge && Math.Max(image.Width, image.Height) > edge)
@@ -165,7 +167,7 @@ public static class ImageLoader
     {
         if (partial && image.Metadata.ExifProfile == null
             && string.Equals(Path.GetExtension(path), ".webp", StringComparison.OrdinalIgnoreCase)
-            && Image.Identify(path).Metadata.ExifProfile?.TryGetValue(ExifTag.Orientation, out var o) == true && o.Value is > 1 and <= 8)
+            && IdentifyImageSharp(path).Metadata.ExifProfile?.TryGetValue(ExifTag.Orientation, out var o) == true && o.Value is > 1 and <= 8)
         {
             image.Metadata.ExifProfile = new ExifProfile();
             image.Metadata.ExifProfile.SetValue(ExifTag.Orientation, o.Value);
@@ -173,11 +175,18 @@ public static class ImageLoader
         image.Mutate(x => x.AutoOrient());
     }
 
+    /// <summary>ImageSharp でヘッダーを読む（ZIP の中の画像も。読めなければ例外）</summary>
+    internal static ImageInfo IdentifyImageSharp(string path)
+    {
+        using var stream = ImageSource.OpenRead(path);
+        return Image.Identify(stream);
+    }
+
     // ---- WIC（WPF の画像 API 経由） ----
 
     private static Image<Rgba32> LoadWithWic(string path, LoadOptions options)
     {
-        using var stream = File.OpenRead(path);
+        using var stream = ImageSource.OpenRead(path);
         // CacheOption.None: デコードは下の CopyPixels 時に（縮小後のサイズで）行われる。stream はそれまで開いておく
         var decoder = Wpf.BitmapDecoder.Create(stream,
             Wpf.BitmapCreateOptions.PreservePixelFormat | Wpf.BitmapCreateOptions.IgnoreColorProfile,
@@ -220,13 +229,14 @@ public static class ImageLoader
         if (!ImageFormats.IsWicFormat(path)) return null;
         try
         {
-            using var stream = File.OpenRead(path);
+            using var stream = ImageSource.OpenRead(path);
             var decoder = Wpf.BitmapDecoder.Create(stream,
                 Wpf.BitmapCreateOptions.DelayCreation | Wpf.BitmapCreateOptions.IgnoreColorProfile, Wpf.BitmapCacheOption.None);
             return decoder.Frames.Count;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or InvalidOperationException
-                                       or ArgumentException or System.Runtime.InteropServices.COMException or FileFormatException)
+                                       or ArgumentException or System.Runtime.InteropServices.COMException or FileFormatException
+                                       or InvalidDataException)
         {
             return null;
         }

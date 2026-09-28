@@ -16,7 +16,7 @@ public sealed class CompareView : Control
     private const Keys ActualSizeKey = Keys.Z;
     private static readonly Color ActiveColor = Color.FromArgb(91, 143, 234);
 
-    private IReadOnlyList<FileInfo> _items = Array.Empty<FileInfo>();
+    private IReadOnlyList<ImageFile> _items = Array.Empty<ImageFile>();
     private readonly int[] _index = { -1, -1 };
     private int _active = 1; // 替える側（0 = 左、1 = 右）
 
@@ -31,7 +31,7 @@ public sealed class CompareView : Control
     private readonly Stopwatch _openedFor = new();
 
     /// <summary>サムネイル（読み込みが終わるまでの仮表示用）</summary>
-    public Func<FileInfo, Bitmap?>? PlaceholderProvider { get; set; }
+    public Func<ImageFile, Bitmap?>? PlaceholderProvider { get; set; }
     public Func<int, bool>? IsMarked { get; set; }
     public Func<int>? MarkedCount { get; set; }
     public Keys MarkKey { get; set; } = Keys.Oem5;
@@ -46,7 +46,7 @@ public sealed class CompareView : Control
     public event EventHandler? Closed;
 
     /// <summary>並べている 2 枚の画像</summary>
-    public IEnumerable<FileInfo> ShownItems => _index.Where(i => i >= 0 && i < _items.Count).Select(i => _items[i]);
+    public IEnumerable<ImageFile> ShownItems => _index.Where(i => i >= 0 && i < _items.Count).Select(i => _items[i]);
 
     public CompareView()
     {
@@ -62,7 +62,7 @@ public sealed class CompareView : Control
     /// <param name="left">左に出す画像の番号</param>
     /// <param name="right">右に出す画像の番号（最初はこちらが替える側）</param>
     /// <param name="byKey">Space で開いた（押し続けたかどうかを離したときに判定する）</param>
-    public void Open(IReadOnlyList<FileInfo> items, int left, int right, bool byKey)
+    public void Open(IReadOnlyList<ImageFile> items, int left, int right, bool byKey)
     {
         if (left < 0 || right < 0 || left >= items.Count || right >= items.Count || left == right) return;
         _items = items;
@@ -99,7 +99,7 @@ public sealed class CompareView : Control
     /// 一覧の中身が入れ替わった（並べ替え・外での変更など）。2 枚とも残っていれば番号を合わせ、書き換えられた画像は読み直す。
     /// どちらかが無くなったら閉じる
     /// </summary>
-    public void ItemsChanged(IReadOnlyList<FileInfo> items)
+    public void ItemsChanged(IReadOnlyList<ImageFile> items)
     {
         if (!Visible) return;
         var old = _items;
@@ -137,11 +137,11 @@ public sealed class CompareView : Control
         }
         Invalidate();
 
-        static bool Modified(FileInfo before, FileInfo after)
+        static bool Modified(ImageFile before, ImageFile after)
         {
             try
             {
-                return before.LastWriteTimeUtc != after.LastWriteTimeUtc || before.Length != after.Length;
+                return before.LastWriteTimeUtc != after.LastWriteTimeUtc || before.Length != after.Length || before.Version != after.Version;
             }
             catch (IOException)
             {
@@ -414,7 +414,7 @@ public sealed class CompareView : Control
     }
 
     /// <summary>枠の上の見出し: 名前・何枚目か・縦横・ファイルの大きさ。替える側は青い線と明るい文字</summary>
-    private void PaintHeader(Graphics g, int side, FileInfo file)
+    private void PaintHeader(Graphics g, int side, ImageFile file)
     {
         var pane = PaneBounds(side);
         var r = new Rectangle(pane.X + 4, 0, pane.Width - 8, Bar);
