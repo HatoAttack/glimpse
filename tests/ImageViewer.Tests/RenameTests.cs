@@ -16,17 +16,18 @@ static class RenameTests
         string Content(string name) => File.ReadAllText(P(name));
 
         // ---- 名前の決め方 ----
-        var seq = new RenameOptions { Prefix = "trip_", Start = 8, Digits = 3, Step = 2 };
+        var seq = new RenameOptions { Pattern = "trip_###", Start = 8, Step = 2 };
         check(RenamePlanner.NewName("IMG.JPG", 0, seq) == "trip_008.JPG" && RenamePlanner.NewName("x.png", 2, seq) == "trip_012.png",
-            "文字列＋連番（開始・桁数・増分、拡張子は残す）");
+            "# を連番に（開始・# の数が桁数・増分、拡張子は残す）");
+        var snap = new RenameOptions { Pattern = "snap##_#" };
+        check(RenamePlanner.NewName("a.jpg", 0, snap) == "snap01_#.jpg" && RenamePlanner.NewName("a.jpg", 99, snap) == "snap100_#.jpg",
+            "既定は 1 から / 最初の # の並びだけが番号 / 桁が足りなければ増える");
         check(RenamePlanner.NewName("IMG.JPG", 0, seq with { LowercaseExtension = true }) == "trip_008.jpg", "拡張子だけ小文字");
         var keep = new RenameOptions { UseSequence = false, ReplaceSearch = "DSC", ReplaceWith = "photo", Suffix = "_s", Lowercase = true };
         check(RenamePlanner.NewName("DSC0001.JPG", 0, keep) == "photo0001_s.jpg", "元の名前を元に置換＋末尾＋すべて小文字");
 
-        var g = RenamePlanner.GuessSequence(new[] { "a260019.jpg", "a260003.jpg", "a260000.jpg", "b000001.jpg", "a12.jpg" });
-        check(g.Prefix == "a" && g.Start == 260000 && g.Digits == 6, "初期値の推測: 並べ替え後の a260019,a260003,a260000 → a / 一番小さい 260000 / 6 桁（形の違う名前は無視）");
-        var g2 = RenamePlanner.GuessSequence(new[] { "sunset.png", "a1.png" });
-        check(g2.Prefix == "sunset_" && g2.Start == 1 && g2.Digits == 3, "数字が無ければ 名前_001 から");
+        check(RenamePlanner.GuessPattern("a260019.jpg") == "a######" && RenamePlanner.GuessPattern("sunset.png") == "sunset_###",
+            "名前欄の初期値: 末尾の数字を # に / 数字が無ければ 名前_###");
 
         // ---- 検査 ----
         Make("a.jpg", "b.jpg", "other.jpg");
@@ -39,8 +40,10 @@ static class RenameTests
         check(RenamePlanner.ValidateName("a?.jpg") != null && RenamePlanner.ValidateName("CON.jpg") != null
               && RenamePlanner.ValidateName("x .jpg") == null && RenamePlanner.ValidateName("x.") != null && RenamePlanner.ValidateName(".jpg") != null,
             "使えない文字・予約名・末尾の . ・空の名前");
-        plan = RenamePlanner.Plan(new[] { P("a.jpg") }, new RenameOptions { Prefix = @"..\moved_" });
+        plan = RenamePlanner.Plan(new[] { P("a.jpg") }, new RenameOptions { Pattern = @"..\moved_#" });
         check(plan[0].Status == RenameStatus.Error, "\\ を含む名前はエラー（別のフォルダへ移さない）");
+        plan = RenamePlanner.Plan(new[] { P("a.jpg") }, new RenameOptions { Pattern = "snap" });
+        check(plan[0].Status == RenameStatus.Error && plan[0].Error!.Contains('#'), "# が無ければエラー");
 
         // ---- 実行: 入れ替え ----
         Make("a.jpg", "b.jpg");
@@ -51,7 +54,7 @@ static class RenameTests
         var names = Enumerable.Range(0, 5).Select(i => $"a26000{i}.jpg").ToArray();
         Make(names);
         var order = new[] { 4, 0, 3, 1, 2 }.Select(i => P(names[i])).ToList();
-        plan = RenamePlanner.Plan(order, RenamePlanner.GuessSequence(order.Select(Path.GetFileName).ToList()!));
+        plan = RenamePlanner.Plan(order, new RenameOptions { Pattern = RenamePlanner.GuessPattern(order[0]), Start = 260000 });
         check(plan.All(p => p.Status != RenameStatus.Error), "振り直しの計画にエラーが無い（対象どうしの名前の重なりは可）");
         var done = RenameExecutor.Execute(plan.Where(p => p.Status == RenameStatus.Ok).Select(p => new RenameOp(p.Source, p.Target)));
         check(Enumerable.Range(0, 5).Select(i => Content(names[i])).SequenceEqual(order.Select(Path.GetFileName)!)

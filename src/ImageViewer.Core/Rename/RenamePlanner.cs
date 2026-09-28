@@ -8,15 +8,14 @@ public sealed record RenameOp(string From, string To);
 
 public sealed record RenameOptions
 {
-    /// <summary>true: 文字列＋連番＋文字列 / false: 元の名前を元に置換・付け足し</summary>
+    /// <summary>true: 名前の # を連番にする / false: 元の名前を元に置換・付け足し</summary>
     public bool UseSequence { get; init; } = true;
 
     // ---- 連番 ----
-    public string Prefix { get; init; } = "";
+    /// <summary>最初の # の並びが番号になり、# の数が桁数（例: snap## → snap01, snap02 …）</summary>
+    public string Pattern { get; init; } = "###";
     public long Start { get; init; } = 1;
-    public int Digits { get; init; } = 3;
     public long Step { get; init; } = 1;
-    public string SequenceSuffix { get; init; } = "";
 
     // ---- 元の名前を元にする ----
     public string ReplaceSearch { get; init; } = "";
@@ -62,7 +61,9 @@ public static class RenamePlanner
         {
             string src = paths[i], dst = targets[i];
             // 組み立てる前の名前を調べる（\ を含む名前で別のフォルダへ移ってしまわないように）
-            string? error = ValidateName(names[i]);
+            string? error = options.UseSequence && !options.Pattern.Contains('#')
+                ? "# で番号の位置を入れてください（例: snap##）"
+                : ValidateName(names[i]);
             if (error == null && duplicated.Contains(dst)) error = "変更後の名前が重複しています";
             // 対象外の既存ファイルと同名になるのは不可（対象どうしの入れ替えは 2 段階で行うので可）
             if (error == null && !sources.Contains(dst) && File.Exists(dst)) error = "同じ名前のファイルがすでにあります";
@@ -82,8 +83,15 @@ public static class RenamePlanner
 
         if (o.UseSequence)
         {
-            long number = o.Start + index * o.Step;
-            stem = o.Prefix + number.ToString(new string('0', Math.Clamp(o.Digits, 1, 18))) + o.SequenceSuffix;
+            // 最初の # の並びだけを番号にする（2 つ目以降の # は文字のまま）。桁が足りなければそのまま桁が増える
+            var run = Regex.Match(o.Pattern, "#+");
+            if (run.Success)
+            {
+                long number = o.Start + index * o.Step;
+                string digits = number.ToString(new string('0', Math.Min(run.Length, 18)));
+                stem = o.Pattern[..run.Index] + digits + o.Pattern[(run.Index + run.Length)..];
+            }
+            else stem = o.Pattern;
         }
         else
         {
@@ -110,27 +118,13 @@ public static class RenamePlanner
     }
 
     /// <summary>
-    /// ダイアログの初期値をファイル名から推測する（末尾の数字を連番とみなす）。
-    /// 文字列と桁数は先頭のファイルから、開始番号は同じ形の名前のうち一番小さい番号にする。
-    /// 例: 並べ替えた a260019, a260003, a260000 … → 文字列 "a"・開始 260000・桁数 6（元の番号の範囲で振り直せる）
+    /// ダイアログの名前欄の初期値を先頭のファイル名から推測する（末尾の数字を # に置き換える）。
+    /// 例: a260019 → a######、sunset → sunset_###
     /// </summary>
-    public static RenameOptions GuessSequence(IReadOnlyList<string> fileNames)
+    public static string GuessPattern(string fileName)
     {
-        var first = ParseNumbered(fileNames[0]);
-        if (first == null)
-            return new RenameOptions { Prefix = Path.GetFileNameWithoutExtension(fileNames[0]) + "_", Start = 1, Digits = 3 };
-
-        long min = first.Value.Number;
-        foreach (var name in fileNames)
-            if (ParseNumbered(name) is { } p && p.Prefix == first.Value.Prefix && p.Digits == first.Value.Digits)
-                min = Math.Min(min, p.Number);
-        return new RenameOptions { Prefix = first.Value.Prefix, Start = min, Digits = first.Value.Digits };
-    }
-
-    private static (string Prefix, long Number, int Digits)? ParseNumbered(string fileName)
-    {
-        var m = Regex.Match(Path.GetFileNameWithoutExtension(fileName), @"^(.*?)(\d+)$");
-        if (!m.Success || m.Groups[2].Value.Length > 18) return null;
-        return (m.Groups[1].Value, long.Parse(m.Groups[2].Value), m.Groups[2].Value.Length);
+        string stem = Path.GetFileNameWithoutExtension(fileName);
+        var m = Regex.Match(stem, @"^(.*?)(\d+)$");
+        return m.Success ? m.Groups[1].Value + new string('#', Math.Min(m.Groups[2].Length, 18)) : stem + "_###";
     }
 }

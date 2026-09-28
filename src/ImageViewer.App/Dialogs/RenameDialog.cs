@@ -1,4 +1,4 @@
-// 名前の変更ダイアログ（連番 / 元の名前を元に置換・付け足し）。入力のたびに変更前 → 変更後を一覧で確認できる
+// 名前の変更ダイアログ（# を連番にした名前 / 元の名前を元に置換・付け足し）。入力のたびに変更前 → 変更後を一覧で確認できる
 using ImageViewer.Core.Rename;
 using ImageViewer.App.Theming;
 
@@ -9,14 +9,12 @@ public sealed class RenameDialog : ThemedForm
     private readonly IReadOnlyList<string> _paths;
     private List<RenamePlanItem> _plan = new();
 
-    private readonly RadioButton _useSequence = new() { Text = "文字列＋連番", AutoSize = true, Checked = true };
+    private readonly RadioButton _useSequence = new() { Text = "連番", AutoSize = true, Checked = true };
     private readonly RadioButton _useOriginal = new() { Text = "元の名前を元にする", AutoSize = true };
 
-    private readonly TextBox _prefix = new() { Width = 160 };
+    private readonly TextBox _pattern = new() { Width = 220 };
     private readonly NumericUpDown _start = new() { Maximum = 999_999_999_999_999_999m, Width = 140 };
-    private readonly NumericUpDown _digits = new() { Minimum = 1, Maximum = 18, Width = 60 };
     private readonly NumericUpDown _step = new() { Minimum = 1, Maximum = 1_000_000, Width = 80 };
-    private readonly TextBox _seqSuffix = new() { Width = 120 };
 
     private readonly TextBox _search = new() { Width = 160 };
     private readonly TextBox _replace = new() { Width = 160 };
@@ -49,17 +47,14 @@ public sealed class RenameDialog : ThemedForm
         ClientSize = new Size(760, 600);
         MinimumSize = new Size(640, 480);
 
-        // 初期値はファイル名から推測（a260019, a260003, a260000 … → "a"・一番小さい 260000・6 桁）
-        var guess = RenamePlanner.GuessSequence(paths.Select(Path.GetFileName).ToList()!);
-        _prefix.Text = guess.Prefix;
-        _start.Value = guess.Start;
-        _digits.Value = guess.Digits;
+        // 名前は先頭のファイル名から推測（a260019 → a######）。番号は 1 から
+        _pattern.Text = RenamePlanner.GuessPattern(paths[0]);
+        _start.Value = 1;
         _step.Value = 1;
         _lowerExt.Checked = false;
 
         _sequencePanel = Row(
-            Labeled("文字列", _prefix), Labeled("開始番号", _start), Labeled("桁数", _digits),
-            Labeled("増分", _step), Labeled("後ろに付ける", _seqSuffix));
+            Labeled("名前（# が番号、# の数が桁数）", _pattern), Labeled("開始番号", _start), Labeled("増分", _step));
         _originalPanel = Row(
             Labeled("置換前", _search), Labeled("置換後", _replace), Labeled("末尾に付ける", _suffix));
 
@@ -86,7 +81,7 @@ public sealed class RenameDialog : ThemedForm
         options.Controls.AddRange(new Control[] { _lowercase, _lowerExt });
         var hint = new Label
         {
-            Text = "画面の並び順（手動で並べ替えた順）に番号を振ります。拡張子はそのまま残ります。",
+            Text = "画面の並び順（手動で並べ替えた順）に番号を振ります。例: snap## → snap01, snap02 …　拡張子はそのまま残ります。",
             AutoSize = true, Dock = DockStyle.Top, ForeColor = Theme.Current.TextMuted, Padding = new Padding(8, 4, 0, 4),
         };
         var previewHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(10, 0, 10, 0) };
@@ -101,9 +96,9 @@ public sealed class RenameDialog : ThemedForm
         Controls.Add(modes);
         Controls.Add(bottom);
 
-        foreach (var c in new Control[] { _prefix, _seqSuffix, _search, _replace, _suffix })
+        foreach (var c in new Control[] { _pattern, _search, _replace, _suffix })
             c.TextChanged += (_, _) => UpdatePreview();
-        foreach (var n in new[] { _start, _digits, _step })
+        foreach (var n in new[] { _start, _step })
             n.ValueChanged += (_, _) => UpdatePreview();
         foreach (var r in new[] { _useSequence, _useOriginal })
             r.CheckedChanged += (_, _) => UpdatePreview();
@@ -120,11 +115,9 @@ public sealed class RenameDialog : ThemedForm
     private RenameOptions CurrentOptions() => new()
     {
         UseSequence = _useSequence.Checked,
-        Prefix = _prefix.Text,
+        Pattern = _pattern.Text,
         Start = (long)_start.Value,
-        Digits = (int)_digits.Value,
         Step = (long)_step.Value,
-        SequenceSuffix = _seqSuffix.Text,
         ReplaceSearch = _search.Text,
         ReplaceWith = _replace.Text,
         Suffix = _suffix.Text,
