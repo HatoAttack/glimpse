@@ -262,7 +262,9 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             // ZIP の中のフォルダがあるかは別スレッドで確かめる（読んだ目次は ZipStore に残るので、続けて開くときは読み直さない）
             Shown += async (_, _) =>
             {
-                if (await Task.Run(() => FolderListing.CanOpen(start)))
+                bool exists = await Task.Run(() => FolderListing.CanOpen(start));
+                if (_loadCts != null) return; // 確かめている間にほかのフォルダを開いていたら、そちらのまま
+                if (exists)
                 {
                     await LoadFolderAsync(start);
                     return;
