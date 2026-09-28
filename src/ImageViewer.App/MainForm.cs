@@ -161,6 +161,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _tree.FilesDroppedOnFolder += async (_, drop) => await TransferDroppedAsync(drop);
         // グリッドからエクスプローラー等へドラッグして移動された画像は一覧から外す
         _grid.FilesMovedOut += (_, paths) => FilesRemoved(paths);
+        SetUpNameEdit();
         FormClosed += (_, _) =>
         {
             _watcher.Dispose();
@@ -244,11 +245,23 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         Activated += (_, _) => UpdateCommandEnabled(); // エクスプローラーでコピーしてから戻ってきたら貼り付けられるように
         _tree.SetHome(HomeFolder);
         SetUpJump();
-        // 起動時は指定のフォルダ、無ければホーム（未設定・見つからなければピクチャ）を開く
-        string start = initialFolder ?? HomeFolder;
-        if (_settings.HomeFolder != null && !Directory.Exists(_settings.HomeFolder) && initialFolder == null)
+        // 起動時は指定のフォルダ、無ければ前回のフォルダ（そう設定していて、まだあれば）、無ければホーム（未設定・見つからなければピクチャ）を開く
+        bool openLast = _settings.OpenLastFolder == true && initialFolder == null && _settings.LastFolder != null;
+        string start = initialFolder
+            ?? (openLast && FolderListing.CanOpen(_settings.LastFolder!) ? _settings.LastFolder! : HomeFolder);
+        if (openLast && start != _settings.LastFolder)
+            Shown += (_, _) => Notify($"前回のフォルダが見つからないのでホームを開きました: {_settings.LastFolder}");
+        else if (_settings.HomeFolder != null && !Directory.Exists(_settings.HomeFolder) && start == HomeFolder)
             Shown += (_, _) => Notify($"ホームフォルダが見つからないのでピクチャを開きました: {_settings.HomeFolder}");
         if (FolderListing.CanOpen(start)) Shown += async (_, _) => await LoadFolderAsync(start);
+        // 前回のフォルダは終了時に 1 回だけ書く（開くたびには書かない）
+        FormClosing += (_, _) =>
+        {
+            if (_folder == null || string.Equals(_settings.LastFolder, _folder, StringComparison.Ordinal)) return;
+            _settings = _settings with { LastFolder = _folder };
+            try { _settingsStore.Save(_settings); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { }
+        };
         // 前にコピー・ドラッグで ZIP から書き出したもののうち、古いものを片付ける
         _ = Task.Run(() => ArchiveExport.CleanUp(TimeSpan.FromDays(1)));
         SetUpUpdateCheck();
@@ -499,25 +512,41 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
     private async Task RenameFolderAsync()
     {
-        if (SelectedSingleFolder() is not { Parent: { } parentDir } dir || _folder == null) return;
+        if (SelectedSingleFolder() is not { Parent: not null } dir || _folder == null) return;
         if (_inArchive)
         {
             Notify(ArchiveReadOnlyMessage);
             return;
         }
+        bool zip = FolderListing.IsArchiveTile(dir);
+        string oldName = dir.Name;
+        using var dlg = new TextInputDialog(zip ? "名前の変更" : "フォルダー名の変更", $"「{oldName}」の新しい名前:", oldName,
+            name => ValidateNewName(dir.FullName, name));
+        if (dlg.ShowDialog(this) != DialogResult.OK || dlg.Value == oldName) return;
+        await RenameFolderToAsync(dir, dlg.Value);
+    }
+
+    /// <summary>
+    /// 名前の変更先の検査（問題があればその理由）。同じフォルダーに同じ名前のフォルダー・ファイルがあれば不可
+    /// （大文字小文字だけの変更は可）
+    /// </summary>
+    private static string? ValidateNewName(string path, string name)
+    {
+        if (RenamePlanner.ValidateName(name) is string error) return error;
+        string target = Path.Combine(Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(path))!, name);
+        return !string.Equals(target, Path.TrimEndingDirectorySeparator(path), StringComparison.OrdinalIgnoreCase)
+            && (Directory.Exists(target) || File.Exists(target))
+            ? "同じ名前のフォルダーまたはファイルがすでにあります" : null;
+    }
+
+    /// <summary>フォルダー（ZIP のタイルなら ZIP ファイル）の名前を変え、古いパスを覚えているものを付け替える</summary>
+    private async Task RenameFolderToAsync(DirectoryInfo dir, string newName)
+    {
+        if (dir.Parent is not { } parentDir || _folder == null) return;
         // ZIP のタイルは ZIP ファイルの名前を変える（中身はそのまま）
         bool zip = FolderListing.IsArchiveTile(dir);
-        string parent = parentDir.FullName, oldName = dir.Name, oldPath = dir.FullName;
-        string? Validate(string name) =>
-            RenamePlanner.ValidateName(name)
-            ?? (!string.Equals(name, oldName, StringComparison.OrdinalIgnoreCase)
-                && (Directory.Exists(Path.Combine(parent, name)) || File.Exists(Path.Combine(parent, name)))
-                ? "同じ名前のフォルダーまたはファイルがすでにあります" : null);
-
-        using var dlg = new TextInputDialog(zip ? "名前の変更" : "フォルダー名の変更", $"「{oldName}」の新しい名前:", oldName, Validate);
-        if (dlg.ShowDialog(this) != DialogResult.OK || dlg.Value == oldName) return;
-
-        string newPath = Path.Combine(parent, dlg.Value);
+        string oldName = dir.Name, oldPath = dir.FullName;
+        string newPath = Path.Combine(parentDir.FullName, newName);
         try
         {
             // 大文字小文字だけの変更もこれでできる
@@ -538,7 +567,60 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         if (_settings.HomeFolder is string home && FolderListing.Retarget(home, oldPath, newPath) is string newHome) SetHome(newHome);
         await LoadFolderAsync(_folder, NavKind.Reload);
         _grid.SelectPath(newPath);
-        Notify(zip ? $"名前を変更しました: {oldName} → {dlg.Value}" : $"フォルダー名を変更しました: {oldName} → {dlg.Value}");
+        Notify(zip ? $"名前を変更しました: {oldName} → {newName}" : $"フォルダー名を変更しました: {oldName} → {newName}");
+    }
+
+    // ---- 一覧での名前の直接入力（選択中の項目の名前をもう一度クリック） ----
+
+    private void SetUpNameEdit()
+    {
+        _grid.ValidateNewName = (path, _, name) =>
+        {
+            string? error = ValidateNewName(path, name);
+            if (error != null) Notify(error);
+            return error;
+        };
+        _grid.NameEdited += async (_, e) =>
+        {
+            if (e.IsFolder)
+            {
+                if (_grid.Folders.FirstOrDefault(d => string.Equals(d.FullName, e.Path, StringComparison.OrdinalIgnoreCase)) is { } dir)
+                    await RenameFolderToAsync(dir, e.NewName);
+            }
+            else
+            {
+                await RenameImageAsync(e.Path, e.NewName);
+            }
+        };
+    }
+
+    /// <summary>画像 1 枚の名前を変える（名前の変更コマンドと同じく Ctrl+Z で元に戻せる）</summary>
+    private async Task RenameImageAsync(string path, string newName)
+    {
+        if (_inArchive || !string.Equals(Path.GetDirectoryName(path), _folder, StringComparison.OrdinalIgnoreCase)) return;
+        // 拡張子を変えると開けなくなることがあるので確かめる（エクスプローラーと同じ）
+        if (!string.Equals(Path.GetExtension(path), Path.GetExtension(newName), StringComparison.OrdinalIgnoreCase)
+            && MessageBox.Show(this, "拡張子を変更すると、ファイルが使えなくなる可能性があります。\n\n変更しますか？", "名前の変更",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+            return;
+
+        string oldName = Path.GetFileName(path);
+        UseWaitCursor = true;
+        try
+        {
+            var op = new RenameOp(path, Path.Combine(Path.GetDirectoryName(path)!, newName));
+            var done = await Task.Run(() => RenameExecutor.Execute(new[] { op }));
+            FilesRenamed(done);
+            Notify($"名前を変更しました: {oldName} → {newName}（Ctrl+Z で元に戻せます）");
+        }
+        catch (IOException ex)
+        {
+            MessageBox.Show(this, ex.Message, "名前を変更できませんでした", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            UseWaitCursor = false;
+        }
     }
 
     /// <summary>「新しいフォルダー」、あれば「新しいフォルダー (2)」…（エクスプローラーと同じ付け方）</summary>
@@ -1366,6 +1448,9 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _backItem = new ToolStripMenuItem("戻る(&B)", null, async (_, _) => await GoBackAsync()) { ShortcutKeys = Keys.Alt | Keys.Left };
         _forwardItem = new ToolStripMenuItem("進む(&F)", null, async (_, _) => await GoForwardAsync()) { ShortcutKeys = Keys.Alt | Keys.Right };
         _upItem = new ToolStripMenuItem("上のフォルダへ(&U)", null, async (_, _) => await GoUpAsync()) { ShortcutKeys = Keys.Alt | Keys.Up };
+        var openLast = new ToolStripMenuItem("起動時に前回のフォルダを開く(&L)") { CheckOnClick = true, Checked = _settings.OpenLastFolder == true };
+        openLast.CheckedChanged += (_, _) =>
+            ((ISettingsAccess)this).UpdateSettings(s => s with { OpenLastFolder = openLast.Checked ? true : null });
         go.DropDownItems.AddRange(new ToolStripItem[]
         {
             _backItem, _forwardItem, _upItem,
@@ -1377,6 +1462,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
                 else if (_folder != null) SetHome(_folder);
             }),
             new ToolStripMenuItem("ホームフォルダを選ぶ(&C)...", null, (_, _) => ChooseHome()),
+            openLast,
             new ToolStripSeparator(),
             new ToolStripMenuItem("アドレスバーに入力(&A)", null, (_, _) => _addressBox.BeginEdit()) { ShortcutKeys = Keys.Control | Keys.L },
             new ToolStripMenuItem("フォルダへジャンプ(&J)", null, (_, _) => StartJump()) { ShortcutKeys = Keys.Control | Keys.J },

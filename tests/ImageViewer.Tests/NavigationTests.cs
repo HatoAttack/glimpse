@@ -59,6 +59,9 @@ static class NavigationTests
         check(store.Load().HomeFolder == @"D:\写真" && !File.Exists(settingsPath + ".tmp"), "保存して読める（一時ファイルは残らない）");
         store.Save(new ImageViewer.Core.Settings.AppSettings { HomeFolder = @"E:\" });
         check(store.Load().HomeFolder == @"E:\", "上書き保存");
+        check(store.Load().OpenLastFolder == null && store.Load().LastFolder == null, "前回のフォルダを開く設定は既定でオフ");
+        store.Save(new ImageViewer.Core.Settings.AppSettings { OpenLastFolder = true, LastFolder = @"D:\写真\2024" });
+        check(store.Load() is { OpenLastFolder: true, LastFolder: @"D:\写真\2024" }, "前回のフォルダとその設定を保存して読める");
         File.WriteAllText(settingsPath, "{ 壊れた");
         check(store.Load().HomeFolder == null, "壊れた設定ファイルは初期値で読む（起動できなくならない）");
 

@@ -113,11 +113,13 @@ public sealed class ThumbnailGrid : Control
         _scroll.HandleCreated += (_, _) => Theme.ApplyNativeTheme(_scroll);
         _scroll.ValueChanged += (_, _) =>
         {
+            LayoutNameEditor();
             Invalidate();
             RequestThumbnails();
         };
         _thumbnails.ThumbnailReady += OnThumbnailReady;
         _autoScroll.Tick += OnAutoScrollTick;
+        _nameEditDelay.Tick += OnNameEditDelayTick;
     }
 
     // ---- 公開 API ----
@@ -158,6 +160,7 @@ public sealed class ThumbnailGrid : Control
         IReadOnlyDictionary<string, string>? renamed = null)
     {
         EndBand();
+        CancelNameEdit(); // 読み直しで項目が入れ替わるので、入力中の名前は捨てる
         string Map(string path) => renamed != null && renamed.TryGetValue(path, out var to) ? to : path;
         var selectedPaths = reload ? _selection.SelectedIndices.Select(i => Map(CellPath(i))).ToList() : new List<string>();
         int focusCell = _selection.Focus;
@@ -396,6 +399,7 @@ public sealed class ThumbnailGrid : Control
         _scroll.LargeChange = view;
         _scroll.SmallChange = Math.Max(1, CurrentLayout.RowHeight);
         SetScroll(ScrollY); // 範囲が縮んだときに収める
+        LayoutNameEditor();  // 大きさ・列数が変わると名前の位置も変わる
     }
 
     private void SetScroll(int y)
@@ -490,10 +494,15 @@ public sealed class ThumbnailGrid : Control
         else if (_thumbnails.TryGet(_keys[i - F], out var bmp) == ThumbnailState.Ready) image = Fit(bmp!.Size, image);
         if (image.Contains(p)) return i;
 
+        return NameTextBounds(i, cell).Contains(p) ? i : -1;
+    }
+
+    /// <summary>名前の文字が描かれている範囲（中央寄せ。長ければ名前の枠いっぱい）</summary>
+    private Rectangle NameTextBounds(int index, Rectangle cell)
+    {
         var name = NameArea(cell);
-        int textWidth = Math.Min(name.Width, TextRenderer.MeasureText(CellName(i), Font).Width);
-        var text = new Rectangle(name.X + (name.Width - textWidth) / 2, name.Y, textWidth, name.Height);
-        return text.Contains(p) ? i : -1;
+        int textWidth = Math.Min(name.Width, TextRenderer.MeasureText(CellName(index), Font).Width);
+        return new Rectangle(name.X + (name.Width - textWidth) / 2, name.Y, textWidth, name.Height);
     }
 
     // ---- 描画 ----
@@ -682,6 +691,9 @@ public sealed class ThumbnailGrid : Control
     protected override void OnMouseDown(MouseEventArgs e)
     {
         base.OnMouseDown(e);
+        _nameEditDelay.Stop();
+        _nameEditWaiting = null;
+        bool wasFocused = Focused;
         Focus();
         int index = HitTest(e.Location);
         bool ctrl = (ModifierKeys & Keys.Control) != 0, shift = (ModifierKeys & Keys.Shift) != 0;
@@ -697,7 +709,13 @@ public sealed class ThumbnailGrid : Control
             {
                 if (shift) _selection.ShiftClick(index, keepOthers: ctrl);
                 else if (ctrl) _selection.CtrlClick(index);
-                else if (_selection.IsSelected(index)) _pendingClick = index; // 複数選択のままドラッグできるよう、単独選択は離したときに
+                else if (_selection.IsSelected(index))
+                {
+                    _pendingClick = index; // 複数選択のままドラッグできるよう、単独選択は離したときに
+                    // 1 つだけ選んでいる項目の名前をもう一度クリック: 少し待ってダブルクリックでなければ名前の入力を始める（エクスプローラーと同じ）
+                    if (wasFocused && e.Clicks == 1 && _selection.Count == 1 && !ArchiveMode && IsOnName(index, e.Location))
+                        _nameEditCandidate = index;
+                }
                 else _selection.Click(index);
                 // Ctrl で選択を外した画像はドラッグの対象にしない
                 if (_selection.IsSelected(index))
@@ -741,6 +759,13 @@ public sealed class ThumbnailGrid : Control
         if (e.Button != MouseButtons.Left) return;
         EndBand();
         _dragCandidate = false;
+        if (_nameEditCandidate >= 0)
+        {
+            _nameEditWaiting = CellPath(_nameEditCandidate);
+            _nameEditCandidate = -1;
+            _nameEditDelay.Interval = SystemInformation.DoubleClickTime;
+            _nameEditDelay.Start();
+        }
         if (_pendingClick >= 0)
         {
             // ドラッグせずに離した: 通常のクリックとして、その画像だけを選択
@@ -760,6 +785,8 @@ public sealed class ThumbnailGrid : Control
     protected override void OnMouseDoubleClick(MouseEventArgs e)
     {
         base.OnMouseDoubleClick(e);
+        _nameEditDelay.Stop();
+        _nameEditWaiting = null;
         int index = HitTest(e.Location);
         if (e.Button == MouseButtons.Left && index >= 0) Activate(index);
     }
@@ -805,6 +832,7 @@ public sealed class ThumbnailGrid : Control
     {
         _dragCandidate = false;
         _pendingClick = -1;
+        _nameEditCandidate = -1;
         var paths = SelectedImages.Select(f => f.FullName).ToArray();
         if (paths.Length == 0) return; // フォルダだけを掴んだときは何もしない
 
@@ -1042,6 +1070,140 @@ public sealed class ThumbnailGrid : Control
         if (ScrollY != before) UpdateBand();
     }
 
+    // ---- 名前の直接入力（選択中の項目の名前をもう一度クリック。エクスプローラーと同じ） ----
+    // 入力欄はこのグリッドの上に重ねる。Enter・ほかをクリックで確定、Esc でやめる。
+    // 名前の検査と実際の変更は本体が行う（画像は元に戻せる名前の変更、フォルダ・ZIP はフォルダー名の変更と同じ）
+
+    /// <summary>入力された名前を検査する（パス・フォルダのタイルか・新しい名前 → 問題があればその理由。null なら OK）</summary>
+    public Func<string, bool, string, string?>? ValidateNewName { get; set; }
+
+    /// <summary>名前が入力された（検査は済み。変わっていないときは起きない）</summary>
+    public event EventHandler<NameEditedEventArgs>? NameEdited;
+
+    private readonly System.Windows.Forms.Timer _nameEditDelay = new();
+    private int _nameEditCandidate = -1;   // 押したときに名前の上だった（離したら待ち始める）
+    private string? _nameEditWaiting;      // 離してから待っている項目
+    private string? _nameEditPath;         // 入力している項目
+    private NameEditBox? _nameEditor;
+
+    private bool IsOnName(int index, Point client)
+    {
+        var cell = CurrentLayout.CellBounds(index);
+        return NameTextBounds(index, cell).Contains(client.X, client.Y + ScrollY);
+    }
+
+    private void OnNameEditDelayTick(object? sender, EventArgs e)
+    {
+        _nameEditDelay.Stop();
+        string? path = _nameEditWaiting;
+        _nameEditWaiting = null;
+        // 待っている間に選び直した・読み直した・ほかを操作していたらやめる
+        if (path == null || !Focused || ArchiveMode || _selection.Count != 1 || !_indexByPath.TryGetValue(path, out int cell)
+            || !_selection.IsSelected(cell)) return;
+        BeginNameEdit(cell);
+    }
+
+    private void BeginNameEdit(int cell)
+    {
+        CancelNameEdit();
+        EnsureVisible(cell);
+        string name = CellName(cell);
+        var editor = new NameEditBox
+        {
+            Text = name, Font = Font, BorderStyle = BorderStyle.FixedSingle,
+            BackColor = Theme.Current.Field, ForeColor = Theme.Current.Text,
+            // グリッドは日本語入力を使わない設定なので、引き継がずにアドレスバーと同じ扱いにする
+            ImeMode = ImeMode.NoControl,
+        };
+        editor.Commit += (_, _) => EndNameEdit(commit: true, keepOnError: true);
+        editor.Cancel += (_, _) => EndNameEdit(commit: false, keepOnError: false);
+        editor.LostFocus += (_, _) => EndNameEdit(commit: true, keepOnError: false);
+        editor.TextChanged += (_, _) => LayoutNameEditor();
+        _nameEditor = editor;
+        _nameEditPath = CellPath(cell);
+        LayoutNameEditor();
+        Controls.Add(editor);
+        editor.Focus();
+        // ファイルは拡張子の前まで、フォルダは全体を選んでおく
+        int dot = name.LastIndexOf('.');
+        bool plainFolder = IsFolder(cell) && !IsArchiveTile(cell);
+        editor.Select(0, !plainFolder && dot > 0 ? dot : name.Length);
+    }
+
+    /// <summary>入力欄を項目の名前の位置に合わせる（幅は入力した長さに合わせて、セルより広くもなる）</summary>
+    private void LayoutNameEditor()
+    {
+        if (_nameEditor is not { } editor || _nameEditPath == null) return;
+        if (!_indexByPath.TryGetValue(_nameEditPath, out int index)) return;
+        var cell = CurrentLayout.CellBounds(index);
+        cell.Offset(0, -ScrollY);
+        var name = NameArea(cell);
+        int area = Math.Max(1, ClientSize.Width - _scroll.Width);
+        int width = Math.Min(area, Math.Max(cell.Width, TextRenderer.MeasureText(editor.Text + "  ", Font).Width + LogicalToDeviceUnits(8)));
+        int x = Math.Clamp(cell.X + (cell.Width - width) / 2, 0, Math.Max(0, area - width));
+        editor.SetBounds(x, name.Y, width, editor.PreferredHeight);
+    }
+
+    /// <summary>名前の入力をやめる（入力した名前は捨てる）</summary>
+    public void CancelNameEdit() => EndNameEdit(commit: false, keepOnError: false);
+
+    /// <param name="keepOnError">名前に問題があれば入力を続ける（Enter のとき）。false ならやめる（ほかをクリックしたとき）</param>
+    private void EndNameEdit(bool commit, bool keepOnError)
+    {
+        if (_nameEditor is not { } editor || _nameEditPath is not { } path) return;
+        string newName = editor.Text.Trim();
+        bool exists = _indexByPath.TryGetValue(path, out int cell);
+        bool isFolder = exists && IsFolder(cell);
+        bool changed = commit && exists && newName != Path.GetFileName(path);
+        if (changed && ValidateNewName?.Invoke(path, isFolder, newName) != null)
+        {
+            if (keepOnError)
+            {
+                System.Media.SystemSounds.Beep.Play();
+                return;
+            }
+            changed = false;
+        }
+
+        // 先に入力中の状態を解いてから閉じる（フォーカスが移るときの LostFocus で、もう一度ここに来ても何もしない）
+        _nameEditor = null;
+        _nameEditPath = null;
+        if (editor.Focused) Focus();
+        editor.Visible = false;
+        BeginInvoke(() =>
+        {
+            Controls.Remove(editor);
+            editor.Dispose();
+        });
+        Invalidate();
+        if (changed) NameEdited?.Invoke(this, new NameEditedEventArgs(path, isFolder, newName));
+    }
+
+    /// <summary>名前の入力欄。Enter で確定・Esc でやめる。本体のショートカット（Delete・Ctrl+C など）には渡さず文字の編集に使う</summary>
+    private sealed class NameEditBox : TextBox
+    {
+        public event EventHandler? Commit;
+        public event EventHandler? Cancel;
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            switch (keyData)
+            {
+                case Keys.Enter or Keys.Tab:
+                    Commit?.Invoke(this, EventArgs.Empty);
+                    return true;
+                case Keys.Escape:
+                    Cancel?.Invoke(this, EventArgs.Empty);
+                    return true;
+                case Keys.Control | Keys.A:
+                    SelectAll();
+                    return true;
+                default:
+                    return false; // 親（本体のショートカット）には回さず、文字の編集として処理させる
+            }
+        }
+    }
+
     // ---- キーボード ----
 
     protected override bool IsInputKey(Keys keyData) =>
@@ -1118,9 +1280,21 @@ public sealed class ThumbnailGrid : Control
         {
             _thumbnails.ThumbnailReady -= OnThumbnailReady;
             _autoScroll.Dispose();
+            _nameEditDelay.Dispose();
             _folderIcon?.Dispose();
             _archiveIcon?.Dispose();
         }
         base.Dispose(disposing);
     }
+}
+
+/// <summary>一覧で名前が入力された項目</summary>
+public sealed class NameEditedEventArgs(string path, bool isFolder, string newName) : EventArgs
+{
+    public string Path { get; } = path;
+
+    /// <summary>フォルダ（ZIP も）のタイル</summary>
+    public bool IsFolder { get; } = isFolder;
+
+    public string NewName { get; } = newName;
 }
