@@ -9,6 +9,12 @@ public sealed record AppSettings
     /// <summary>ホームフォルダ（未設定なら null = ピクチャ）</summary>
     public string? HomeFolder { get; init; }
 
+    /// <summary>起動時にホームではなく前回終了したときのフォルダを開く（null は既定 = ホームを開く）</summary>
+    public bool? OpenLastFolder { get; init; }
+
+    /// <summary>前回終了したときに開いていたフォルダ（ZIP の中ならそのパス）</summary>
+    public string? LastFolder { get; init; }
+
     /// <summary>サムネイルの表示サイズ（論理 px。null なら既定の 160）</summary>
     public int? ThumbnailSize { get; init; }
 
