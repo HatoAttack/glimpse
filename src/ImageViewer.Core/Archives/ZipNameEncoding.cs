@@ -1,7 +1,8 @@
 // ZIP の中のファイル名の文字コード
 // UTF-8 の印が付いていない名前は、日本語の Windows で作った ZIP だと Shift_JIS（CP932）のことが多い。
-// macOS などは印を付けずに UTF-8 で書くこともあるので、UTF-8 として正しければ UTF-8、そうでなければ OS の OEM コードページ
-// （日本語の Windows なら CP932、英語なら ZIP の仕様どおり CP437）で読む
+// macOS などは印を付けずに UTF-8 で書くこともある。そこで、UTF-8 として正しければ UTF-8、Shift_JIS として正しければ Shift_JIS
+// （英語版の Windows で日本語の ZIP を開くこともあるので、OS の設定によらず試す）、どちらでもなければ OS の OEM コードページ
+// （英語なら ZIP の仕様どおり CP437）で読む
 using System.Globalization;
 using System.Text;
 
@@ -12,31 +13,47 @@ internal sealed class ZipNameEncoding : Encoding
     public static readonly ZipNameEncoding Instance = new();
 
     private static readonly Encoding Utf8 = new UTF8Encoding(false, throwOnInvalidBytes: true);
-    private static readonly Encoding Legacy = CreateLegacy();
+    private static readonly Encoding? ShiftJis;
+    private static readonly Encoding Legacy;
 
-    private static Encoding CreateLegacy()
+    static ZipNameEncoding()
     {
+        RegisterProvider(CodePagesEncodingProvider.Instance);
         try
         {
-            RegisterProvider(CodePagesEncodingProvider.Instance);
-            return GetEncoding(CultureInfo.CurrentCulture.TextInfo.OEMCodePage);
+            ShiftJis = GetEncoding(932, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback);
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
         {
-            return Latin1;
+            ShiftJis = null;
+        }
+        try
+        {
+            Legacy = GetEncoding(CultureInfo.CurrentCulture.TextInfo.OEMCodePage);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException)
+        {
+            Legacy = Latin1;
         }
     }
 
     private static Encoding Pick(byte[] bytes, int index, int count)
     {
+        if (Decodes(Utf8, bytes, index, count)) return Utf8;
+        if (ShiftJis != null && Decodes(ShiftJis, bytes, index, count)) return ShiftJis;
+        return Legacy;
+    }
+
+    private static bool Decodes(Encoding strict, byte[] bytes, int index, int count)
+    {
         try
         {
-            Utf8.GetCharCount(bytes, index, count);
-            return Utf8;
+            strict.GetCharCount(bytes, index, count);
+            return true;
         }
         catch (DecoderFallbackException)
         {
-            return Legacy;
+            return false;
         }
     }
 
