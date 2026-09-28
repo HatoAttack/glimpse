@@ -55,6 +55,12 @@ public interface IImageCommand
 /// </summary>
 public interface IWorksInArchive { }
 
+/// <summary>
+/// 選択中のフォルダ（ZIP のタイルも）も対象にするコマンドの印（コピーなど）。
+/// 印の無いコマンドには、フォルダを含めずに画像だけを渡す
+/// </summary>
+public interface IWorksOnFolders { }
+
 /// <summary>選択枚数の条件だけで実行可否が決まるコマンドの基底クラス</summary>
 public abstract class ImageCommandBase : IImageCommand
 {

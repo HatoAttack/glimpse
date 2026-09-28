@@ -1745,12 +1745,24 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
     /// <summary>今このコマンドを使えるか。ZIP の中では、ZIP を書き換えないコマンド（コピーなど）だけ</summary>
     private bool CanRun(IImageCommand cmd, IReadOnlyList<string> paths) =>
-        cmd.CanExecute(paths) && (!_inArchive || cmd is IWorksInArchive);
+        cmd.CanExecute(PathsFor(cmd, paths)) && (!_inArchive || cmd is IWorksInArchive);
+
+    /// <summary>
+    /// コマンドに渡すパス。フォルダも扱うコマンド（コピーなど）には、選択中のフォルダのタイルも画像の前に加える
+    /// （チェックした画像が対象のときと、ZIP の中のフォルダ（本当のフォルダではない）は加えない）
+    /// </summary>
+    private IReadOnlyList<string> PathsFor(IImageCommand cmd, IReadOnlyList<string> paths)
+    {
+        if (cmd is not IWorksOnFolders || _target != ActionTarget.Selection || _inArchive) return paths;
+        var folders = _grid.SelectedFolders;
+        return folders.Count == 0 ? paths : folders.Select(d => d.FullName).Concat(paths).ToList();
+    }
 
     private async Task ExecuteAsync(IImageCommand cmd)
     {
         var paths = TargetPaths();
         if (!CanRun(cmd, paths)) return;
+        paths = PathsFor(cmd, paths);
         try
         {
             await cmd.ExecuteAsync(new CommandContext(paths, this));
