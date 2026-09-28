@@ -48,8 +48,11 @@ internal static class FileClipboard
     }
 }
 
-/// <summary>ZIP の中の画像は、一時フォルダへ書き出したものをクリップボードに載せる</summary>
-public sealed class CopyFilesCommand : ImageCommandBase, IWorksInArchive
+/// <summary>
+/// 選択中のフォルダもフォルダごとコピーする（エクスプローラーや FTP ソフトへ貼り付けられる）。
+/// ZIP の中の画像は、一時フォルダへ書き出したものをクリップボードに載せる
+/// </summary>
+public sealed class CopyFilesCommand : ImageCommandBase, IWorksInArchive, IWorksOnFolders
 {
     public override string Id => "edit.copy";
     public override string Name => "コピー";
@@ -60,7 +63,10 @@ public sealed class CopyFilesCommand : ImageCommandBase, IWorksInArchive
     {
         var paths = await Task.Run(() => ArchiveExport.ToFiles(context.Paths));
         FileClipboard.Set(paths, cut: false);
-        context.Host.Notify($"{context.Paths.Count} 枚をコピーしました（貼り付けは Ctrl+V。エクスプローラーにも貼り付けられます）");
+        // フォルダ（ZIP のタイルも）を含むときは枚数ではなく件数で
+        bool withFolders = context.Paths.Any(p => Directory.Exists(p) || ArchivePath.IsArchiveName(p));
+        string what = withFolders ? $"{context.Paths.Count} 件" : $"{context.Paths.Count} 枚";
+        context.Host.Notify($"{what}をコピーしました（貼り付けは Ctrl+V。エクスプローラーにも貼り付けられます）");
     }
 }
 
