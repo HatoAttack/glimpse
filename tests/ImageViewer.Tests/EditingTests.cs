@@ -166,6 +166,26 @@ static class EditingTests
         using (var img = Image.Load<Rgba32>(P("photo_crop.jpg")))
             check(img.Width == 1000 && img.Height == 1000, $"切り抜き: 回転を反映した画像の中央 1:1（{img.Width}x{img.Height}）");
 
+        // 上書き（保存先が元のファイル）
+        using (var img = new Image<Rgba32>(200, 100, Red)) img.SaveAsPng(P("over.png"));
+        Cropper.CropCenter(P("over.png"), 1.0, P("over.png"));
+        using (var img = Image.Load<Rgba32>(P("over.png")))
+            check(img.Width == 100 && img.Height == 100, $"切り抜き: 元のファイルに上書きできる（{img.Width}x{img.Height}）");
+        using (var whole = ImageViewer.Core.Imaging.ImageLoader.Load(P("over.png")))
+            Cropper.SaveCrop(whole, new Rectangle(0, 0, 40, 30), P("over.png"), P("over.png"));
+        using (var img = Image.Load<Rgba32>(P("over.png")))
+            check(img.Width == 40 && img.Height == 30, $"切り抜き: 表示中の画像の範囲で上書きできる（{img.Width}x{img.Height}）");
+        using (var anim = new Image<Rgba32>(20, 20, Red))
+        {
+            anim.Frames.AddFrame(new Image<Rgba32>(20, 20, Blue).Frames.RootFrame);
+            anim.SaveAsGif(P("over.gif"));
+        }
+        long gifSize = new FileInfo(P("over.gif")).Length;
+        bool refused = false;
+        try { Cropper.CropCenter(P("over.gif"), 1.0, P("over.gif")); }
+        catch (NotSupportedException) { refused = true; }
+        check(refused && new FileInfo(P("over.gif")).Length == gifSize, "切り抜き: アニメーションは上書きしない（元のまま）");
+
         // ---- 連結 ----
         using (var a = new Image<Rgba32>(100, 50, Red))
         using (var b = new Image<Rgba32>(40, 100, Blue))
