@@ -32,6 +32,8 @@ public sealed class CropDialog : ThemedForm
     private Bitmap? _display;                           // キャンバスの大きさに縮小した表示用
     private CancellationTokenSource? _loadCts;
     private bool _busy;
+    // 画像を読み込み中（_index はもう次の画像なのに _image はまだ前の画像）。この間は保存しない（前の画像の画素で上書きしないように）
+    private bool _loading;
 
     // 画像 → キャンバスの変換
     private double _scale = 1, _offX, _offY;
@@ -256,6 +258,8 @@ public sealed class CropDialog : ThemedForm
         _loadCts?.Cancel();
         var cts = _loadCts = new CancellationTokenSource();
         _index = index;
+        _loading = true;
+        UpdateButtons();
         string path = _paths[index];
         _name.Text = $"[{index + 1}/{_paths.Count}] {Path.GetFileName(path)}  （読み込み中…）";
         SixLabors.ImageSharp.Image<Rgba32> image;
@@ -270,6 +274,7 @@ public sealed class CropDialog : ThemedForm
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             if (cts.IsCancellationRequested) return;
+            _loading = false;
             _image?.Dispose();
             _image = null;
             _rect = null;
@@ -283,6 +288,7 @@ public sealed class CropDialog : ThemedForm
             image.Dispose();
             return;
         }
+        _loading = false;
         _image?.Dispose();
         _image = image;
         _name.Text = $"[{index + 1}/{_paths.Count}] {Path.GetFileName(path)}  （{image.Width} × {image.Height}）";
@@ -316,11 +322,11 @@ public sealed class CropDialog : ThemedForm
 
     private void UpdateButtons()
     {
-        _save.Enabled = _saveNext.Enabled = !_busy && _image != null;
+        _save.Enabled = _saveNext.Enabled = !_busy && !_loading && _image != null;
         _saveNext.Visible = _paths.Count > 1;
         // 位置を引き継ぐなら「今の範囲で」（自由な比でもよい）、そうでなければ「同じ比で中央から」
         _saveAll.Text = _keepPosition.Checked ? "全部を今の範囲で切り抜き" : "全部を同じ比で中央から切り抜き";
-        _saveAll.Enabled = !_busy && (_keepPosition.Checked ? _anchor != null : CurrentAspect() != null);
+        _saveAll.Enabled = !_busy && !_loading && (_keepPosition.Checked ? _anchor != null : CurrentAspect() != null);
         _prev.Enabled = _next.Enabled = !_busy && _paths.Count > 1;
     }
 
@@ -527,7 +533,7 @@ public sealed class CropDialog : ThemedForm
 
     private async Task SaveCurrentAsync(bool advance)
     {
-        if (_busy || _image == null || _rect == null) return;
+        if (_busy || _loading || _image == null || _rect == null) return;
         string src = _paths[_index];
         if (OutputFolderFor(src) is not string folder) return;
         var box = Cropper.ClampBox(_rect[0], _rect[1], _rect[2], _rect[3], _image.Width, _image.Height);
@@ -581,14 +587,14 @@ public sealed class CropDialog : ThemedForm
 
     private async Task SaveAllCenterAsync()
     {
-        if (_busy || CurrentAspect() is not double aspect) return;
+        if (_busy || _loading || CurrentAspect() is not double aspect) return;
         await SaveAllAsync((src, dst) => Cropper.CropCenter(src, aspect, dst));
     }
 
     /// <summary>最後に決めた枠を全部の画像へ引き継いで切り抜く（大きさが違う画像には割合で合わせる）</summary>
     private async Task SaveAllCarriedAsync()
     {
-        if (_busy || _anchor is not { } from) return;
+        if (_busy || _loading || _anchor is not { } from) return;
         await SaveAllAsync((src, dst) => Cropper.CropCarried(src, from.Rect, from.Width, from.Height, dst));
     }
 
