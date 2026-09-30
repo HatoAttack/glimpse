@@ -1,5 +1,6 @@
 // ダイアログの共通の土台: タイトルバーを今の配色に合わせ、ダークのときは中の標準部品をダークの色にする。
 // ライトのときは Windows の標準の見た目のまま（今までと変えない）。開いている間に配色が変わったら塗り直す
+// ダークで使えない（Enabled = false）チェックボックス・ラジオボタン・ラベルは、標準の浮き彫りの文字が読みづらいので控えめな色で描き直す
 using System.Runtime.InteropServices;
 using ImageViewer.App.Jump;
 
@@ -102,9 +103,82 @@ public class ThemedForm : Form
                         TextRenderer.DrawText(e.Graphics, group.Text, group.Font, new Point(x + 1, 0), Theme.Current.Text, TextFormatFlags.NoPrefix);
                     };
                     break;
+                case CheckBox or RadioButton:
+                    // 使えない間の文字は、標準では地より暗い色に白い影を付けて描くので、ダークでは文字が反転したように見える。描き直す
+                    c.Paint += (_, e) => { if (Theme.Current.IsDark && !c.Enabled) PaintDisabledCheck((ButtonBase)c, e.Graphics); };
+                    break;
+                case Label label when label.GetType() == typeof(Label):
+                    label.Paint += (_, e) => { if (Theme.Current.IsDark && !label.Enabled) PaintDisabledLabel(label, e.Graphics); };
+                    break;
             }
             Prepare(c);
         }
+    }
+
+    /// <summary>ダークで使えないチェックボックス・ラジオボタンを、控えめな文字の色で描き直す（印も同じ色で）</summary>
+    private static void PaintDisabledCheck(ButtonBase button, Graphics g)
+    {
+        var p = Theme.Current;
+        var rect = button.ClientRectangle;
+        using (var bg = new SolidBrush(button.BackColor)) g.FillRectangle(bg, rect);
+        int size = button.LogicalToDeviceUnits(12);
+        var glyph = new Rectangle(rect.Left + button.Padding.Left, rect.Top + (rect.Height - size) / 2, size, size);
+        var smoothing = g.SmoothingMode;
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        using (var pen = new Pen(p.TextMuted, 1))
+        using (var fill = new SolidBrush(p.TextMuted))
+        {
+            if (button is RadioButton radio)
+            {
+                g.DrawEllipse(pen, glyph.X, glyph.Y, glyph.Width - 1, glyph.Height - 1);
+                if (radio.Checked)
+                {
+                    int inset = size / 4 + 1;
+                    g.FillEllipse(fill, glyph.X + inset, glyph.Y + inset, glyph.Width - inset * 2 - 1, glyph.Height - inset * 2 - 1);
+                }
+            }
+            else
+            {
+                g.DrawRectangle(pen, glyph.X, glyph.Y, glyph.Width - 1, glyph.Height - 1);
+                if (((CheckBox)button).CheckState != CheckState.Unchecked)
+                {
+                    using var mark = new Pen(p.TextMuted, Math.Max(1.5f, button.LogicalToDeviceUnits(2)));
+                    g.DrawLines(mark, new[]
+                    {
+                        new PointF(glyph.X + size * 0.22f, glyph.Y + size * 0.52f),
+                        new PointF(glyph.X + size * 0.42f, glyph.Y + size * 0.72f),
+                        new PointF(glyph.X + size * 0.78f, glyph.Y + size * 0.28f),
+                    });
+                }
+            }
+        }
+        g.SmoothingMode = smoothing;
+        int textLeft = glyph.Right + button.LogicalToDeviceUnits(4);
+        var textRect = Rectangle.FromLTRB(textLeft, rect.Top, rect.Right - button.Padding.Right, rect.Bottom);
+        TextRenderer.DrawText(g, button.Text, button.Font, textRect, p.TextMuted,
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak | TextFormatFlags.NoPrefix);
+    }
+
+    /// <summary>ダークで使えないラベルを、控えめな文字の色で描き直す（標準の浮き彫りの描き方をやめる）</summary>
+    private static void PaintDisabledLabel(Label label, Graphics g)
+    {
+        using (var bg = new SolidBrush(label.BackColor)) g.FillRectangle(bg, label.ClientRectangle);
+        var flags = TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl | (label.UseMnemonic ? TextFormatFlags.Default : TextFormatFlags.NoPrefix);
+        flags |= label.TextAlign switch
+        {
+            ContentAlignment.TopCenter or ContentAlignment.MiddleCenter or ContentAlignment.BottomCenter => TextFormatFlags.HorizontalCenter,
+            ContentAlignment.TopRight or ContentAlignment.MiddleRight or ContentAlignment.BottomRight => TextFormatFlags.Right,
+            _ => TextFormatFlags.Left,
+        };
+        flags |= label.TextAlign switch
+        {
+            ContentAlignment.MiddleLeft or ContentAlignment.MiddleCenter or ContentAlignment.MiddleRight => TextFormatFlags.VerticalCenter,
+            ContentAlignment.BottomLeft or ContentAlignment.BottomCenter or ContentAlignment.BottomRight => TextFormatFlags.Bottom,
+            _ => TextFormatFlags.Top,
+        };
+        var rect = Rectangle.FromLTRB(label.Padding.Left, label.Padding.Top,
+            label.ClientSize.Width - label.Padding.Right, label.ClientSize.Height - label.Padding.Bottom);
+        TextRenderer.DrawText(g, label.Text, label.Font, rect, Theme.Current.TextMuted, flags);
     }
 
     /// <summary>
