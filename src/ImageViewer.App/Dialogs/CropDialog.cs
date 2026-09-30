@@ -4,6 +4,7 @@
 // - 選択した画像を ◀ ▶（PageUp / PageDown）で切り替え。Enter で保存して次へ
 // - 「次の画像も同じ位置で切り抜く」なら、切り替えても枠を引き継ぐ（大きさが違う画像には割合で合わせる）。
 //   一括も「全部を今の範囲で切り抜き」になる（スクリーンショットのように構成が同じ画像向け）
+// - 保存先に「元の画像に上書き」も選べる（最初の上書きの前に確かめる。アニメ・書き出せない形式などは上書きしない）
 // - 持つのは表示中の 1 枚（切り抜き用の原寸）と、画面の大きさに縮小した表示用のビットマップだけ
 using System.Drawing.Drawing2D;
 using ImageViewer.Core.Editing;
@@ -22,7 +23,7 @@ public sealed class CropDialog : ThemedForm
     /// <summary>このアプリを起動している間は前回の設定を引き継ぐ</summary>
     private static int _lastAspect;
     private static decimal _lastCustomW = 16, _lastCustomH = 10;
-    private static bool _lastFlip, _lastToCustomFolder, _lastKeepPosition;
+    private static bool _lastFlip, _lastToCustomFolder, _lastKeepPosition, _lastOverwrite;
     private static string _lastFolder = "";
 
     private readonly IReadOnlyList<string> _paths;
@@ -31,6 +32,8 @@ public sealed class CropDialog : ThemedForm
     private Bitmap? _display;                           // キャンバスの大きさに縮小した表示用
     private CancellationTokenSource? _loadCts;
     private bool _busy;
+    // 画像を読み込み中（_index はもう次の画像なのに _image はまだ前の画像）。この間は保存しない（前の画像の画素で上書きしないように）
+    private bool _loading;
 
     // 画像 → キャンバスの変換
     private double _scale = 1, _offX, _offY;
@@ -58,7 +61,10 @@ public sealed class CropDialog : ThemedForm
     private readonly Label _selectionSize = new() { AutoSize = true, Margin = new Padding(3, 8, 3, 3) };
     private readonly RadioButton _toSame = new() { Text = "元と同じフォルダ", AutoSize = true };
     private readonly RadioButton _toCustom = new() { Text = "指定のフォルダ", AutoSize = true };
+    private readonly RadioButton _toOverwrite = new() { Text = "元の画像に上書き", AutoSize = true };
     private readonly TextBox _folder = new() { Width = 190 };
+    private readonly Label _outputHint = new() { AutoSize = true, MaximumSize = new Size(190, 0) };
+    private bool _overwriteConfirmed; // このダイアログで 1 枚ずつの上書きを確かめたか
     private readonly Button _save = new() { Text = "この範囲で保存", Width = 200, Height = 30 };
     private readonly Button _saveNext = new() { Text = "保存して次へ (Enter)", Width = 200, Height = 30 };
     private readonly Button _saveAll = new() { Text = "全部を同じ比で中央から切り抜き", Width = 200, Height = 30 };
@@ -112,7 +118,9 @@ public sealed class CropDialog : ThemedForm
         _keepPosition.Visible = paths.Count > 1;
         _keepPosition.CheckedChanged += (_, _) => UpdateButtons();
         _folder.Text = _lastFolder;
-        (_lastToCustomFolder && _lastFolder.Length > 0 ? _toCustom : _toSame).Checked = true;
+        (_lastOverwrite ? _toOverwrite : _lastToCustomFolder && _lastFolder.Length > 0 ? _toCustom : _toSame).Checked = true;
+        foreach (var rb in new[] { _toSame, _toCustom, _toOverwrite }) rb.CheckedChanged += (_, _) => { if (rb.Checked) OnOutputChanged(); };
+        OnOutputChanged();
         // 「指定」は別の行（別の親）にあるので、ラジオボタンの排他は自分で行う
         var allAspects = _aspectRadios.Select(a => a.Radio).Append(_customAspect).ToList();
         foreach (var rb in allAspects)
@@ -143,6 +151,7 @@ public sealed class CropDialog : ThemedForm
             _lastKeepPosition = _keepPosition.Checked;
             _lastFolder = _folder.Text.Trim();
             _lastToCustomFolder = _toCustom.Checked;
+            _lastOverwrite = _toOverwrite.Checked;
         };
     }
 
@@ -185,8 +194,7 @@ public sealed class CropDialog : ThemedForm
         var outStack = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false, Dock = DockStyle.Fill };
         outStack.Controls.AddRange(new Control[]
         {
-            _toSame, _toCustom, _folder, browse,
-            new Label { Text = "名前は「元の名前_crop」。同名があれば (2) などを付けます", AutoSize = true, MaximumSize = new Size(190, 0), ForeColor = Theme.Current.TextMuted },
+            _toSame, _toCustom, _folder, browse, _toOverwrite, _outputHint,
         });
         var outBox = new GroupBox { Text = "保存先", AutoSize = true, Width = 210, Padding = new Padding(8), Margin = new Padding(3, 8, 3, 3) };
         outBox.Controls.Add(outStack);
@@ -201,6 +209,19 @@ public sealed class CropDialog : ThemedForm
         };
         side.Controls.AddRange(new Control[] { _save, _saveNext, _saveAll, _status });
         return side;
+    }
+
+    /// <summary>保存先を変えたら、説明とボタンの名前を合わせる（上書きは注意の色で）</summary>
+    private void OnOutputChanged()
+    {
+        bool overwrite = _toOverwrite.Checked;
+        _outputHint.Text = overwrite
+            ? "元のファイルを切り抜いた画像で置き換えます（元には戻せません）。HEIC・RAW など書き出せない形式やアニメーションは上書きしません"
+            : "名前は「元の名前_crop」。同名があれば (2) などを付けます";
+        _outputHint.ForeColor = overwrite ? Theme.Current.Danger : Theme.Current.TextMuted;
+        _save.Text = overwrite ? "この範囲で上書き保存" : "この範囲で保存";
+        _saveNext.Text = overwrite ? "上書きして次へ (Enter)" : "保存して次へ (Enter)";
+        UpdateButtons();
     }
 
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
@@ -231,11 +252,14 @@ public sealed class CropDialog : ThemedForm
         await ShowIndexAsync(((_index + delta) % _paths.Count + _paths.Count) % _paths.Count);
     }
 
-    private async Task ShowIndexAsync(int index)
+    /// <param name="carry">false なら枠を引き継がずに作り直す（上書きして読み直すとき。引き継ぐ元の枠はそのまま）</param>
+    private async Task ShowIndexAsync(int index, bool carry = true)
     {
         _loadCts?.Cancel();
         var cts = _loadCts = new CancellationTokenSource();
         _index = index;
+        _loading = true;
+        UpdateButtons();
         string path = _paths[index];
         _name.Text = $"[{index + 1}/{_paths.Count}] {Path.GetFileName(path)}  （読み込み中…）";
         SixLabors.ImageSharp.Image<Rgba32> image;
@@ -250,6 +274,7 @@ public sealed class CropDialog : ThemedForm
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
             if (cts.IsCancellationRequested) return;
+            _loading = false;
             _image?.Dispose();
             _image = null;
             _rect = null;
@@ -263,10 +288,15 @@ public sealed class CropDialog : ThemedForm
             image.Dispose();
             return;
         }
+        _loading = false;
         _image?.Dispose();
         _image = image;
         _name.Text = $"[{index + 1}/{_paths.Count}] {Path.GetFileName(path)}  （{image.Width} × {image.Height}）";
-        if (_keepPosition.Checked && _anchor is { } from)
+        if (!carry)
+        {
+            ResetRect();
+        }
+        else if (_keepPosition.Checked && _anchor is { } from)
         {
             var (x0, y0, x1, y1) = Cropper.CarryRect(from.Rect, from.Width, from.Height, image.Width, image.Height);
             _rect = new[] { x0, y0, x1, y1 };
@@ -292,11 +322,11 @@ public sealed class CropDialog : ThemedForm
 
     private void UpdateButtons()
     {
-        _save.Enabled = _saveNext.Enabled = !_busy && _image != null;
+        _save.Enabled = _saveNext.Enabled = !_busy && !_loading && _image != null;
         _saveNext.Visible = _paths.Count > 1;
         // 位置を引き継ぐなら「今の範囲で」（自由な比でもよい）、そうでなければ「同じ比で中央から」
         _saveAll.Text = _keepPosition.Checked ? "全部を今の範囲で切り抜き" : "全部を同じ比で中央から切り抜き";
-        _saveAll.Enabled = !_busy && (_keepPosition.Checked ? _anchor != null : CurrentAspect() != null);
+        _saveAll.Enabled = !_busy && !_loading && (_keepPosition.Checked ? _anchor != null : CurrentAspect() != null);
         _prev.Enabled = _next.Enabled = !_busy && _paths.Count > 1;
     }
 
@@ -494,7 +524,7 @@ public sealed class CropDialog : ThemedForm
     /// <summary>保存先のフォルダ（指定のフォルダが正しくなければメッセージを出して null）</summary>
     private string? OutputFolderFor(string source)
     {
-        if (_toSame.Checked) return Path.GetDirectoryName(source)!;
+        if (_toSame.Checked || _toOverwrite.Checked) return Path.GetDirectoryName(source)!;
         string folder = _folder.Text.Trim();
         if (folder.Length > 0 && Path.IsPathFullyQualified(folder)) return folder;
         MessageBox.Show(this, "保存先のフォルダを C:\\… の形で指定してください。", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -503,11 +533,20 @@ public sealed class CropDialog : ThemedForm
 
     private async Task SaveCurrentAsync(bool advance)
     {
-        if (_busy || _image == null || _rect == null) return;
+        if (_busy || _loading || _image == null || _rect == null) return;
         string src = _paths[_index];
         if (OutputFolderFor(src) is not string folder) return;
         var box = Cropper.ClampBox(_rect[0], _rect[1], _rect[2], _rect[3], _image.Width, _image.Height);
         if (box.Width < 1 || box.Height < 1) return;
+
+        bool overwrite = _toOverwrite.Checked;
+        if (overwrite && !_overwriteConfirmed)
+        {
+            if (MessageBox.Show(this, $"元の画像（{Path.GetFileName(src)}）を切り抜いた画像で上書きします（元には戻せません）。続けますか？\n" +
+                                      "このダイアログを閉じるまで、次からは確かめずに上書きします。",
+                    Text, MessageBoxButtons.OKCancel, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.OK) return;
+            _overwriteConfirmed = true;
+        }
 
         var image = _image;
         SetBusy(true);
@@ -515,13 +554,15 @@ public sealed class CropDialog : ThemedForm
         {
             string dst = await Task.Run(() =>
             {
-                string d = Cropper.OutputPathFor(src, folder);
-                Cropper.SaveCrop(image, box, d);
+                string d = overwrite ? src : Cropper.OutputPathFor(src, folder);
+                Cropper.SaveCrop(image, box, src, d);
                 return d;
             });
             SavedCount++;
             _status.ForeColor = Theme.Current.Text;
-            _status.Text = $"保存しました: {Path.GetFileName(dst)}（{box.Width} × {box.Height}）";
+            _status.Text = overwrite
+                ? $"上書きしました: {Path.GetFileName(dst)}（{box.Width} × {box.Height}）"
+                : $"保存しました: {Path.GetFileName(dst)}（{box.Width} × {box.Height}）";
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -538,26 +579,33 @@ public sealed class CropDialog : ThemedForm
             if (_index + 1 < _paths.Count) await ShowIndexAsync(_index + 1);
             else Close(); // 最後の 1 枚を保存したら閉じる
         }
+        else if (overwrite)
+        {
+            await ShowIndexAsync(_index, carry: false); // 切り抜いた後の画像を出し直す
+        }
     }
 
     private async Task SaveAllCenterAsync()
     {
-        if (_busy || CurrentAspect() is not double aspect) return;
+        if (_busy || _loading || CurrentAspect() is not double aspect) return;
         await SaveAllAsync((src, dst) => Cropper.CropCenter(src, aspect, dst));
     }
 
     /// <summary>最後に決めた枠を全部の画像へ引き継いで切り抜く（大きさが違う画像には割合で合わせる）</summary>
     private async Task SaveAllCarriedAsync()
     {
-        if (_busy || _anchor is not { } from) return;
+        if (_busy || _loading || _anchor is not { } from) return;
         await SaveAllAsync((src, dst) => Cropper.CropCarried(src, from.Rect, from.Width, from.Height, dst));
     }
 
     /// <summary>選んだ画像を全部、crop(元, 保存先) で切り抜いて保存する</summary>
     private async Task SaveAllAsync(Action<string, string> crop)
     {
-        if (!_toSame.Checked && OutputFolderFor(_paths[0]) == null) return;
-        var targets = _paths.Select(p => (Src: p, Folder: _toSame.Checked ? Path.GetDirectoryName(p)! : _folder.Text.Trim())).ToList();
+        bool overwrite = _toOverwrite.Checked;
+        if (_toCustom.Checked && OutputFolderFor(_paths[0]) == null) return;
+        if (overwrite && MessageBox.Show(this, $"元の画像 {_paths.Count} 枚を切り抜いた画像で上書きします（元には戻せません）。続けますか？",
+                Text, MessageBoxButtons.OKCancel, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.OK) return;
+        var targets = _paths.Select(p => (Src: p, Folder: _toCustom.Checked ? _folder.Text.Trim() : Path.GetDirectoryName(p)!)).ToList();
         SetBusy(true);
         var errors = new List<string>();
         int ok = 0;
@@ -570,7 +618,7 @@ public sealed class CropDialog : ThemedForm
                 _status.Text = $"切り抜き中 {i + 1} / {targets.Count}: {Path.GetFileName(src)}";
                 try
                 {
-                    await Task.Run(() => crop(src, Cropper.OutputPathFor(src, folder)));
+                    await Task.Run(() => crop(src, overwrite ? src : Cropper.OutputPathFor(src, folder)));
                     ok++;
                 }
                 catch (Exception ex) when (ex is not OutOfMemoryException)
@@ -585,9 +633,10 @@ public sealed class CropDialog : ThemedForm
             SetBusy(false);
         }
         _status.ForeColor = errors.Count > 0 ? Theme.Current.Danger : Theme.Current.Text;
-        _status.Text = $"{ok} 枚を保存しました" + (errors.Count > 0 ? $"・{errors.Count} 枚は失敗しました" : "");
+        _status.Text = $"{ok} 枚を{(overwrite ? "上書き" : "保存")}しました" + (errors.Count > 0 ? $"・{errors.Count} 枚は失敗しました" : "");
         if (errors.Count > 0)
             MessageBox.Show(this, string.Join("\n", errors.Take(15)), $"切り抜けなかった画像（{errors.Count} 枚）", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        if (overwrite && ok > 0 && _index >= 0) await ShowIndexAsync(_index, carry: false); // 表示中の画像も切り抜いた後のものにする
     }
 
     private void SetBusy(bool busy)

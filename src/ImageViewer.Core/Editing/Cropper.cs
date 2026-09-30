@@ -1,4 +1,4 @@
-// 切り抜き（image-sizechange の切り抜きタブから移植）
+// 切り抜き（image-sizechange の切り抜きタブから移植）。保存先が元のファイルなら上書きする（回転・補正の上書きと同じ条件で）
 using ImageViewer.Core.Imaging;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
@@ -69,14 +69,40 @@ public static class Cropper
         return (x0, y0, x0 + w, y0 + h);
     }
 
-    /// <summary>ファイルを読み、ほかの画像（fromWidth × fromHeight）で決めた枠を引き継いで切り抜き、保存する（一括用）</summary>
+    /// <summary>ファイルを読み、ほかの画像（fromWidth × fromHeight）で決めた枠を引き継いで切り抜き、保存する（一括用。dst が src なら上書き）</summary>
     public static void CropCarried(string src, (double X0, double Y0, double X1, double Y1) rect, int fromWidth, int fromHeight, string dst)
     {
+        bool overwrite = IsSameFile(src, dst);
+        if (overwrite) EnsureOverwritable(src);
         using var image = ImageLoader.Load(src);
+        if (overwrite) EnsureKeepsMetadata(image);
         var (x0, y0, x1, y1) = CarryRect(rect, fromWidth, fromHeight, image.Width, image.Height);
         var box = ClampBox(x0, y0, x1, y1, image.Width, image.Height);
         image.Mutate(c => c.Crop(box));
         ImageSaver.Save(image, dst);
+    }
+
+    private static bool IsSameFile(string a, string b) =>
+        string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// 元のファイルに上書きしてよいか（ヘッダーだけ読む）。書き出せない形式・アニメや複数ページの画像・
+    /// ページの数を確かめられない画像は NotSupportedException（保存すると失われるものがあるため）
+    /// </summary>
+    public static void EnsureOverwritable(string path)
+    {
+        if (!ImageSaver.CanWrite(Path.GetExtension(path)))
+            throw new NotSupportedException($"この形式は書き出せないので上書きできません: {Path.GetExtension(path)}");
+        int? frames = Adjuster.FrameCount(path);
+        if (frames > 1) throw new NotSupportedException("アニメーションや複数ページの画像は上書きできません（保存すると先頭の 1 枚だけになるため）");
+        if (frames == null) throw new NotSupportedException("ページの数を確かめられない画像なので、上書きしませんでした");
+    }
+
+    /// <summary>撮影情報（EXIF など）を残せない画像（WIC で読んだもの）は、上書きすると失われるので NotSupportedException</summary>
+    private static void EnsureKeepsMetadata(Image image)
+    {
+        if (!Adjuster.KeepsMetadata(image))
+            throw new NotSupportedException("撮影情報（EXIF など）を残して保存できない画像なので、上書きしませんでした");
     }
 
     /// <summary>切り抜いた画像の保存先: 出力フォルダ\元の名前_crop.拡張子（書き出せない形式は .jpg）。既にあれば (2)… を付ける</summary>
@@ -84,17 +110,25 @@ public static class Cropper
         ImageSaver.UniquePath(Path.Combine(outputFolder,
             Path.GetFileNameWithoutExtension(source) + "_crop" + ImageSaver.ExtensionFor(OutputFormat.Keep, Path.GetExtension(source))));
 
-    /// <summary>読み込み済みの画像の box の範囲を保存する</summary>
-    public static void SaveCrop(Image<Rgba32> image, Rectangle box, string dst)
+    /// <summary>src から読み込み済みの画像の box の範囲を保存する（dst が src なら上書き）</summary>
+    public static void SaveCrop(Image<Rgba32> image, Rectangle box, string src, string dst)
     {
+        if (IsSameFile(src, dst))
+        {
+            EnsureOverwritable(src);
+            EnsureKeepsMetadata(image);
+        }
         using var cropped = image.Clone(x => x.Crop(box));
         ImageSaver.Save(cropped, dst);
     }
 
-    /// <summary>ファイルを読み、中央を指定の比で切り抜いて保存する（一括用）</summary>
+    /// <summary>ファイルを読み、中央を指定の比で切り抜いて保存する（一括用。dst が src なら上書き）</summary>
     public static void CropCenter(string src, double aspect, string dst)
     {
+        bool overwrite = IsSameFile(src, dst);
+        if (overwrite) EnsureOverwritable(src);
         using var image = ImageLoader.Load(src);
+        if (overwrite) EnsureKeepsMetadata(image);
         var (x, y, w, h) = CenterRect(image.Width, image.Height, aspect);
         var box = ClampBox(x, y, x + w, y + h, image.Width, image.Height);
         image.Mutate(c => c.Crop(box));
