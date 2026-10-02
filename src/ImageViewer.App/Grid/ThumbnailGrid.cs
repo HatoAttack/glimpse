@@ -478,8 +478,8 @@ public sealed class ThumbnailGrid : Control
     }
 
     /// <summary>
-    /// クリックで項目を掴める場所（画像そのものと名前の文字）。セル内でもそれ以外の余白は「空き」扱いにして、
-    /// そこからドラッグすると範囲選択になる（エクスプローラーの大アイコン表示と同じ）
+    /// クリックで項目を掴める場所（サムネイルの正方形の枠と名前の行。画像の縦横比や名前の長さに関係なく同じ広さ）。
+    /// セルの外周の余白は「空き」扱いにして、そこからドラッグすると範囲選択になる
     /// </summary>
     private int HitTest(Point client)
     {
@@ -488,13 +488,7 @@ public sealed class ThumbnailGrid : Control
         int i = layout.IndexAt(p.X, p.Y);
         if (i < 0) return -1;
         var cell = layout.CellBounds(i);
-
-        var image = ThumbArea(cell);
-        if (IsFolder(i)) image = FolderIconBounds(image);
-        else if (_thumbnails.TryGet(_keys[i - F], out var bmp) == ThumbnailState.Ready) image = Fit(bmp!.Size, image);
-        if (image.Contains(p)) return i;
-
-        return NameTextBounds(i, cell).Contains(p) ? i : -1;
+        return ThumbArea(cell).Contains(p) || NameArea(cell).Contains(p) ? i : -1;
     }
 
     /// <summary>名前の文字が描かれている範囲（中央寄せ。長ければ名前の枠いっぱい）</summary>
