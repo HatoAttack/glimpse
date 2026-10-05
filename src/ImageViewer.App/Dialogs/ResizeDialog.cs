@@ -294,6 +294,8 @@ public sealed class ResizeDialog : ThemedForm
         if (result.Errors.Count > 0)
             MessageBox.Show(this, string.Join("\n", result.Errors.Take(15)) + (result.Errors.Count > 15 ? $"\n…ほか {result.Errors.Count - 15} 件" : ""),
                 $"変換できなかった画像（{result.Errors.Count} 枚）", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        // 実行した後は設定を変えて続けられないので閉じる（結果はフッターにも出る）
+        Close();
     }
 
     public static string Summarize(ConvertResult r) =>
