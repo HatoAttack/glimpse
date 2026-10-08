@@ -204,6 +204,17 @@ static class AdjustTests
         using (var img = Image.Load<Rgba32>(B("b1.png")))
             check(img[50, 0].R > 110, $"まとめて: 元の画像に上書きで補正がかかる（{img[50, 0].R}）");
 
+        // 上書き保存（元の画像を置き換えるものだけ上書き）: 別の保存先（HEIC の代わりの JPG など）は、計画の後にできたファイルでも上書きしない
+        File.WriteAllText(B("other.png"), "other");
+        var onlySources = new List<ConvertPlanItem>
+        {
+            new(B("b1.png"), B("b1.png"), ConvertStatus.Ok, null),
+            new(B("b2.png"), B("other.png"), ConvertStatus.Ok, null),
+        };
+        var onlyResult = BatchAdjuster.Run(onlySources, new AdjustOptions { Brightness = 10 }, inPlace, overwriteSourcesOnly: true);
+        check(onlyResult.Converted == 1 && onlyResult.Skipped == 1 && File.ReadAllText(B("other.png")) == "other",
+            $"上書き保存: 元の画像は置き換え、別の名前の既にあるファイルは上書きせずに飛ばす（{onlyResult.Converted} 枚・飛ばし {onlyResult.Skipped}）");
+
         // ---- 回転 ----
         string R(string name) => Path.Combine(dir, "rot_" + name);
         void Marked(string path)

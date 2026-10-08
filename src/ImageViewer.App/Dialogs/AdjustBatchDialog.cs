@@ -399,7 +399,7 @@ public sealed class AdjustBatchDialog : ThemedForm
 
     /// <param name="overwriteSources">
     /// true なら出力先の設定に関わらず元の画像を置き換える（確かめない）。書き出せない形式（HEIC など）は同じフォルダに同じ名前の JPG を作るが、
-    /// その名前のファイルが前からあれば別の画像なので上書きせずに飛ばす
+    /// その名前のファイルがあれば（実行している間にできたものでも）別の画像なので上書きせずに飛ばす
     /// </param>
     private async Task RunAsync(bool overwriteSources)
     {
@@ -410,11 +410,17 @@ public sealed class AdjustBatchDialog : ThemedForm
         if (overwriteSources)
         {
             runOptions = options with { OutputMode = OutputFolderMode.Same, Overwrite = true };
-            plan = BatchAdjuster.Plan(_paths, runOptions)
-                .Select(p => p.Status == ConvertStatus.Ok && !p.ReplacesSource && File.Exists(p.Target)
-                    ? p with { Status = ConvertStatus.Skip, Note = "同名のファイルがあるので飛ばします" }
-                    : p)
-                .ToList();
+            plan = BatchAdjuster.Plan(_paths, runOptions);
+            // 保存先の名前が重なる（photo.heic と photo.jpg を両方選んだ など）ものがあれば、理由を出して実行しない
+            var planErrors = plan.Where(p => p.Status == ConvertStatus.Error).ToList();
+            if (planErrors.Count > 0)
+            {
+                MessageBox.Show(this, string.Join("\n", planErrors.Take(15).Select(p => $"{p.SourceName}: {p.Note}"))
+                                      + (planErrors.Count > 15 ? $"\n…ほか {planErrors.Count - 15} 件" : "")
+                                      + "\n\n選ぶ画像を変えるか、「実行」で別のフォルダに保存してください。",
+                    $"上書き保存できない画像があります（{planErrors.Count} 枚）", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
         }
 
         // 実際にかけた値を覚える（1 枚ずつ自動のときは、隠れているレベルの値は使っていないので既定にしておく）。
@@ -437,7 +443,7 @@ public sealed class AdjustBatchDialog : ThemedForm
         ConvertResult result;
         try
         {
-            result = await Task.Run(() => BatchAdjuster.Run(plan, adjust, runOptions, progress, cts.Token));
+            result = await Task.Run(() => BatchAdjuster.Run(plan, adjust, runOptions, progress, cts.Token, overwriteSourcesOnly: overwriteSources));
         }
         finally
         {
