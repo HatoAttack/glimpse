@@ -77,14 +77,14 @@ public sealed class MaskDialog : ThemedForm
     private readonly RadioButton _toCustom = new() { Text = "指定のフォルダ", AutoSize = true };
     private readonly TextBox _folder = new() { Width = 190 };
     private readonly Label _outputHint = new() { AutoSize = true, MaximumSize = new Size(190, 0) };
-    // 保存のボタンは「保存（別の名前）」と「上書き保存（元の画像を置き換える）」を横に並べる
-    private readonly Button _save = new() { Text = "保存", Width = 100, Height = 30 };
-    private readonly Button _saveOver = new() { Text = "上書き保存", Width = 100, Height = 30 };
-    private readonly Button _saveNext = new() { Text = "保存して次へ", Width = 100, Height = 30 };
-    private readonly Button _saveNextOver = new() { Text = "上書きして次へ", Width = 100, Height = 30 };
+    // 保存のボタンは「保存（別の名前）」の下に「上書き保存（元の画像を置き換える）」を置く
+    private readonly Button _save = new() { Text = "保存", Width = 200, Height = 30 };
+    private readonly Button _saveOver = new() { Text = "上書き保存", Width = 200, Height = 30 };
+    private readonly Button _saveNext = new() { Text = "保存して次へ (Enter)", Width = 200, Height = 30 };
+    private readonly Button _saveNextOver = new() { Text = "上書きして次へ (Shift+Enter)", Width = 200, Height = 30 };
     private readonly Label _saveAllCaption = new() { Text = "全部に同じ範囲でかける:", AutoSize = true, Margin = new Padding(3, 10, 3, 0) };
-    private readonly Button _saveAll = new() { Text = "全部を保存", Width = 100, Height = 30 };
-    private readonly Button _saveAllOver = new() { Text = "全部を上書き", Width = 100, Height = 30 };
+    private readonly Button _saveAll = new() { Text = "全部を保存", Width = 200, Height = 30 };
+    private readonly Button _saveAllOver = new() { Text = "全部を上書き", Width = 200, Height = 30 };
     private readonly Label _status = new() { AutoSize = true, MaximumSize = new Size(210, 0), Margin = new Padding(3, 8, 3, 3) };
     private readonly System.Windows.Forms.Timer _resizeDelay = new() { Interval = 80 };
     private readonly ToolTip _toolTip = new();
@@ -223,20 +223,8 @@ public sealed class MaskDialog : ThemedForm
         _saveNextOver.Click += async (_, _) => await SaveCurrentAsync(advance: true, overwrite: true);
         _saveAll.Click += async (_, _) => await SaveAllCarriedAsync(overwrite: false);
         _saveAllOver.Click += async (_, _) => await SaveAllCarriedAsync(overwrite: true);
-        _toolTip.SetToolTip(_saveNext, "Enter");
-        _toolTip.SetToolTip(_saveNextOver, "Shift+Enter");
-        side.Controls.AddRange(new Control[]
-        {
-            ButtonRow(_save, _saveOver), ButtonRow(_saveNext, _saveNextOver), _saveAllCaption, ButtonRow(_saveAll, _saveAllOver), _status,
-        });
+        side.Controls.AddRange(new Control[] { _save, _saveOver, _saveNext, _saveNextOver, _saveAllCaption, _saveAll, _saveAllOver, _status });
         return side;
-    }
-
-    private static FlowLayoutPanel ButtonRow(params Control[] buttons)
-    {
-        var row = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
-        row.Controls.AddRange(buttons);
-        return row;
     }
 
     private void OnEffectChanged()

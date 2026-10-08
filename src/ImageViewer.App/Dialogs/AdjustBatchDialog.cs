@@ -53,8 +53,8 @@ public sealed class AdjustBatchDialog : ThemedForm
     };
     private readonly Label _summary = new() { AutoSize = true, Dock = DockStyle.Left, Padding = new Padding(0, 6, 0, 0) };
     private readonly ProgressBar _progress = new() { Dock = DockStyle.Bottom, Height = 6, Visible = false, Style = ProgressBarStyle.Continuous };
-    private readonly Button _run = new() { Text = "実行", AutoSize = true };
-    private readonly Button _runOver = new() { Text = "上書き保存", AutoSize = true };
+    private readonly Button _run = new() { Text = "実行", Width = 110 };
+    private readonly Button _runOver = new() { Text = "上書き保存", Width = 110 };
     private readonly Button _close = new() { Text = "閉じる", AutoSize = true };
     private readonly Control[] _inputs;
 
@@ -155,9 +155,12 @@ public sealed class AdjustBatchDialog : ThemedForm
         _runOver.Click += async (_, _) => await RunAsync(overwriteSources: true);
         new ToolTip().SetToolTip(_runOver, "出力先の設定に関わらず、元の画像を補正した画像で置き換えます（元には戻せません）。\n" +
                                            "HEIC・RAW など書き出せない形式は、元を残して同じ名前の JPG に保存します");
+        // 「実行」の下に「上書き保存」を置く
+        var runStack = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false, Margin = Padding.Empty };
+        runStack.Controls.AddRange(new Control[] { _run, _runOver });
         var buttons = new FlowLayoutPanel { FlowDirection = FlowDirection.RightToLeft, Dock = DockStyle.Right, AutoSize = true, WrapContents = false };
-        buttons.Controls.AddRange(new Control[] { _close, _runOver, _run });
-        var bottom = new Panel { Dock = DockStyle.Bottom, Height = 50, Padding = new Padding(10, 6, 10, 6) };
+        buttons.Controls.AddRange(new Control[] { _close, runStack });
+        var bottom = new Panel { Dock = DockStyle.Bottom, Height = 78, Padding = new Padding(10, 6, 10, 6) };
         bottom.Controls.Add(_summary);
         bottom.Controls.Add(buttons);
         bottom.Controls.Add(_progress);
