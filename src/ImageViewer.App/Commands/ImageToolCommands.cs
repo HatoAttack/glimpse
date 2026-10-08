@@ -92,6 +92,26 @@ public sealed class CropCommand(Form owner) : ImageCommandBase
     }
 }
 
+/// <summary>選んだ範囲にモザイク・ぼかしをかける（範囲は画像ごとに選ぶか、全部の画像に同じ範囲でかける）</summary>
+public sealed class MaskCommand(Form owner) : ImageCommandBase
+{
+    public override string Id => "image.mask";
+    public override string Name => "モザイク・ぼかし...";
+    public override string? DefaultShortcut => "Ctrl+B";
+
+    public override Task ExecuteAsync(CommandContext context)
+    {
+        using var dialog = new MaskDialog(context.Paths);
+        dialog.ShowDialog(owner);
+        if (dialog.SavedCount > 0)
+        {
+            context.Host.RequestRefresh();
+            context.Host.Notify($"{dialog.SavedCount} 枚にモザイク・ぼかしをかけて保存しました");
+        }
+        return Task.CompletedTask;
+    }
+}
+
 /// <summary>選んだ画像にまとめて色調補正をかける。値は 1 枚表示の補正と「前回の補正」を共有する</summary>
 public sealed class AdjustCommand(Form owner, ISettingsAccess settings) : ImageCommandBase
 {

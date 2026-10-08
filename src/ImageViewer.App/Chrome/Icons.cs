@@ -64,6 +64,20 @@ public static class Icons
         p.AddLines(new PointF[] { new(1.5f, 4), new(12, 4), new(12, 14.5f) });
     });
 
+    /// <summary>モザイク（枠と、市松に塗ったマス）</summary>
+    public static readonly IconPainter Mosaic = (g, r, c) =>
+    {
+        Stroke(g, r, c, 1.4f, p => p.AddRectangle(new RectangleF(2, 2, 12, 12)));
+        Fill(g, r, c, p =>
+        {
+            p.AddRectangle(new RectangleF(2, 2, 4, 4));
+            p.AddRectangle(new RectangleF(10, 2, 4, 4));
+            p.AddRectangle(new RectangleF(6, 6, 4, 4));
+            p.AddRectangle(new RectangleF(2, 10, 4, 4));
+            p.AddRectangle(new RectangleF(10, 10, 4, 4));
+        });
+    };
+
     /// <summary>回転（右回りの矢印）</summary>
     public static readonly IconPainter Rotate = (g, r, c) => Stroke(g, r, c, 1.5f, p =>
     {

@@ -26,6 +26,7 @@ public sealed class ResizeDialog : ThemedForm
     // ファイル名
     private readonly TextBox _search = new() { Width = 140 };
     private readonly TextBox _replace = new() { Width = 140 };
+    private readonly CheckBox _useSuffix = new() { Text = "末尾に付ける", AutoSize = true };
     private readonly TextBox _suffix = new() { Width = 110 };
     private readonly CheckBox _lowercase = new() { Text = "すべて小文字にする（拡張子も）", AutoSize = true };
 
@@ -98,7 +99,7 @@ public sealed class ResizeDialog : ThemedForm
         var formatGroup = Group("形式・画質", formatRow, algorithmRow, Flow(_stripMetadata));
 
         var nameGroup = Group("ファイル名",
-            Flow(Caption("置換前"), _search, Caption("→ 置換後"), _replace, Caption("末尾に付ける"), _suffix, Hint("例: _s → photo_s.jpg")),
+            Flow(Caption("置換前"), _search, Caption("→ 置換後"), _replace, _useSuffix, _suffix, Hint("例: _s → photo_s.jpg")),
             Flow(_lowercase));
 
         _browse.Click += (_, _) =>
@@ -147,6 +148,12 @@ public sealed class ResizeDialog : ThemedForm
         foreach (var t in new[] { _search, _replace, _suffix, _subfolderName, _customFolder })
             t.TextChanged += (_, _) => UpdatePreview();
         _lowercase.CheckedChanged += (_, _) => UpdatePreview();
+        // オフにしても入力した文字列は消さずに残す（オンに戻せばまた付ける）
+        _useSuffix.CheckedChanged += (_, _) =>
+        {
+            _suffix.Enabled = _useSuffix.Checked;
+            UpdatePreview();
+        };
         _stripMetadata.CheckedChanged += (_, _) => UpdatePreview();
         _customSizeValue.ValueChanged += (_, _) => UpdatePreview();
         _keepSize.CheckedChanged += (_, _) => _noUpscale.Enabled = !_keepSize.Checked;
@@ -173,6 +180,8 @@ public sealed class ResizeDialog : ThemedForm
         _search.Text = o.ReplaceSearch;
         _replace.Text = o.ReplaceWith;
         _suffix.Text = o.Suffix;
+        _useSuffix.Checked = o.UseSuffix;
+        _suffix.Enabled = o.UseSuffix;
         _lowercase.Checked = o.Lowercase;
         _subfolderName.Text = string.IsNullOrWhiteSpace(o.SubfolderName) ? "resized" : o.SubfolderName;
         _customFolder.Text = o.CustomFolder ?? "";
@@ -197,6 +206,7 @@ public sealed class ResizeDialog : ThemedForm
         ReplaceSearch = _search.Text,
         ReplaceWith = _replace.Text,
         Suffix = _suffix.Text,
+        UseSuffix = _useSuffix.Checked,
         Lowercase = _lowercase.Checked,
         OutputMode = _toSame.Checked ? OutputFolderMode.Same : _toCustom.Checked ? OutputFolderMode.Custom : OutputFolderMode.Subfolder,
         SubfolderName = _subfolderName.Text.Trim(),
