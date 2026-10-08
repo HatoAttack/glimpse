@@ -1,12 +1,13 @@
 // モザイク・ぼかしダイアログ（切り抜きダイアログと同じ作り）
-// - 画像の上をドラッグで範囲を選ぶ（いくつでも）。範囲の中をドラッグで移動、四隅で大きさを変える。
-//   選んだ範囲は Delete か右クリックで消す
+// - 画像の上をドラッグで範囲を選ぶ（いくつでも）。形は 四角 / 円・楕円 / 自由（ドラッグでなぞった形）。
+//   範囲の中をドラッグで移動、四隅で大きさを変える（自由な形も外枠ごと伸び縮みする）。選んだ範囲は Delete か右クリックで消す
 // - モザイク / ぼかしと強さ（1〜10）。表示はかけた後の見た目（縮小した画像にかけるので、細かい所は保存したものと少し違う）
 // - 選択した画像を ◀ ▶（PageUp / PageDown）で切り替え。Enter で保存して次へ。範囲は画像ごとに覚える
 // - 「次の画像も同じ範囲にかける」なら、切り替えても範囲を引き継ぐ（大きさが違う画像には割合で合わせる）。
 //   一括の「全部に同じ範囲でかける」も出る（スクリーンショットの同じ所を隠すとき向け）
 // - 保存先に「元の画像に上書き」も選べる（最初の上書きの前に確かめる。アニメ・書き出せない形式などは上書きしない）
 // - 持つのは表示中の 1 枚（原寸）と、画面の大きさに縮小した画像（かける前）と表示用のビットマップだけ
+using System.Drawing.Drawing2D;
 using ImageViewer.Core.Editing;
 using ImageViewer.Core.Imaging;
 using ImageViewer.Core.Thumbnails;
@@ -22,6 +23,7 @@ public sealed class MaskDialog : ThemedForm
 
     /// <summary>このアプリを起動している間は前回の設定を引き継ぐ</summary>
     private static MaskEffect _lastEffect = MaskEffect.Mosaic;
+    private static MaskShape _lastShape = MaskShape.Rectangle;
     private static int _lastLevel = Masker.DefaultLevel;
     private static bool _lastToCustomFolder, _lastKeepPosition, _lastOverwrite;
     private static string _lastFolder = "";
@@ -39,23 +41,27 @@ public sealed class MaskDialog : ThemedForm
     // 画像 → キャンバスの変換
     private double _scale = 1, _offX, _offY;
 
-    // 範囲（画像座標 x0, y0, x1, y1）。後のものほど上（クリックで先に当たる）
-    private List<double[]> _rects = new();
+    // 範囲（画像座標）。後のものほど上（クリックで先に当たる）
+    private List<MaskRegion> _rects = new();
     private int _selected = -1;
     // 「同じ範囲にかける」がオフのときに、画像ごとに選んだ範囲（行き来しても消えないように）
-    private readonly Dictionary<int, List<double[]>> _rectsByIndex = new();
+    private readonly Dictionary<int, List<MaskRegion>> _rectsByIndex = new();
     // 引き継ぐ元: 最後に自分で範囲を変えた画像の範囲と、その画像の大きさ
-    private (List<(double X0, double Y0, double X1, double Y1)> Rects, int Width, int Height)? _anchor;
-    private enum DragMode { None, Move, Resize }
+    private (List<MaskRegion> Rects, int Width, int Height)? _anchor;
+    private enum DragMode { None, Move, Resize, Draw }
     private DragMode _mode;
     private bool _creating;                // 新しく作っている範囲（小さすぎれば離したときに消す）
     private (double X, double Y) _fixed;   // 大きさを変えるときに動かない角
     private (double X, double Y) _moveOff;
+    private List<(double X, double Y)>? _path; // 自由な形をなぞっている途中の点（画像座標）
 
     private readonly CanvasPanel _canvas = new() { Dock = DockStyle.Fill, BackColor = Color.FromArgb(32, 32, 32), Cursor = Cursors.Cross };
     private readonly Label _name = new() { AutoSize = true, Margin = new Padding(8, 8, 3, 3) };
     private readonly Button _prev = new() { Text = "◀ 前", AutoSize = true };
     private readonly Button _next = new() { Text = "次 ▶", AutoSize = true };
+    private readonly RadioButton _shapeRect = new() { Text = "四角", AutoSize = true };
+    private readonly RadioButton _shapeEllipse = new() { Text = "円・楕円", AutoSize = true };
+    private readonly RadioButton _shapeFree = new() { Text = "自由（なぞる）", AutoSize = true };
     private readonly RadioButton _mosaic = new() { Text = "モザイク", AutoSize = true };
     private readonly RadioButton _blur = new() { Text = "ぼかし", AutoSize = true };
     private readonly TrackBar _level = new()
@@ -118,6 +124,7 @@ public sealed class MaskDialog : ThemedForm
         Controls.Add(BuildSidePanel());
         Controls.Add(top);
 
+        (_lastShape switch { MaskShape.Ellipse => _shapeEllipse, MaskShape.Freehand => _shapeFree, _ => _shapeRect }).Checked = true;
         (_lastEffect == MaskEffect.Blur ? _blur : _mosaic).Checked = true;
         _level.Value = Math.Clamp(_lastLevel, Masker.MinLevel, Masker.MaxLevel);
         _mosaic.CheckedChanged += (_, _) => OnEffectChanged();
@@ -146,6 +153,7 @@ public sealed class MaskDialog : ThemedForm
             _display?.Dispose();
             _toolTip.Dispose();
             _lastEffect = CurrentEffect;
+            _lastShape = CurrentShape;
             _lastLevel = _level.Value;
             _lastKeepPosition = _keepPosition.Checked;
             _lastFolder = _folder.Text.Trim();
@@ -156,6 +164,9 @@ public sealed class MaskDialog : ThemedForm
 
     private MaskEffect CurrentEffect => _blur.Checked ? MaskEffect.Blur : MaskEffect.Mosaic;
 
+    /// <summary>これから作る範囲の形（作った範囲の形は変えない）</summary>
+    private MaskShape CurrentShape => _shapeEllipse.Checked ? MaskShape.Ellipse : _shapeFree.Checked ? MaskShape.Freehand : MaskShape.Rectangle;
+
     private Control BuildSidePanel()
     {
         var side = new FlowLayoutPanel
@@ -163,6 +174,13 @@ public sealed class MaskDialog : ThemedForm
             Dock = DockStyle.Right, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true,
             Width = 230, Padding = new Padding(6, 4, 6, 4),
         };
+
+        var shapeStack = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false, Dock = DockStyle.Fill };
+        shapeStack.Controls.AddRange(new Control[] { _shapeRect, _shapeEllipse, _shapeFree });
+        var shapeBox = new GroupBox { Text = "範囲の形", AutoSize = true, Width = 210, Padding = new Padding(8) };
+        shapeBox.Controls.Add(shapeStack);
+        side.Controls.Add(shapeBox);
+        _toolTip.SetToolTip(_shapeFree, "隠したい所のまわりをドラッグでなぞると、その形の範囲になります（離すと始点と終点をつなぎます）");
 
         var effectRow = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
         effectRow.Controls.AddRange(new Control[] { _mosaic, _blur });
@@ -311,8 +329,7 @@ public sealed class MaskDialog : ThemedForm
         }
         else if (_keepPosition.Checked && _anchor is { } from)
         {
-            _rects = Masker.CarryRects(from.Rects, from.Width, from.Height, image.Width, image.Height)
-                .Select(r => new[] { r.X0, r.Y0, r.X1, r.Y1 }).ToList();
+            _rects = Masker.CarryRegions(from.Rects, from.Width, from.Height, image.Width, image.Height);
             bool resized = from.Width != image.Width || from.Height != image.Height;
             if (resized && _rects.Count > 0)
             {
@@ -346,7 +363,7 @@ public sealed class MaskDialog : ThemedForm
         _selectionInfo.Text = _image == null ? ""
             : _rects.Count == 0 ? "画像の上をドラッグして、隠す範囲を選んでください（いくつでも選べます）"
             : _selected >= 0
-                ? $"範囲 {_rects.Count} 個（選んだ範囲: {Math.Round(_rects[_selected][2] - _rects[_selected][0])} × {Math.Round(_rects[_selected][3] - _rects[_selected][1])} px）"
+                ? $"範囲 {_rects.Count} 個（選んだ範囲: {Math.Round(_rects[_selected].Width)} × {Math.Round(_rects[_selected].Height)} px）"
                 : $"範囲 {_rects.Count} 個";
     }
 
@@ -354,7 +371,7 @@ public sealed class MaskDialog : ThemedForm
     private void SetAnchor()
     {
         if (_image != null)
-            _anchor = (_rects.Select(r => (r[0], r[1], r[2], r[3])).ToList(), _image.Width, _image.Height);
+            _anchor = (_rects.ToList(), _image.Width, _image.Height);
     }
 
     /// <summary>範囲を変えた後: 引き継ぐ元を更新して、表示とボタンを合わせる</summary>
@@ -416,8 +433,8 @@ public sealed class MaskDialog : ThemedForm
         _display = null;
         if (_small != null && _image != null)
         {
-            var boxes = Masker.ToBoxes(_rects.Select(r => (r[0] * _scale, r[1] * _scale, r[2] * _scale, r[3] * _scale)), _small.Width, _small.Height);
-            if (boxes.Count == 0)
+            var regions = _rects.Select(r => r.Scale(_scale, _scale)).ToList();
+            if (regions.Count == 0)
             {
                 _display = ThumbnailGenerator.ToPArgbBitmap(_small);
             }
@@ -425,7 +442,7 @@ public sealed class MaskDialog : ThemedForm
             {
                 int size = (int)Math.Round(Masker.EffectSize(_image.Width, _image.Height, _level.Value) * _scale);
                 using var preview = _small.Clone();
-                Masker.Apply(preview, boxes, CurrentEffect, Math.Max(2, size));
+                Masker.Apply(preview, regions, CurrentEffect, Math.Max(2, size));
                 _display = ThumbnailGenerator.ToPArgbBitmap(preview);
             }
         }
@@ -443,13 +460,30 @@ public sealed class MaskDialog : ThemedForm
         using var fill = new SolidBrush(Color.White);
         using var border = new Pen(Color.FromArgb(0, 120, 215), 1);
         int hs = HandleRadius - 3;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
         for (int i = 0; i < _rects.Count; i++)
         {
-            var (x0, y0) = ImageToCanvas(_rects[i][0], _rects[i][1]);
-            var (x1, y1) = ImageToCanvas(_rects[i][2], _rects[i][3]);
+            var r = _rects[i];
+            var (x0, y0) = ImageToCanvas(r.X0, r.Y0);
+            var (x1, y1) = ImageToCanvas(r.X1, r.Y1);
             float fx0 = (float)x0, fy0 = (float)y0, fx1 = (float)x1, fy1 = (float)y1;
-            g.DrawRectangle(i == _selected ? selectedFrame : frame, fx0, fy0, fx1 - fx0, fy1 - fy0);
+            var pen = i == _selected ? selectedFrame : frame;
+            switch (r.Shape)
+            {
+                case MaskShape.Ellipse:
+                    g.DrawEllipse(pen, fx0, fy0, fx1 - fx0, fy1 - fy0);
+                    break;
+                case MaskShape.Freehand:
+                    var polygon = r.Polygon().Select(p => ToCanvasPoint(p.X, p.Y)).ToArray();
+                    if (polygon.Length >= 2) g.DrawPolygon(pen, polygon);
+                    break;
+                default:
+                    g.DrawRectangle(pen, fx0, fy0, fx1 - fx0, fy1 - fy0);
+                    break;
+            }
             if (i != _selected) continue;
+            // 選んだ範囲だけ四隅のハンドルを出す（四角以外は外枠も薄く出して、どこを引っ張れば伸びるか分かるように）
+            if (r.Shape != MaskShape.Rectangle) g.DrawRectangle(frame, fx0, fy0, fx1 - fx0, fy1 - fy0);
             // 選んだ範囲だけ四隅のハンドルを出す
             foreach (var (hx, hy) in new[] { (fx0, fy0), (fx1, fy0), (fx1, fy1), (fx0, fy1) })
             {
@@ -457,6 +491,15 @@ public sealed class MaskDialog : ThemedForm
                 g.DrawRectangle(border, hx - hs, hy - hs, hs * 2, hs * 2);
             }
         }
+        // なぞっている途中の線
+        if (_path is { Count: >= 2 } path)
+            g.DrawLines(selectedFrame, path.Select(p => ToCanvasPoint(p.X, p.Y)).ToArray());
+    }
+
+    private PointF ToCanvasPoint(double ix, double iy)
+    {
+        var (cx, cy) = ImageToCanvas(ix, iy);
+        return new PointF((float)cx, (float)cy);
     }
 
     // ---- マウス ----
@@ -465,7 +508,7 @@ public sealed class MaskDialog : ThemedForm
     private int HitRect(double ix, double iy)
     {
         for (int i = _rects.Count - 1; i >= 0; i--)
-            if (_rects[i][0] <= ix && ix <= _rects[i][2] && _rects[i][1] <= iy && iy <= _rects[i][3]) return i;
+            if (_rects[i].Contains(ix, iy)) return i;
         return -1;
     }
 
@@ -491,7 +534,7 @@ public sealed class MaskDialog : ThemedForm
         if (_selected >= 0)
         {
             var r = _rects[_selected];
-            var corners = new (double X, double Y)[] { (r[0], r[1]), (r[2], r[1]), (r[2], r[3]), (r[0], r[3]) };
+            var corners = new (double X, double Y)[] { (r.X0, r.Y0), (r.X1, r.Y0), (r.X1, r.Y1), (r.X0, r.Y1) };
             int hr = HandleRadius;
             for (int i = 0; i < 4; i++)
             {
@@ -506,18 +549,24 @@ public sealed class MaskDialog : ThemedForm
             }
         }
 
-        // 範囲の中なら選んで移動、外なら新しく作る
+        // 範囲の中なら選んで移動、外なら新しく作る（自由な形はなぞり始める）
         int target = HitRect(ix, iy);
         if (target >= 0)
         {
             _selected = target;
             _mode = DragMode.Move;
-            _moveOff = (ix - _rects[target][0], iy - _rects[target][1]);
+            _moveOff = (ix - _rects[target].X0, iy - _rects[target].Y0);
+        }
+        else if (CurrentShape == MaskShape.Freehand)
+        {
+            _selected = -1;
+            _path = new() { ClampToImage((ix, iy)) };
+            _mode = DragMode.Draw;
         }
         else
         {
             _fixed = ClampToImage((ix, iy));
-            _rects.Add(new[] { _fixed.X, _fixed.Y, _fixed.X, _fixed.Y });
+            _rects.Add(new MaskRegion(CurrentShape, _fixed.X, _fixed.Y, _fixed.X, _fixed.Y));
             _selected = _rects.Count - 1;
             _mode = DragMode.Resize;
             _creating = true;
@@ -528,6 +577,15 @@ public sealed class MaskDialog : ThemedForm
 
     private void Canvas_MouseMove(object? sender, MouseEventArgs e)
     {
+        if (_mode == DragMode.Draw && _path != null && _image != null)
+        {
+            // 画面で 2px 以上動いたら点を足す（点が多すぎると重くなるだけなので）
+            var last = ImageToCanvas(_path[^1].X, _path[^1].Y);
+            if (Math.Abs(e.X - last.X) + Math.Abs(e.Y - last.Y) < 2) return;
+            _path.Add(ClampToImage(CanvasToImage(e.X, e.Y)));
+            _canvas.Invalidate();
+            return;
+        }
         if (_mode == DragMode.None || _image == null || _selected < 0) return;
         if (_mode == DragMode.Move) DoMove(e);
         else DoResize(e);
@@ -538,12 +596,22 @@ public sealed class MaskDialog : ThemedForm
     private void Canvas_MouseUp(object? sender, MouseEventArgs e)
     {
         if (_mode == DragMode.None) return;
+        if (_mode == DragMode.Draw)
+        {
+            // なぞった形を範囲にする（小さすぎるもの・点が足りないものは作らない）
+            if (_path != null && MaskRegion.FromPath(_path) is { } drawn && drawn.Width >= MinSizePx && drawn.Height >= MinSizePx)
+            {
+                _rects.Add(drawn);
+                _selected = _rects.Count - 1;
+            }
+            _path = null;
+        }
         _mode = DragMode.None;
         // 小さすぎる範囲（クリックしただけ など）は作らない。クリックで選択を外すのと同じになる
         if (_creating && _selected >= 0)
         {
             var r = _rects[_selected];
-            if (r[2] - r[0] < MinSizePx || r[3] - r[1] < MinSizePx)
+            if (r.Width < MinSizePx || r.Height < MinSizePx)
             {
                 _rects.RemoveAt(_selected);
                 _selected = -1;
@@ -557,10 +625,10 @@ public sealed class MaskDialog : ThemedForm
     {
         var (ix, iy) = CanvasToImage(e.X, e.Y);
         var r = _rects[_selected];
-        double rw = r[2] - r[0], rh = r[3] - r[1];
+        double rw = r.Width, rh = r.Height;
         double x0 = Math.Clamp(ix - _moveOff.X, 0, _image!.Width - rw);
         double y0 = Math.Clamp(iy - _moveOff.Y, 0, _image.Height - rh);
-        _rects[_selected] = new[] { x0, y0, x0 + rw, y0 + rh };
+        _rects[_selected] = r.WithBounds(x0, y0, x0 + rw, y0 + rh);
     }
 
     private void DoResize(MouseEventArgs e)
@@ -569,7 +637,7 @@ public sealed class MaskDialog : ThemedForm
         var (mx, my) = ClampToImage(CanvasToImage(e.X, e.Y));
         double x0 = Math.Min(fx, mx), x1 = Math.Max(fx, mx), y0 = Math.Min(fy, my), y1 = Math.Max(fy, my);
         // 作っている途中は小さくてもよい（離したときに確かめる）。作った範囲を小さくしすぎることはできない
-        if (_creating || (x1 - x0 >= MinSizePx && y1 - y0 >= MinSizePx)) _rects[_selected] = new[] { x0, y0, x1, y1 };
+        if (_creating || (x1 - x0 >= MinSizePx && y1 - y0 >= MinSizePx)) _rects[_selected] = _rects[_selected].WithBounds(x0, y0, x1, y1);
     }
 
     // ---- 保存 ----
@@ -588,8 +656,8 @@ public sealed class MaskDialog : ThemedForm
     {
         if (_busy || _loading || _image == null) return;
         string src = _paths[_index];
-        var boxes = Masker.ToBoxes(_rects.Select(r => (r[0], r[1], r[2], r[3])), _image.Width, _image.Height);
-        if (boxes.Count == 0)
+        var regions = _rects.ToList();
+        if (regions.Count == 0)
         {
             _status.ForeColor = Theme.Current.TextMuted;
             _status.Text = "隠す範囲を選んでから保存してください";
@@ -615,7 +683,7 @@ public sealed class MaskDialog : ThemedForm
             string dst = await Task.Run(() =>
             {
                 string d = overwrite ? src : Masker.OutputPathFor(src, folder, effect);
-                Masker.SaveMasked(image, boxes, effect, level, src, d);
+                Masker.SaveMasked(image, regions, effect, level, src, d);
                 return d;
             });
             SavedCount++;
@@ -650,7 +718,7 @@ public sealed class MaskDialog : ThemedForm
     private async Task SaveAllCarriedAsync()
     {
         if (_busy || _loading || _image == null || _rects.Count == 0) return;
-        var from = (Rects: _rects.Select(r => (X0: r[0], Y0: r[1], X1: r[2], Y1: r[3])).ToList(), Width: _image.Width, Height: _image.Height);
+        var from = (Rects: _rects.ToList(), Width: _image.Width, Height: _image.Height);
         bool overwrite = _toOverwrite.Checked;
         if (_toCustom.Checked && OutputFolderFor(_paths[0]) == null) return;
         if (overwrite && MessageBox.Show(this, $"元の画像 {_paths.Count} 枚を、モザイク・ぼかしをかけた画像で上書きします（元には戻せません）。続けますか？",
