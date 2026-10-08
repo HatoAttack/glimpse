@@ -1669,21 +1669,49 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
     private void BuildContextMenu()
     {
-        _contextMenu.Opening += (_, _) => UpdateCommandEnabled();
-        _contextMenu.Items.Add(NewFolderItem(new ToolStripMenuItem("新しいフォルダー...") { ShortcutKeyDisplayString = "Ctrl+N" }));
-        _contextMenu.Items.Add(RenameFolderItem("フォルダー名の変更..."));
-        _contextMenu.Items.Add(new ToolStripSeparator());
-        _contextMenu.Items.Add(new ToolStripMenuItem("チェックを付ける", null, (_, _) => _grid.SetMarkOnSelected(true))
+        // 項目を増やしすぎないように: ほかの所（フッター・☰・ショートカット）で足りるものは出さず、回転とチェックはサブメニューにまとめ、
+        // フォルダーの操作は使えるときだけ出す
+        var newFolder = NewFolderItem(new ToolStripMenuItem("新しいフォルダー...") { ShortcutKeyDisplayString = "Ctrl+N" });
+        var renameFolder = RenameFolderItem("フォルダー名の変更...");
+        var folderSeparator = new ToolStripSeparator();
+        _contextMenu.Items.AddRange(new ToolStripItem[] { newFolder, renameFolder, folderSeparator });
+
+        var checkMenu = new ToolStripMenuItem("チェック");
+        checkMenu.DropDownItems.Add(new ToolStripMenuItem("チェックを付ける", null, (_, _) => _grid.SetMarkOnSelected(true))
             { ShortcutKeyDisplayString = "Shift+¥" });
-        _contextMenu.Items.Add(new ToolStripMenuItem("チェックを外す", null, (_, _) => _grid.SetMarkOnSelected(false)));
-        _contextMenu.Items.Add(new ToolStripMenuItem("チェックした画像を選択", null, (_, _) => _grid.SelectMarked())
+        checkMenu.DropDownItems.Add(new ToolStripMenuItem("チェックを外す", null, (_, _) => _grid.SetMarkOnSelected(false)));
+        checkMenu.DropDownItems.Add(new ToolStripMenuItem("チェックした画像を選択", null, (_, _) => _grid.SelectMarked())
             { ShortcutKeyDisplayString = "Ctrl+¥" });
+        _contextMenu.Items.Add(checkMenu);
+
+        string[] hidden = { "image.resizeQuick", "file.copyTo" };
+        string[] rotateIds = { "image.rotateRight", "image.rotateLeft", "image.rotate180" };
+        var rotateMenu = new ToolStripMenuItem("回転");
         foreach (var group in _registry.ByCategory())
         {
-            if (_contextMenu.Items.Count > 0) _contextMenu.Items.Add(new ToolStripSeparator());
+            _contextMenu.Items.Add(new ToolStripSeparator());
             foreach (var cmd in group)
+            {
+                if (hidden.Contains(cmd.Id)) continue;
+                if (rotateIds.Contains(cmd.Id))
+                {
+                    if (rotateMenu.DropDownItems.Count == 0) _contextMenu.Items.Add(rotateMenu); // 最初の回転の位置に置く
+                    rotateMenu.DropDownItems.Add(CreateCommandItem(cmd, withShortcut: false));
+                    continue;
+                }
                 _contextMenu.Items.Add(CreateCommandItem(cmd, withShortcut: false));
+            }
         }
+
+        _contextMenu.Opening += (_, _) =>
+        {
+            UpdateCommandEnabled();
+            // 新しいフォルダーは画像を選んでいないとき、フォルダー名の変更はフォルダーを 1 つだけ選んでいるときだけ出す
+            newFolder.Visible = _grid.SelectedImages.Count == 0;
+            renameFolder.Visible = SelectedSingleFolder() != null;
+            folderSeparator.Visible = newFolder.Visible || renameFolder.Visible;
+            rotateMenu.Enabled = rotateMenu.DropDownItems.Cast<ToolStripItem>().Any(i => i.Enabled);
+        };
     }
 
     /// <summary>ショートカットはメインメニュー側だけに割り当て、右クリックメニューは表示のみ（二重発火防止）</summary>
