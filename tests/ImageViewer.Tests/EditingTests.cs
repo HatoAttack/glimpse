@@ -22,6 +22,7 @@ static class EditingTests
         check(Converter.BuildDestName("DSC001.JPG", o) == "photo001_s.webp", "出力名: 置換 → 末尾 → 小文字化、拡張子は出力形式に");
         check(Converter.BuildDestName("a.JPG", new ConvertOptions()) == "a.JPG", "出力名: 形式そのままなら拡張子もそのまま");
         check(Converter.BuildDestName("a.HEIC", new ConvertOptions()) == "a.jpg", "出力名: 書き出せない形式（HEIC）の「そのまま」は JPG");
+        check(Converter.BuildDestName("a.jpg", new ConvertOptions { Suffix = "_s", UseSuffix = false }) == "a.jpg", "出力名: 「末尾に付ける」がオフなら文字列があっても付けない");
 
         // ---- 計画 ----
         using (var img = new Image<Rgba32>(40, 20, Red)) { img.SaveAsPng(P("a.png")); img.SaveAsJpeg(P("a.jpg")); img.SaveAsPng(P("b.png")); }

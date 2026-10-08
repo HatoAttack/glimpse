@@ -41,6 +41,8 @@ public sealed record ConvertOptions
     public string ReplaceSearch { get; init; } = "";
     public string ReplaceWith { get; init; } = "";
     public string Suffix { get; init; } = "";
+    /// <summary>Suffix を付けるか（オフでも Suffix の文字列は覚えておく）</summary>
+    public bool UseSuffix { get; init; } = true;
     public bool Lowercase { get; init; }
 
     public OutputFolderMode OutputMode { get; init; } = OutputFolderMode.Subfolder;
@@ -82,7 +84,7 @@ public static class Converter
         string ext = ImageSaver.ExtensionFor(options.Format, Path.GetExtension(fileName));
         if (!string.IsNullOrEmpty(options.ReplaceSearch))
             stem = stem.Replace(options.ReplaceSearch, options.ReplaceWith);
-        stem += options.Suffix;
+        if (options.UseSuffix) stem += options.Suffix;
         if (options.Lowercase)
         {
             stem = stem.ToLowerInvariant();
