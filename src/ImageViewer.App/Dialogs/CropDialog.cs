@@ -4,7 +4,7 @@
 // - 選択した画像を ◀ ▶（PageUp / PageDown）で切り替え。Enter で保存して次へ
 // - 「次の画像も同じ位置で切り抜く」なら、切り替えても枠を引き継ぐ（大きさが違う画像には割合で合わせる）。
 //   一括も「全部を今の範囲で切り抜き」になる（スクリーンショットのように構成が同じ画像向け）
-// - 保存先に「元の画像に上書き」も選べる（最初の上書きの前に確かめる。アニメ・書き出せない形式などは上書きしない）
+// - 「保存」は元の画像を残して別の名前で、「上書き保存」は元の画像を置き換える（確かめない。アニメ・書き出せない形式などは上書きしない）
 // - 持つのは表示中の 1 枚（切り抜き用の原寸）と、画面の大きさに縮小した表示用のビットマップだけ
 using System.Drawing.Drawing2D;
 using ImageViewer.Core.Editing;
@@ -23,7 +23,7 @@ public sealed class CropDialog : ThemedForm
     /// <summary>このアプリを起動している間は前回の設定を引き継ぐ</summary>
     private static int _lastAspect;
     private static decimal _lastCustomW = 16, _lastCustomH = 10;
-    private static bool _lastFlip, _lastToCustomFolder, _lastKeepPosition, _lastOverwrite;
+    private static bool _lastFlip, _lastToCustomFolder, _lastKeepPosition;
     private static string _lastFolder = "";
 
     private readonly IReadOnlyList<string> _paths;
@@ -61,13 +61,16 @@ public sealed class CropDialog : ThemedForm
     private readonly Label _selectionSize = new() { AutoSize = true, Margin = new Padding(3, 8, 3, 3) };
     private readonly RadioButton _toSame = new() { Text = "元と同じフォルダ", AutoSize = true };
     private readonly RadioButton _toCustom = new() { Text = "指定のフォルダ", AutoSize = true };
-    private readonly RadioButton _toOverwrite = new() { Text = "元の画像に上書き", AutoSize = true };
     private readonly TextBox _folder = new() { Width = 190 };
     private readonly Label _outputHint = new() { AutoSize = true, MaximumSize = new Size(190, 0) };
-    private bool _overwriteConfirmed; // このダイアログで 1 枚ずつの上書きを確かめたか
-    private readonly Button _save = new() { Text = "この範囲で保存", Width = 200, Height = 30 };
+    // 保存のボタンは「保存（別の名前）」の下に「上書き保存（元の画像を置き換える）」を置く
+    private readonly Button _save = new() { Text = "保存", Width = 200, Height = 30 };
+    private readonly Button _saveOver = new() { Text = "上書き保存", Width = 200, Height = 30 };
     private readonly Button _saveNext = new() { Text = "保存して次へ (Enter)", Width = 200, Height = 30 };
-    private readonly Button _saveAll = new() { Text = "全部を同じ比で中央から切り抜き", Width = 200, Height = 30 };
+    private readonly Button _saveNextOver = new() { Text = "上書きして次へ (Shift+Enter)", Width = 200, Height = 30 };
+    private readonly Label _saveAllCaption = new() { AutoSize = true, Margin = new Padding(3, 10, 3, 0) };
+    private readonly Button _saveAll = new() { Text = "全部を保存", Width = 200, Height = 30 };
+    private readonly Button _saveAllOver = new() { Text = "全部を上書き", Width = 200, Height = 30 };
     private readonly Label _status = new() { AutoSize = true, MaximumSize = new Size(210, 0), Margin = new Padding(3, 8, 3, 3) };
     private readonly System.Windows.Forms.Timer _resizeDelay = new() { Interval = 80 };
     private readonly ToolTip _toolTip = new();
@@ -118,9 +121,10 @@ public sealed class CropDialog : ThemedForm
         _keepPosition.Visible = paths.Count > 1;
         _keepPosition.CheckedChanged += (_, _) => UpdateButtons();
         _folder.Text = _lastFolder;
-        (_lastOverwrite ? _toOverwrite : _lastToCustomFolder && _lastFolder.Length > 0 ? _toCustom : _toSame).Checked = true;
-        foreach (var rb in new[] { _toSame, _toCustom, _toOverwrite }) rb.CheckedChanged += (_, _) => { if (rb.Checked) OnOutputChanged(); };
-        OnOutputChanged();
+        (_lastToCustomFolder && _lastFolder.Length > 0 ? _toCustom : _toSame).Checked = true;
+        _outputHint.Text = "「保存」は「元の名前_crop」で保存します（同名があれば (2) などを付けます）。" +
+                           "「上書き保存」は元のファイルを置き換えます（元には戻せません。HEIC・RAW など書き出せない形式やアニメーションは上書きしません）";
+        _outputHint.ForeColor = Theme.Current.TextMuted;
         // 「指定」は別の行（別の親）にあるので、ラジオボタンの排他は自分で行う
         var allAspects = _aspectRadios.Select(a => a.Radio).Append(_customAspect).ToList();
         foreach (var rb in allAspects)
@@ -151,7 +155,6 @@ public sealed class CropDialog : ThemedForm
             _lastKeepPosition = _keepPosition.Checked;
             _lastFolder = _folder.Text.Trim();
             _lastToCustomFolder = _toCustom.Checked;
-            _lastOverwrite = _toOverwrite.Checked;
         };
     }
 
@@ -194,34 +197,20 @@ public sealed class CropDialog : ThemedForm
         var outStack = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false, Dock = DockStyle.Fill };
         outStack.Controls.AddRange(new Control[]
         {
-            _toSame, _toCustom, _folder, browse, _toOverwrite, _outputHint,
+            _toSame, _toCustom, _folder, browse, _outputHint,
         });
         var outBox = new GroupBox { Text = "保存先", AutoSize = true, Width = 210, Padding = new Padding(8), Margin = new Padding(3, 8, 3, 3) };
         outBox.Controls.Add(outStack);
         side.Controls.Add(outBox);
 
-        _save.Click += async (_, _) => await SaveCurrentAsync(advance: false);
-        _saveNext.Click += async (_, _) => await SaveCurrentAsync(advance: true);
-        _saveAll.Click += async (_, _) =>
-        {
-            if (_keepPosition.Checked) await SaveAllCarriedAsync();
-            else await SaveAllCenterAsync();
-        };
-        side.Controls.AddRange(new Control[] { _save, _saveNext, _saveAll, _status });
+        _save.Click += async (_, _) => await SaveCurrentAsync(advance: false, overwrite: false);
+        _saveOver.Click += async (_, _) => await SaveCurrentAsync(advance: false, overwrite: true);
+        _saveNext.Click += async (_, _) => await SaveCurrentAsync(advance: true, overwrite: false);
+        _saveNextOver.Click += async (_, _) => await SaveCurrentAsync(advance: true, overwrite: true);
+        _saveAll.Click += async (_, _) => await SaveAllAsync(overwrite: false);
+        _saveAllOver.Click += async (_, _) => await SaveAllAsync(overwrite: true);
+        side.Controls.AddRange(new Control[] { _save, _saveOver, _saveNext, _saveNextOver, _saveAllCaption, _saveAll, _saveAllOver, _status });
         return side;
-    }
-
-    /// <summary>保存先を変えたら、説明とボタンの名前を合わせる（上書きは注意の色で）</summary>
-    private void OnOutputChanged()
-    {
-        bool overwrite = _toOverwrite.Checked;
-        _outputHint.Text = overwrite
-            ? "元のファイルを切り抜いた画像で置き換えます（元には戻せません）。HEIC・RAW など書き出せない形式やアニメーションは上書きしません"
-            : "名前は「元の名前_crop」。同名があれば (2) などを付けます";
-        _outputHint.ForeColor = overwrite ? Theme.Current.Danger : Theme.Current.TextMuted;
-        _save.Text = overwrite ? "この範囲で上書き保存" : "この範囲で保存";
-        _saveNext.Text = overwrite ? "上書きして次へ (Enter)" : "保存して次へ (Enter)";
-        UpdateButtons();
     }
 
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
@@ -229,7 +218,10 @@ public sealed class CropDialog : ThemedForm
         switch (keyData)
         {
             case Keys.Enter when !_busy && !(ActiveControl is TextBox or NumericUpDown):
-                _ = SaveCurrentAsync(advance: true);
+                _ = SaveCurrentAsync(advance: true, overwrite: false);
+                return true;
+            case Keys.Shift | Keys.Enter when !_busy && !(ActiveControl is TextBox or NumericUpDown):
+                _ = SaveCurrentAsync(advance: true, overwrite: true);
                 return true;
             case Keys.PageDown:
                 _ = StepAsync(1);
@@ -322,11 +314,11 @@ public sealed class CropDialog : ThemedForm
 
     private void UpdateButtons()
     {
-        _save.Enabled = _saveNext.Enabled = !_busy && !_loading && _image != null;
-        _saveNext.Visible = _paths.Count > 1;
+        _save.Enabled = _saveOver.Enabled = _saveNext.Enabled = _saveNextOver.Enabled = !_busy && !_loading && _image != null;
+        _saveNext.Visible = _saveNextOver.Visible = _paths.Count > 1;
         // 位置を引き継ぐなら「今の範囲で」（自由な比でもよい）、そうでなければ「同じ比で中央から」
-        _saveAll.Text = _keepPosition.Checked ? "全部を今の範囲で切り抜き" : "全部を同じ比で中央から切り抜き";
-        _saveAll.Enabled = !_busy && !_loading && (_keepPosition.Checked ? _anchor != null : CurrentAspect() != null);
+        _saveAllCaption.Text = _keepPosition.Checked ? "全部を今の範囲で切り抜き:" : "全部を同じ比で中央から切り抜き:";
+        _saveAll.Enabled = _saveAllOver.Enabled = !_busy && !_loading && (_keepPosition.Checked ? _anchor != null : CurrentAspect() != null);
         _prev.Enabled = _next.Enabled = !_busy && _paths.Count > 1;
     }
 
@@ -522,31 +514,23 @@ public sealed class CropDialog : ThemedForm
     // ---- 保存 ----
 
     /// <summary>保存先のフォルダ（指定のフォルダが正しくなければメッセージを出して null）</summary>
-    private string? OutputFolderFor(string source)
+    private string? OutputFolderFor(string source, bool overwrite)
     {
-        if (_toSame.Checked || _toOverwrite.Checked) return Path.GetDirectoryName(source)!;
+        if (_toSame.Checked || overwrite) return Path.GetDirectoryName(source)!;
         string folder = _folder.Text.Trim();
         if (folder.Length > 0 && Path.IsPathFullyQualified(folder)) return folder;
         MessageBox.Show(this, "保存先のフォルダを C:\\… の形で指定してください。", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
         return null;
     }
 
-    private async Task SaveCurrentAsync(bool advance)
+    /// <param name="overwrite">true なら元の画像を置き換える（確かめない）</param>
+    private async Task SaveCurrentAsync(bool advance, bool overwrite)
     {
         if (_busy || _loading || _image == null || _rect == null) return;
         string src = _paths[_index];
-        if (OutputFolderFor(src) is not string folder) return;
+        if (OutputFolderFor(src, overwrite) is not string folder) return;
         var box = Cropper.ClampBox(_rect[0], _rect[1], _rect[2], _rect[3], _image.Width, _image.Height);
         if (box.Width < 1 || box.Height < 1) return;
-
-        bool overwrite = _toOverwrite.Checked;
-        if (overwrite && !_overwriteConfirmed)
-        {
-            if (MessageBox.Show(this, $"元の画像（{Path.GetFileName(src)}）を切り抜いた画像で上書きします（元には戻せません）。続けますか？\n" +
-                                      "このダイアログを閉じるまで、次からは確かめずに上書きします。",
-                    Text, MessageBoxButtons.OKCancel, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.OK) return;
-            _overwriteConfirmed = true;
-        }
 
         var image = _image;
         SetBusy(true);
@@ -585,27 +569,27 @@ public sealed class CropDialog : ThemedForm
         }
     }
 
-    private async Task SaveAllCenterAsync()
+    /// <summary>位置を引き継ぐなら最後に決めた枠を全部へ（大きさが違う画像には割合で合わせる）、そうでなければ同じ比で中央から切り抜く</summary>
+    private async Task SaveAllAsync(bool overwrite)
     {
-        if (_busy || _loading || CurrentAspect() is not double aspect) return;
-        await SaveAllAsync((src, dst) => Cropper.CropCenter(src, aspect, dst));
+        if (_busy || _loading) return;
+        if (_keepPosition.Checked)
+        {
+            if (_anchor is not { } from) return;
+            await SaveAllAsync((src, dst) => Cropper.CropCarried(src, from.Rect, from.Width, from.Height, dst), overwrite);
+        }
+        else
+        {
+            if (CurrentAspect() is not double aspect) return;
+            await SaveAllAsync((src, dst) => Cropper.CropCenter(src, aspect, dst), overwrite);
+        }
     }
 
-    /// <summary>最後に決めた枠を全部の画像へ引き継いで切り抜く（大きさが違う画像には割合で合わせる）</summary>
-    private async Task SaveAllCarriedAsync()
+    /// <summary>選んだ画像を全部、crop(元, 保存先) で切り抜いて保存する（overwrite なら元の画像を置き換える）</summary>
+    private async Task SaveAllAsync(Action<string, string> crop, bool overwrite)
     {
-        if (_busy || _loading || _anchor is not { } from) return;
-        await SaveAllAsync((src, dst) => Cropper.CropCarried(src, from.Rect, from.Width, from.Height, dst));
-    }
-
-    /// <summary>選んだ画像を全部、crop(元, 保存先) で切り抜いて保存する</summary>
-    private async Task SaveAllAsync(Action<string, string> crop)
-    {
-        bool overwrite = _toOverwrite.Checked;
-        if (_toCustom.Checked && OutputFolderFor(_paths[0]) == null) return;
-        if (overwrite && MessageBox.Show(this, $"元の画像 {_paths.Count} 枚を切り抜いた画像で上書きします（元には戻せません）。続けますか？",
-                Text, MessageBoxButtons.OKCancel, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.OK) return;
-        var targets = _paths.Select(p => (Src: p, Folder: _toCustom.Checked ? _folder.Text.Trim() : Path.GetDirectoryName(p)!)).ToList();
+        if (!overwrite && _toCustom.Checked && OutputFolderFor(_paths[0], overwrite) == null) return;
+        var targets = _paths.Select(p => (Src: p, Folder: _toCustom.Checked && !overwrite ? _folder.Text.Trim() : Path.GetDirectoryName(p)!)).ToList();
         SetBusy(true);
         var errors = new List<string>();
         int ok = 0;

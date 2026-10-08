@@ -26,7 +26,7 @@ dotnet run --project tests/ImageViewer.Tests    # テスト
 ## コマンドの仕組み
 
 編集機能はすべて `IImageCommand`（`src/ImageViewer.Core/Commands`）として実装し、`MainForm.RegisterCommands` で登録する。
-☰ メニュー・右クリックメニュー・ショートカット・アドレスバーのコマンド検索は登録済みコマンドから自動で組み立てられ、
+☰ メニュー・右クリックメニュー・ショートカット・アドレスバーのコマンド検索は登録済みコマンドから自動で組み立てられ（右クリックメニューは項目を絞り、回転はサブメニューにまとめる。`MainForm.BuildContextMenu`）、
 選択枚数に応じて実行可否（例: 連結は2枚以上、切り抜きは1枚）が切り替わる。
 
 ```csharp

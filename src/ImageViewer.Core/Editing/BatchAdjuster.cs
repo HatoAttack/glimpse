@@ -42,8 +42,12 @@ public static class BatchAdjuster
     /// 撮影情報（EXIF）を残せないのが形式から分かっているもの（HEIC / RAW など。計画にも書いてある）はそのまま保存する。
     /// JPEG の亜種など、読んでみて初めて残せないと分かったものは保存せずに失敗として数える（黙って撮影情報を消さない）
     /// </remarks>
+    /// <param name="overwriteSourcesOnly">
+    /// true なら上書きするのは元の画像を置き換えるものだけ。ほかの保存先（HEIC の代わりに作る JPG など）は新しく作るだけで、
+    /// 保存するときにその名前のファイルがあれば（計画の後にできたものでも）別の画像なので飛ばす
+    /// </param>
     public static ConvertResult Run(IReadOnlyList<ConvertPlanItem> plan, AdjustOptions adjust, AdjustBatchOptions options,
-        IProgress<ConvertProgress>? progress = null, CancellationToken ct = default)
+        IProgress<ConvertProgress>? progress = null, CancellationToken ct = default, bool overwriteSourcesOnly = false)
     {
         var todo = plan.Where(p => p.Status == ConvertStatus.Ok).ToList();
         int done = 0, skipped = plan.Count(p => p.Status == ConvertStatus.Skip);
@@ -55,7 +59,8 @@ public static class BatchAdjuster
             progress?.Report(new(i, todo.Count, item.SourceName));
             try
             {
-                Adjuster.ApplyToFile(item.Source, item.Target, adjust, options.Overwrite,
+                bool overwrite = overwriteSourcesOnly ? item.ReplacesSource : options.Overwrite;
+                Adjuster.ApplyToFile(item.Source, item.Target, adjust, overwrite,
                     allowMetadataLoss: !Converter.KeepsMetadata(item.Source), autoLevels: options.AutoLevels);
                 done++;
             }

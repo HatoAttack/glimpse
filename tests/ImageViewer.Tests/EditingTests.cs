@@ -190,8 +190,9 @@ static class EditingTests
         // ---- モザイク・ぼかし ----
         check(Masker.EffectSize(3000, 2000, 3) == 30 && Masker.EffectSize(10, 10, 1) == 2, "モザイク: マスの大きさは長い辺に対する割合（最小 2px）");
         check(Masker.EffectSize(300, 300, 99) == Masker.EffectSize(300, 300, Masker.MaxLevel), "モザイク: 強さは 1〜10 に丸める");
-        var carried = Masker.CarryRects(new[] { (10.0, 20.0, 30.0, 40.0) }, 100, 100, 200, 50);
-        check(carried.Count == 1 && carried[0] == (20, 10, 60, 20), $"モザイク: 大きさが違う画像には縦横それぞれ割合で範囲を合わせる（{carried[0]}）");
+        var carried = Masker.CarryRegions(new[] { MaskRegion.Rect(10, 20, 30, 40) }, 100, 100, 200, 50);
+        check(carried.Count == 1 && (carried[0].X0, carried[0].Y0, carried[0].X1, carried[0].Y1) == (20, 10, 60, 20),
+            $"モザイク: 大きさが違う画像には縦横それぞれ割合で範囲を合わせる（{carried[0]}）");
         // 左半分が赤・右半分が青の画像。左の 20 × 20 だけにかけると、そこは市松から 1 色になり、外は変わらない
         using (var img = new Image<Rgba32>(40, 40, Blue))
         {
@@ -202,6 +203,22 @@ static class EditingTests
             Masker.Apply(img, new[] { new Rectangle(0, 0, 20, 20) }, MaskEffect.Mosaic, 10);
             check(img[0, 0] == img[9, 9] && img[0, 0] == img[1, 0], "モザイク: 範囲の中はマスごとに 1 色");
             check(img[30, 30] == before && img[20, 0] == Blue, "モザイク: 範囲の外は変えない");
+            // マスより小さい範囲（ドラッグし始めの数 px など）でも例外にならず、マスを範囲に合わせてかける
+            for (int y = 30; y < 34; y++)
+                for (int x = 30; x < 34; x++)
+                    img[x, y] = (x + y) % 2 == 0 ? Red : Blue;
+            bool thrown = false;
+            try
+            {
+                Masker.Apply(img, new[] { new Rectangle(30, 30, 4, 4), new Rectangle(0, 30, 1, 5) }, MaskEffect.Mosaic, 10);
+                Masker.Apply(img, new[] { new Rectangle(30, 30, 4, 4) }, MaskEffect.Blur, 10);
+                // ぼかしも、差し渡しが範囲より大きいと例外になる（ボックスぼかしで実際に起きた）。1〜3px の範囲や円でも止まらない
+                foreach (var effect in new[] { MaskEffect.Blur, MaskEffect.BoxBlur })
+                    foreach (int w in new[] { 1, 2, 3, 5 })
+                        Masker.Apply(img, new[] { MaskRegion.Rect(0, 0, w, 12), new MaskRegion(MaskShape.Ellipse, 10, 10, 10 + w, 13) }, effect, 40);
+            }
+            catch (ArgumentException) { thrown = true; }
+            check(!thrown && img[30, 30] == img[33, 33], "モザイク: マスより小さい範囲でも失敗せず、範囲を 1 マスにする");
         }
         using (var img = new Image<Rgba32>(40, 40, Blue))
         {
@@ -213,21 +230,67 @@ static class EditingTests
             check(mid.R is > 60 and < 200 && mid.B is > 60 and < 200, $"ぼかし: 範囲の中は混ざる（{mid}）");
             check(img[30, 20] == ((30 + 20) % 2 == 0 ? Red : Blue), "ぼかし: 範囲の外は変えない（画像の外の範囲は無視する）");
         }
+        // 円・楕円と自由な形: 外枠の中でも、形の外は変えない
+        static Image<Rgba32> Checker()
+        {
+            var c = new Image<Rgba32>(40, 40);
+            for (int y = 0; y < 40; y++)
+                for (int x = 0; x < 40; x++)
+                    c[x, y] = (x + y) % 2 == 0 ? Red : Blue;
+            return c;
+        }
+        var ellipse = new MaskRegion(MaskShape.Ellipse, 0, 0, 40, 40);
+        check(ellipse.Contains(20, 20) && !ellipse.Contains(1, 1), "円: 中心は中、外枠の角は外");
+        using (var img = Checker())
+        {
+            Masker.Apply(img, new[] { ellipse }, MaskEffect.Blur, 8);
+            var mid = img[20, 20];
+            check(mid.R is > 60 and < 200 && img[0, 0] == Red && img[39, 0] == Blue, $"円: 円の中だけ混ざり、外枠の角は変えない（{mid}）");
+        }
+        var triangle = MaskRegion.FromPath(new[] { (0.0, 0.0), (40.0, 0.0), (0.0, 40.0) });
+        check(triangle is { Shape: MaskShape.Freehand, Width: 40, Height: 40 } && triangle.Contains(5, 5) && !triangle.Contains(35, 35),
+            "自由な形: なぞった点から外枠と形を作る（中・外の判定）");
+        check(MaskRegion.FromPath(new[] { (0.0, 0.0), (10.0, 10.0) }) == null, "自由な形: 点が 3 つ未満なら作らない");
+        using (var img = Checker())
+        {
+            Masker.Apply(img, new[] { triangle! }, MaskEffect.Blur, 8);
+            var inside = img[5, 5];
+            check(inside.R is > 60 and < 200 && img[35, 35] == Red && img[30, 31] == Blue, $"自由な形: 形の中だけ混ざり、外は変えない（{inside}）");
+        }
+        // ボックスぼかし・塗りつぶし: 形の中だけ変え、外は変えない（塗りつぶしは黒一色）
+        using (var img = Checker())
+        {
+            Masker.Apply(img, new[] { ellipse }, MaskEffect.BoxBlur, 8);
+            var mid = img[20, 20];
+            check(mid.R is > 60 and < 200 && img[0, 0] == Red, $"ボックスぼかし: 円の中だけ混ざる（{mid}）");
+        }
+        using (var img = Checker())
+        {
+            var black = new Rgba32(0, 0, 0);
+            Masker.Apply(img, new[] { triangle!, MaskRegion.Rect(30, 30, 40, 40) }, MaskEffect.Fill, 0);
+            check(img[5, 5] == black && img[35, 35] == black && img[29, 31] == Red && img[25, 25] == Red,
+                "塗りつぶし: 自由な形・四角の中を黒で塗り、外は変えない（強さは使わない）");
+        }
+        check(Masker.OutputPathFor(P("mask.png"), dir, MaskEffect.BoxBlur) == P("mask_boxblur.png")
+              && Masker.OutputPathFor(P("mask.png"), dir, MaskEffect.Fill) == P("mask_fill.png"), "保存先の名前は _boxblur / _fill");
+        var moved = Masker.CarryRegions(new[] { triangle! }, 40, 40, 80, 80)[0];
+        check(moved.Contains(10, 10) && !moved.Contains(70, 70), "自由な形: 大きさの違う画像へ引き継ぐと形ごと伸びる");
+
         using (var img = new Image<Rgba32>(60, 30, Red)) img.SaveAsPng(P("mask.png"));
         string maskOut = Masker.OutputPathFor(P("mask.png"), dir, MaskEffect.Mosaic);
         check(maskOut == P("mask_mosaic.png") && Masker.OutputPathFor(P("mask.png"), dir, MaskEffect.Blur) == P("mask_blur.png"),
             "モザイク: 保存先の名前は _mosaic / _blur");
         using (var whole = ImageViewer.Core.Imaging.ImageLoader.Load(P("mask.png")))
         {
-            Masker.SaveMasked(whole, new[] { new Rectangle(0, 0, 10, 10) }, MaskEffect.Mosaic, 5, P("mask.png"), maskOut);
+            Masker.SaveMasked(whole, new[] { MaskRegion.Rect(0, 0, 10, 10) }, MaskEffect.Mosaic, 5, P("mask.png"), maskOut);
             check(whole.Width == 60 && whole[0, 0] == Red, "モザイク: 保存しても表示中の画像は変えない");
         }
         check(File.Exists(maskOut), "モザイク: 別の名前で保存できる");
-        Masker.MaskCarried(P("mask.png"), new[] { (0.0, 0.0, 10.0, 10.0) }, 60, 30, MaskEffect.Blur, 5, P("mask.png"));
+        Masker.MaskCarried(P("mask.png"), new[] { MaskRegion.Rect(0, 0, 10, 10) }, 60, 30, MaskEffect.Blur, 5, P("mask.png"));
         using (var img = Image.Load<Rgba32>(P("mask.png")))
             check(img.Width == 60 && img.Height == 30, "モザイク: 元のファイルに上書きできる（大きさはそのまま）");
         refused = false;
-        try { Masker.MaskCarried(P("over.gif"), new[] { (0.0, 0.0, 10.0, 10.0) }, 20, 20, MaskEffect.Mosaic, 5, P("over.gif")); }
+        try { Masker.MaskCarried(P("over.gif"), new[] { MaskRegion.Rect(0, 0, 10, 10) }, 20, 20, MaskEffect.Mosaic, 5, P("over.gif")); }
         catch (NotSupportedException) { refused = true; }
         check(refused && new FileInfo(P("over.gif")).Length == gifSize, "モザイク: アニメーションは上書きしない（元のまま）");
 
