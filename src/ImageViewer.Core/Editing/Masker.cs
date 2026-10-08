@@ -166,18 +166,24 @@ public static class Masker
 
     private static void Effect(IImageProcessingContext c, Rectangle box, MaskEffect effect, int size)
     {
+        // ImageSharp のモザイクはマスが、ぼかしは差し渡し（半径 × 2 + 1）が範囲の幅・高さより大きいと例外になるので、
+        // 小さい範囲（ドラッグし始めの数 px など）では範囲に収まるまで弱める
+        int shortSide = Math.Min(box.Width, box.Height);
+        int maxRadius = (shortSide - 1) / 2;
         switch (effect)
         {
             case MaskEffect.Mosaic:
-                // ImageSharp のモザイクは、マスが範囲の幅・高さより大きいと例外になるので、小さい範囲ではマスを範囲に合わせる
-                int cell = Math.Min(size, Math.Min(box.Width, box.Height));
+                int cell = Math.Min(size, shortSide);
                 if (cell >= 2) c.Pixelate(cell, box);
                 break;
             case MaskEffect.BoxBlur:
-                c.BoxBlur(Math.Clamp(size / 2, 1, MaxBoxRadius), box);
+                int radius = Math.Min(Math.Clamp(size / 2, 1, MaxBoxRadius), maxRadius);
+                if (radius >= 1) c.BoxBlur(radius, box);
                 break;
             default:
-                c.GaussianBlur(Math.Min(MaxSigma, size / 2f), box);
+                // ガウスの半径は ceil(σ × 3)
+                float sigma = Math.Min(Math.Min(MaxSigma, size / 2f), maxRadius / 3f);
+                if (sigma > 0 && maxRadius >= 1) c.GaussianBlur(sigma, box);
                 break;
         }
     }

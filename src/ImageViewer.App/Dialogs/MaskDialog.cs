@@ -450,7 +450,14 @@ public sealed class MaskDialog : ThemedForm
             {
                 int size = (int)Math.Round(Masker.EffectSize(_image.Width, _image.Height, _level.Value) * _scale);
                 using var preview = _small.Clone();
-                Masker.Apply(preview, regions, CurrentEffect, Math.Max(2, size));
+                try
+                {
+                    Masker.Apply(preview, regions, CurrentEffect, Math.Max(2, size));
+                }
+                catch (ArgumentException)
+                {
+                    // 見た目だけのプレビューなので、かけられなかったら（極端に小さい範囲など）かける前のまま出す。アプリは止めない
+                }
                 _display = ThumbnailGenerator.ToPArgbBitmap(preview);
             }
         }

@@ -212,6 +212,10 @@ static class EditingTests
             {
                 Masker.Apply(img, new[] { new Rectangle(30, 30, 4, 4), new Rectangle(0, 30, 1, 5) }, MaskEffect.Mosaic, 10);
                 Masker.Apply(img, new[] { new Rectangle(30, 30, 4, 4) }, MaskEffect.Blur, 10);
+                // ぼかしも、差し渡しが範囲より大きいと例外になる（ボックスぼかしで実際に起きた）。1〜3px の範囲や円でも止まらない
+                foreach (var effect in new[] { MaskEffect.Blur, MaskEffect.BoxBlur })
+                    foreach (int w in new[] { 1, 2, 3, 5 })
+                        Masker.Apply(img, new[] { MaskRegion.Rect(0, 0, w, 12), new MaskRegion(MaskShape.Ellipse, 10, 10, 10 + w, 13) }, effect, 40);
             }
             catch (ArgumentException) { thrown = true; }
             check(!thrown && img[30, 30] == img[33, 33], "モザイク: マスより小さい範囲でも失敗せず、範囲を 1 マスにする");
