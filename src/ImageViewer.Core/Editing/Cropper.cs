@@ -82,7 +82,7 @@ public static class Cropper
         ImageSaver.Save(image, dst);
     }
 
-    private static bool IsSameFile(string a, string b) =>
+    internal static bool IsSameFile(string a, string b) =>
         string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
@@ -99,7 +99,7 @@ public static class Cropper
     }
 
     /// <summary>撮影情報（EXIF など）を残せない画像（WIC で読んだもの）は、上書きすると失われるので NotSupportedException</summary>
-    private static void EnsureKeepsMetadata(Image image)
+    internal static void EnsureKeepsMetadata(Image image)
     {
         if (!Adjuster.KeepsMetadata(image))
             throw new NotSupportedException("撮影情報（EXIF など）を残して保存できない画像なので、上書きしませんでした");
