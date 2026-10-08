@@ -32,8 +32,16 @@ public static class Masker
         {
             foreach (var box in targets)
             {
-                if (effect == MaskEffect.Mosaic) c.Pixelate(size, box);
-                else c.GaussianBlur(Math.Min(MaxSigma, size / 2f), box);
+                if (effect == MaskEffect.Mosaic)
+                {
+                    // ImageSharp のモザイクは、マスが範囲の幅・高さより大きいと例外になるので、小さい範囲ではマスを範囲に合わせる
+                    int cell = Math.Min(size, Math.Min(box.Width, box.Height));
+                    if (cell >= 2) c.Pixelate(cell, box);
+                }
+                else
+                {
+                    c.GaussianBlur(Math.Min(MaxSigma, size / 2f), box);
+                }
             }
         });
     }

@@ -202,6 +202,18 @@ static class EditingTests
             Masker.Apply(img, new[] { new Rectangle(0, 0, 20, 20) }, MaskEffect.Mosaic, 10);
             check(img[0, 0] == img[9, 9] && img[0, 0] == img[1, 0], "モザイク: 範囲の中はマスごとに 1 色");
             check(img[30, 30] == before && img[20, 0] == Blue, "モザイク: 範囲の外は変えない");
+            // マスより小さい範囲（ドラッグし始めの数 px など）でも例外にならず、マスを範囲に合わせてかける
+            for (int y = 30; y < 34; y++)
+                for (int x = 30; x < 34; x++)
+                    img[x, y] = (x + y) % 2 == 0 ? Red : Blue;
+            bool thrown = false;
+            try
+            {
+                Masker.Apply(img, new[] { new Rectangle(30, 30, 4, 4), new Rectangle(0, 30, 1, 5) }, MaskEffect.Mosaic, 10);
+                Masker.Apply(img, new[] { new Rectangle(30, 30, 4, 4) }, MaskEffect.Blur, 10);
+            }
+            catch (ArgumentException) { thrown = true; }
+            check(!thrown && img[30, 30] == img[33, 33], "モザイク: マスより小さい範囲でも失敗せず、範囲を 1 マスにする");
         }
         using (var img = new Image<Rgba32>(40, 40, Blue))
         {
