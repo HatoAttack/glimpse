@@ -5,7 +5,7 @@
 // - 選択した画像を ◀ ▶（PageUp / PageDown）で切り替え。Enter で保存して次へ。範囲は画像ごとに覚える
 // - 「次の画像も同じ範囲にかける」なら、切り替えても範囲を引き継ぐ（大きさが違う画像には割合で合わせる）。
 //   一括の「全部に同じ範囲でかける」も出る（スクリーンショットの同じ所を隠すとき向け）
-// - 保存先に「元の画像に上書き」も選べる（最初の上書きの前に確かめる。アニメ・書き出せない形式などは上書きしない）
+// - 「保存」は元の画像を残して別の名前で、「上書き保存」は元の画像を置き換える（確かめない。アニメ・書き出せない形式などは上書きしない）
 // - 持つのは表示中の 1 枚（原寸）と、画面の大きさに縮小した画像（かける前）と表示用のビットマップだけ
 using System.Drawing.Drawing2D;
 using ImageViewer.Core.Editing;
@@ -25,7 +25,7 @@ public sealed class MaskDialog : ThemedForm
     private static MaskEffect _lastEffect = MaskEffect.Mosaic;
     private static MaskShape _lastShape = MaskShape.Rectangle;
     private static int _lastLevel = Masker.DefaultLevel;
-    private static bool _lastToCustomFolder, _lastKeepPosition, _lastOverwrite;
+    private static bool _lastToCustomFolder, _lastKeepPosition;
     private static string _lastFolder = "";
 
     private readonly IReadOnlyList<string> _paths;
@@ -75,13 +75,16 @@ public sealed class MaskDialog : ThemedForm
     private readonly Label _selectionInfo = new() { AutoSize = true, MaximumSize = new Size(210, 0), Margin = new Padding(3, 8, 3, 3) };
     private readonly RadioButton _toSame = new() { Text = "元と同じフォルダ", AutoSize = true };
     private readonly RadioButton _toCustom = new() { Text = "指定のフォルダ", AutoSize = true };
-    private readonly RadioButton _toOverwrite = new() { Text = "元の画像に上書き", AutoSize = true };
     private readonly TextBox _folder = new() { Width = 190 };
     private readonly Label _outputHint = new() { AutoSize = true, MaximumSize = new Size(190, 0) };
-    private bool _overwriteConfirmed; // このダイアログで 1 枚ずつの上書きを確かめたか
-    private readonly Button _save = new() { Text = "保存", Width = 200, Height = 30 };
-    private readonly Button _saveNext = new() { Text = "保存して次へ (Enter)", Width = 200, Height = 30 };
-    private readonly Button _saveAll = new() { Text = "全部に同じ範囲でかける", Width = 200, Height = 30 };
+    // 保存のボタンは「保存（別の名前）」と「上書き保存（元の画像を置き換える）」を横に並べる
+    private readonly Button _save = new() { Text = "保存", Width = 100, Height = 30 };
+    private readonly Button _saveOver = new() { Text = "上書き保存", Width = 100, Height = 30 };
+    private readonly Button _saveNext = new() { Text = "保存して次へ", Width = 100, Height = 30 };
+    private readonly Button _saveNextOver = new() { Text = "上書きして次へ", Width = 100, Height = 30 };
+    private readonly Label _saveAllCaption = new() { Text = "全部に同じ範囲でかける:", AutoSize = true, Margin = new Padding(3, 10, 3, 0) };
+    private readonly Button _saveAll = new() { Text = "全部を保存", Width = 100, Height = 30 };
+    private readonly Button _saveAllOver = new() { Text = "全部を上書き", Width = 100, Height = 30 };
     private readonly Label _status = new() { AutoSize = true, MaximumSize = new Size(210, 0), Margin = new Padding(3, 8, 3, 3) };
     private readonly System.Windows.Forms.Timer _resizeDelay = new() { Interval = 80 };
     private readonly ToolTip _toolTip = new();
@@ -138,9 +141,10 @@ public sealed class MaskDialog : ThemedForm
             UpdateButtons();
         };
         _folder.Text = _lastFolder;
-        (_lastOverwrite ? _toOverwrite : _lastToCustomFolder && _lastFolder.Length > 0 ? _toCustom : _toSame).Checked = true;
-        foreach (var rb in new[] { _toSame, _toCustom, _toOverwrite }) rb.CheckedChanged += (_, _) => { if (rb.Checked) OnOutputChanged(); };
-        OnOutputChanged();
+        (_lastToCustomFolder && _lastFolder.Length > 0 ? _toCustom : _toSame).Checked = true;
+        _outputHint.Text = "「保存」は「元の名前_mosaic」（ぼかしは _blur）で保存します（同名があれば (2) などを付けます）。" +
+                           "「上書き保存」は元のファイルを置き換えます（元には戻せません。HEIC・RAW など書き出せない形式やアニメーションは上書きしません）";
+        _outputHint.ForeColor = Theme.Current.TextMuted;
         UpdateLevelText();
         UpdateButtons();
 
@@ -158,7 +162,6 @@ public sealed class MaskDialog : ThemedForm
             _lastKeepPosition = _keepPosition.Checked;
             _lastFolder = _folder.Text.Trim();
             _lastToCustomFolder = _toCustom.Checked;
-            _lastOverwrite = _toOverwrite.Checked;
         };
     }
 
@@ -208,30 +211,32 @@ public sealed class MaskDialog : ThemedForm
         var outStack = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false, Dock = DockStyle.Fill };
         outStack.Controls.AddRange(new Control[]
         {
-            _toSame, _toCustom, _folder, browse, _toOverwrite, _outputHint,
+            _toSame, _toCustom, _folder, browse, _outputHint,
         });
         var outBox = new GroupBox { Text = "保存先", AutoSize = true, Width = 210, Padding = new Padding(8), Margin = new Padding(3, 8, 3, 3) };
         outBox.Controls.Add(outStack);
         side.Controls.Add(outBox);
 
-        _save.Click += async (_, _) => await SaveCurrentAsync(advance: false);
-        _saveNext.Click += async (_, _) => await SaveCurrentAsync(advance: true);
-        _saveAll.Click += async (_, _) => await SaveAllCarriedAsync();
-        side.Controls.AddRange(new Control[] { _save, _saveNext, _saveAll, _status });
+        _save.Click += async (_, _) => await SaveCurrentAsync(advance: false, overwrite: false);
+        _saveOver.Click += async (_, _) => await SaveCurrentAsync(advance: false, overwrite: true);
+        _saveNext.Click += async (_, _) => await SaveCurrentAsync(advance: true, overwrite: false);
+        _saveNextOver.Click += async (_, _) => await SaveCurrentAsync(advance: true, overwrite: true);
+        _saveAll.Click += async (_, _) => await SaveAllCarriedAsync(overwrite: false);
+        _saveAllOver.Click += async (_, _) => await SaveAllCarriedAsync(overwrite: true);
+        _toolTip.SetToolTip(_saveNext, "Enter");
+        _toolTip.SetToolTip(_saveNextOver, "Shift+Enter");
+        side.Controls.AddRange(new Control[]
+        {
+            ButtonRow(_save, _saveOver), ButtonRow(_saveNext, _saveNextOver), _saveAllCaption, ButtonRow(_saveAll, _saveAllOver), _status,
+        });
         return side;
     }
 
-    /// <summary>保存先を変えたら、説明とボタンの名前を合わせる（上書きは注意の色で）</summary>
-    private void OnOutputChanged()
+    private static FlowLayoutPanel ButtonRow(params Control[] buttons)
     {
-        bool overwrite = _toOverwrite.Checked;
-        _outputHint.Text = overwrite
-            ? "元のファイルをかけた後の画像で置き換えます（元には戻せません）。HEIC・RAW など書き出せない形式やアニメーションは上書きしません"
-            : "名前は「元の名前_mosaic」（ぼかしは _blur）。同名があれば (2) などを付けます";
-        _outputHint.ForeColor = overwrite ? Theme.Current.Danger : Theme.Current.TextMuted;
-        _save.Text = overwrite ? "上書き保存" : "保存";
-        _saveNext.Text = overwrite ? "上書きして次へ (Enter)" : "保存して次へ (Enter)";
-        UpdateButtons();
+        var row = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
+        row.Controls.AddRange(buttons);
+        return row;
     }
 
     private void OnEffectChanged()
@@ -253,7 +258,10 @@ public sealed class MaskDialog : ThemedForm
         switch (keyData)
         {
             case Keys.Enter when !_busy && !(ActiveControl is TextBox or NumericUpDown):
-                _ = SaveCurrentAsync(advance: true);
+                _ = SaveCurrentAsync(advance: true, overwrite: false);
+                return true;
+            case Keys.Shift | Keys.Enter when !_busy && !(ActiveControl is TextBox or NumericUpDown):
+                _ = SaveCurrentAsync(advance: true, overwrite: true);
                 return true;
             case Keys.Delete or Keys.Back when !(ActiveControl is TextBox):
                 RemoveSelected();
@@ -353,10 +361,10 @@ public sealed class MaskDialog : ThemedForm
     private void UpdateButtons()
     {
         bool ready = !_busy && !_loading && _image != null;
-        _save.Enabled = _saveNext.Enabled = ready && _rects.Count > 0;
-        _saveNext.Visible = _paths.Count > 1;
-        _saveAll.Visible = _paths.Count > 1 && _keepPosition.Checked;
-        _saveAll.Enabled = ready && _rects.Count > 0;
+        _save.Enabled = _saveOver.Enabled = _saveNext.Enabled = _saveNextOver.Enabled = ready && _rects.Count > 0;
+        _saveNext.Visible = _saveNextOver.Visible = _paths.Count > 1;
+        _saveAllCaption.Visible = _saveAll.Visible = _saveAllOver.Visible = _paths.Count > 1 && _keepPosition.Checked;
+        _saveAll.Enabled = _saveAllOver.Enabled = ready && _rects.Count > 0;
         _removeSelected.Enabled = !_busy && _selected >= 0;
         _removeAll.Enabled = !_busy && _rects.Count > 0;
         _prev.Enabled = _next.Enabled = !_busy && _paths.Count > 1;
@@ -643,16 +651,17 @@ public sealed class MaskDialog : ThemedForm
     // ---- 保存 ----
 
     /// <summary>保存先のフォルダ（指定のフォルダが正しくなければメッセージを出して null）</summary>
-    private string? OutputFolderFor(string source)
+    private string? OutputFolderFor(string source, bool overwrite)
     {
-        if (_toSame.Checked || _toOverwrite.Checked) return Path.GetDirectoryName(source)!;
+        if (_toSame.Checked || overwrite) return Path.GetDirectoryName(source)!;
         string folder = _folder.Text.Trim();
         if (folder.Length > 0 && Path.IsPathFullyQualified(folder)) return folder;
         MessageBox.Show(this, "保存先のフォルダを C:\\… の形で指定してください。", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
         return null;
     }
 
-    private async Task SaveCurrentAsync(bool advance)
+    /// <param name="overwrite">true なら元の画像を置き換える（確かめない）</param>
+    private async Task SaveCurrentAsync(bool advance, bool overwrite)
     {
         if (_busy || _loading || _image == null) return;
         string src = _paths[_index];
@@ -663,16 +672,7 @@ public sealed class MaskDialog : ThemedForm
             _status.Text = "隠す範囲を選んでから保存してください";
             return;
         }
-        if (OutputFolderFor(src) is not string folder) return;
-
-        bool overwrite = _toOverwrite.Checked;
-        if (overwrite && !_overwriteConfirmed)
-        {
-            if (MessageBox.Show(this, $"元の画像（{Path.GetFileName(src)}）を、モザイク・ぼかしをかけた画像で上書きします（元には戻せません）。続けますか？\n" +
-                                      "このダイアログを閉じるまで、次からは確かめずに上書きします。",
-                    Text, MessageBoxButtons.OKCancel, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.OK) return;
-            _overwriteConfirmed = true;
-        }
+        if (OutputFolderFor(src, overwrite) is not string folder) return;
 
         var image = _image;
         var effect = CurrentEffect;
@@ -715,15 +715,12 @@ public sealed class MaskDialog : ThemedForm
     /// いま表示している画像の範囲を全部の画像へ引き継いでかける（大きさが違う画像には割合で合わせる）。
     /// 引き継ぐ元（_anchor）ではなく見えている範囲を使うので、見えていない範囲にかけてしまうことはない
     /// </summary>
-    private async Task SaveAllCarriedAsync()
+    private async Task SaveAllCarriedAsync(bool overwrite)
     {
         if (_busy || _loading || _image == null || _rects.Count == 0) return;
         var from = (Rects: _rects.ToList(), Width: _image.Width, Height: _image.Height);
-        bool overwrite = _toOverwrite.Checked;
-        if (_toCustom.Checked && OutputFolderFor(_paths[0]) == null) return;
-        if (overwrite && MessageBox.Show(this, $"元の画像 {_paths.Count} 枚を、モザイク・ぼかしをかけた画像で上書きします（元には戻せません）。続けますか？",
-                Text, MessageBoxButtons.OKCancel, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.OK) return;
-        var targets = _paths.Select(p => (Src: p, Folder: _toCustom.Checked ? _folder.Text.Trim() : Path.GetDirectoryName(p)!)).ToList();
+        if (!overwrite && _toCustom.Checked && OutputFolderFor(_paths[0], overwrite) == null) return;
+        var targets = _paths.Select(p => (Src: p, Folder: _toCustom.Checked && !overwrite ? _folder.Text.Trim() : Path.GetDirectoryName(p)!)).ToList();
         var effect = CurrentEffect;
         int level = _level.Value;
         SetBusy(true);

@@ -54,6 +54,7 @@ public sealed class AdjustBatchDialog : ThemedForm
     private readonly Label _summary = new() { AutoSize = true, Dock = DockStyle.Left, Padding = new Padding(0, 6, 0, 0) };
     private readonly ProgressBar _progress = new() { Dock = DockStyle.Bottom, Height = 6, Visible = false, Style = ProgressBarStyle.Continuous };
     private readonly Button _run = new() { Text = "実行", AutoSize = true };
+    private readonly Button _runOver = new() { Text = "上書き保存", AutoSize = true };
     private readonly Button _close = new() { Text = "閉じる", AutoSize = true };
     private readonly Control[] _inputs;
 
@@ -150,9 +151,12 @@ public sealed class AdjustBatchDialog : ThemedForm
 
         CancelButton = _close;
         _close.Click += (_, _) => Close();
-        _run.Click += async (_, _) => await RunAsync();
+        _run.Click += async (_, _) => await RunAsync(overwriteSources: false);
+        _runOver.Click += async (_, _) => await RunAsync(overwriteSources: true);
+        new ToolTip().SetToolTip(_runOver, "出力先の設定に関わらず、元の画像を補正した画像で置き換えます（元には戻せません）。\n" +
+                                           "HEIC・RAW など書き出せない形式は、元を残して同じ名前の JPG に保存します");
         var buttons = new FlowLayoutPanel { FlowDirection = FlowDirection.RightToLeft, Dock = DockStyle.Right, AutoSize = true, WrapContents = false };
-        buttons.Controls.AddRange(new Control[] { _close, _run });
+        buttons.Controls.AddRange(new Control[] { _close, _runOver, _run });
         var bottom = new Panel { Dock = DockStyle.Bottom, Height = 50, Padding = new Padding(10, 6, 10, 6) };
         bottom.Controls.Add(_summary);
         bottom.Controls.Add(buttons);
@@ -249,6 +253,7 @@ public sealed class AdjustBatchDialog : ThemedForm
         _summary.ForeColor = _outputError != null || errors > 0 ? Theme.Current.Danger
             : work && replaces > 0 ? Theme.Current.Warning : Theme.Current.Text;
         _run.Enabled = _outputError == null && errors == 0 && ok > 0 && work;
+        _runOver.Enabled = work && _paths.Count > 0;
     }
 
     private void OnRetrieveItem(object? sender, RetrieveVirtualItemEventArgs e)
@@ -389,22 +394,32 @@ public sealed class AdjustBatchDialog : ThemedForm
 
     // ---- 実行 ----
 
-    private async Task RunAsync()
+    /// <param name="overwriteSources">
+    /// true なら出力先の設定に関わらず元の画像を置き換える（確かめない）。書き出せない形式（HEIC など）は同じフォルダに同じ名前の JPG を作るが、
+    /// その名前のファイルが前からあれば別の画像なので上書きせずに飛ばす
+    /// </param>
+    private async Task RunAsync(bool overwriteSources)
     {
         var options = CurrentOptions();
         var adjust = CurrentAdjust();
+        var runOptions = options;
         var plan = _plan;
-        int replaces = plan.Count(p => p.Status == ConvertStatus.Ok && p.ReplacesSource);
-        if (replaces > 0 && MessageBox.Show(this,
-                $"元の画像 {replaces} 枚を補正した画像で上書きします（元には戻せません）。続けますか？",
-                Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
-            return;
+        if (overwriteSources)
+        {
+            runOptions = options with { OutputMode = OutputFolderMode.Same, Overwrite = true };
+            plan = BatchAdjuster.Plan(_paths, runOptions)
+                .Select(p => p.Status == ConvertStatus.Ok && !p.ReplacesSource && File.Exists(p.Target)
+                    ? p with { Status = ConvertStatus.Skip, Note = "同名のファイルがあるので飛ばします" }
+                    : p)
+                .ToList();
+        }
 
-        // 実際にかけた値を覚える（1 枚ずつ自動のときは、隠れているレベルの値は使っていないので既定にしておく）
+        // 実際にかけた値を覚える（1 枚ずつ自動のときは、隠れているレベルの値は使っていないので既定にしておく）。
+        // 出力先の設定は、上書き保存のときも画面で選んでいたものを覚える
         UsedAdjust = adjust;
         UsedOptions = options;
         foreach (var c in _inputs) c.Enabled = false;
-        _run.Enabled = false;
+        _run.Enabled = _runOver.Enabled = false;
         _close.Text = "中断";
         _progress.Visible = true;
         _progress.Value = 0;
@@ -419,7 +434,7 @@ public sealed class AdjustBatchDialog : ThemedForm
         ConvertResult result;
         try
         {
-            result = await Task.Run(() => BatchAdjuster.Run(plan, adjust, options, progress, cts.Token));
+            result = await Task.Run(() => BatchAdjuster.Run(plan, adjust, runOptions, progress, cts.Token));
         }
         finally
         {
