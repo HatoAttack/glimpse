@@ -124,7 +124,12 @@ public sealed class MaskDialog : ThemedForm
         _level.ValueChanged += (_, _) => OnEffectChanged();
         _keepPosition.Checked = _lastKeepPosition;
         _keepPosition.Visible = paths.Count > 1;
-        _keepPosition.CheckedChanged += (_, _) => UpdateButtons();
+        _keepPosition.CheckedChanged += (_, _) =>
+        {
+            // オンにしたら、いま見えている範囲を引き継ぐ元にする（前に別の画像で決めた範囲を使わないように）
+            if (_keepPosition.Checked) SetAnchor();
+            UpdateButtons();
+        };
         _folder.Text = _lastFolder;
         (_lastOverwrite ? _toOverwrite : _lastToCustomFolder && _lastFolder.Length > 0 ? _toCustom : _toSame).Checked = true;
         foreach (var rb in new[] { _toSame, _toCustom, _toOverwrite }) rb.CheckedChanged += (_, _) => { if (rb.Checked) OnOutputChanged(); };
@@ -334,7 +339,7 @@ public sealed class MaskDialog : ThemedForm
         _save.Enabled = _saveNext.Enabled = ready && _rects.Count > 0;
         _saveNext.Visible = _paths.Count > 1;
         _saveAll.Visible = _paths.Count > 1 && _keepPosition.Checked;
-        _saveAll.Enabled = !_busy && !_loading && _anchor is { Rects.Count: > 0 };
+        _saveAll.Enabled = ready && _rects.Count > 0;
         _removeSelected.Enabled = !_busy && _selected >= 0;
         _removeAll.Enabled = !_busy && _rects.Count > 0;
         _prev.Enabled = _next.Enabled = !_busy && _paths.Count > 1;
@@ -638,10 +643,14 @@ public sealed class MaskDialog : ThemedForm
         }
     }
 
-    /// <summary>最後に決めた範囲を全部の画像へ引き継いでかける（大きさが違う画像には割合で合わせる）</summary>
+    /// <summary>
+    /// いま表示している画像の範囲を全部の画像へ引き継いでかける（大きさが違う画像には割合で合わせる）。
+    /// 引き継ぐ元（_anchor）ではなく見えている範囲を使うので、見えていない範囲にかけてしまうことはない
+    /// </summary>
     private async Task SaveAllCarriedAsync()
     {
-        if (_busy || _loading || _anchor is not { Rects.Count: > 0 } from) return;
+        if (_busy || _loading || _image == null || _rects.Count == 0) return;
+        var from = (Rects: _rects.Select(r => (X0: r[0], Y0: r[1], X1: r[2], Y1: r[3])).ToList(), Width: _image.Width, Height: _image.Height);
         bool overwrite = _toOverwrite.Checked;
         if (_toCustom.Checked && OutputFolderFor(_paths[0]) == null) return;
         if (overwrite && MessageBox.Show(this, $"元の画像 {_paths.Count} 枚を、モザイク・ぼかしをかけた画像で上書きします（元には戻せません）。続けますか？",
