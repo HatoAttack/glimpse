@@ -1,7 +1,7 @@
 // モザイク・ぼかしダイアログ（切り抜きダイアログと同じ作り）
 // - 画像の上をドラッグで範囲を選ぶ（いくつでも）。形は 四角 / 円・楕円 / 自由（ドラッグでなぞった形）。
 //   範囲の中をドラッグで移動、四隅で大きさを変える（自由な形も外枠ごと伸び縮みする）。選んだ範囲は Delete か右クリックで消す
-// - モザイク / ぼかしと強さ（1〜10）。表示はかけた後の見た目（縮小した画像にかけるので、細かい所は保存したものと少し違う）
+// - モザイク / ぼかし / ボックスぼかし / 塗りつぶし（黒）と強さ（1〜10。塗りつぶしは使わない）。表示はかけた後の見た目（縮小した画像にかけるので、細かい所は保存したものと少し違う）
 // - 選択した画像を ◀ ▶（PageUp / PageDown）で切り替え。Enter で保存して次へ。範囲は画像ごとに覚える
 // - 「次の画像も同じ範囲にかける」なら、切り替えても範囲を引き継ぐ（大きさが違う画像には割合で合わせる）。
 //   一括の「全部に同じ範囲でかける」も出る（スクリーンショットの同じ所を隠すとき向け）
@@ -64,6 +64,8 @@ public sealed class MaskDialog : ThemedForm
     private readonly RadioButton _shapeFree = new() { Text = "自由（なぞる）", AutoSize = true };
     private readonly RadioButton _mosaic = new() { Text = "モザイク", AutoSize = true };
     private readonly RadioButton _blur = new() { Text = "ぼかし", AutoSize = true };
+    private readonly RadioButton _boxBlur = new() { Text = "ボックスぼかし", AutoSize = true };
+    private readonly RadioButton _fill = new() { Text = "塗りつぶし（黒）", AutoSize = true };
     private readonly TrackBar _level = new()
     {
         Minimum = Masker.MinLevel, Maximum = Masker.MaxLevel, TickFrequency = 1, LargeChange = 1, Width = 180, AutoSize = false, Height = 32,
@@ -128,9 +130,10 @@ public sealed class MaskDialog : ThemedForm
         Controls.Add(top);
 
         (_lastShape switch { MaskShape.Ellipse => _shapeEllipse, MaskShape.Freehand => _shapeFree, _ => _shapeRect }).Checked = true;
-        (_lastEffect == MaskEffect.Blur ? _blur : _mosaic).Checked = true;
+        (_lastEffect switch { MaskEffect.Blur => _blur, MaskEffect.BoxBlur => _boxBlur, MaskEffect.Fill => _fill, _ => _mosaic }).Checked = true;
         _level.Value = Math.Clamp(_lastLevel, Masker.MinLevel, Masker.MaxLevel);
-        _mosaic.CheckedChanged += (_, _) => OnEffectChanged();
+        foreach (var rb in new[] { _mosaic, _blur, _boxBlur, _fill })
+            rb.CheckedChanged += (_, _) => { if (rb.Checked) OnEffectChanged(); };
         _level.ValueChanged += (_, _) => OnEffectChanged();
         _keepPosition.Checked = _lastKeepPosition;
         _keepPosition.Visible = paths.Count > 1;
@@ -142,7 +145,7 @@ public sealed class MaskDialog : ThemedForm
         };
         _folder.Text = _lastFolder;
         (_lastToCustomFolder && _lastFolder.Length > 0 ? _toCustom : _toSame).Checked = true;
-        _outputHint.Text = "「保存」は「元の名前_mosaic」（ぼかしは _blur）で保存します（同名があれば (2) などを付けます）。" +
+        _outputHint.Text = "「保存」は「元の名前_mosaic」（ぼかしは _blur、ボックスぼかしは _boxblur、塗りつぶしは _fill）で保存します（同名があれば (2) などを付けます）。" +
                            "「上書き保存」は元のファイルを置き換えます（元には戻せません。HEIC・RAW など書き出せない形式やアニメーションは上書きしません）";
         _outputHint.ForeColor = Theme.Current.TextMuted;
         UpdateLevelText();
@@ -165,7 +168,8 @@ public sealed class MaskDialog : ThemedForm
         };
     }
 
-    private MaskEffect CurrentEffect => _blur.Checked ? MaskEffect.Blur : MaskEffect.Mosaic;
+    private MaskEffect CurrentEffect =>
+        _blur.Checked ? MaskEffect.Blur : _boxBlur.Checked ? MaskEffect.BoxBlur : _fill.Checked ? MaskEffect.Fill : MaskEffect.Mosaic;
 
     /// <summary>これから作る範囲の形（作った範囲の形は変えない）</summary>
     private MaskShape CurrentShape => _shapeEllipse.Checked ? MaskShape.Ellipse : _shapeFree.Checked ? MaskShape.Freehand : MaskShape.Rectangle;
@@ -185,8 +189,9 @@ public sealed class MaskDialog : ThemedForm
         side.Controls.Add(shapeBox);
         _toolTip.SetToolTip(_shapeFree, "隠したい所のまわりをドラッグでなぞると、その形の範囲になります（離すと始点と終点をつなぎます）");
 
-        var effectRow = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
-        effectRow.Controls.AddRange(new Control[] { _mosaic, _blur });
+        var effectRow = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false, Margin = Padding.Empty };
+        effectRow.Controls.AddRange(new Control[] { _mosaic, _blur, _boxBlur, _fill });
+        _toolTip.SetToolTip(_fill, "範囲を黒一色で塗ります。文字や番号を確実に読めなくしたいとき向けです");
         var effectStack = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false, Dock = DockStyle.Fill };
         effectStack.Controls.AddRange(new Control[] { effectRow, _levelText, _level });
         var effectBox = new GroupBox { Text = "かけ方", AutoSize = true, Width = 210, Padding = new Padding(8) };
@@ -235,6 +240,13 @@ public sealed class MaskDialog : ThemedForm
 
     private void UpdateLevelText()
     {
+        // 塗りつぶしは強さを使わない
+        _level.Enabled = CurrentEffect != MaskEffect.Fill;
+        if (!_level.Enabled)
+        {
+            _levelText.Text = "強さ: （塗りつぶしでは使いません）";
+            return;
+        }
         string size = _image == null ? "" : CurrentEffect == MaskEffect.Mosaic
             ? $"（1 マス {Masker.EffectSize(_image.Width, _image.Height, _level.Value)} px）"
             : "";

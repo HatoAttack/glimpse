@@ -253,6 +253,22 @@ static class EditingTests
             var inside = img[5, 5];
             check(inside.R is > 60 and < 200 && img[35, 35] == Red && img[30, 31] == Blue, $"自由な形: 形の中だけ混ざり、外は変えない（{inside}）");
         }
+        // ボックスぼかし・塗りつぶし: 形の中だけ変え、外は変えない（塗りつぶしは黒一色）
+        using (var img = Checker())
+        {
+            Masker.Apply(img, new[] { ellipse }, MaskEffect.BoxBlur, 8);
+            var mid = img[20, 20];
+            check(mid.R is > 60 and < 200 && img[0, 0] == Red, $"ボックスぼかし: 円の中だけ混ざる（{mid}）");
+        }
+        using (var img = Checker())
+        {
+            var black = new Rgba32(0, 0, 0);
+            Masker.Apply(img, new[] { triangle!, MaskRegion.Rect(30, 30, 40, 40) }, MaskEffect.Fill, 0);
+            check(img[5, 5] == black && img[35, 35] == black && img[29, 31] == Red && img[25, 25] == Red,
+                "塗りつぶし: 自由な形・四角の中を黒で塗り、外は変えない（強さは使わない）");
+        }
+        check(Masker.OutputPathFor(P("mask.png"), dir, MaskEffect.BoxBlur) == P("mask_boxblur.png")
+              && Masker.OutputPathFor(P("mask.png"), dir, MaskEffect.Fill) == P("mask_fill.png"), "保存先の名前は _boxblur / _fill");
         var moved = Masker.CarryRegions(new[] { triangle! }, 40, 40, 80, 80)[0];
         check(moved.Contains(10, 10) && !moved.Contains(70, 70), "自由な形: 大きさの違う画像へ引き継ぐと形ごと伸びる");
 
