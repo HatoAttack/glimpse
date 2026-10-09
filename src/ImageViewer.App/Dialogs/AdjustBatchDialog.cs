@@ -38,14 +38,7 @@ public sealed class AdjustBatchDialog : ThemedForm
     private readonly System.Windows.Forms.Timer _render = new() { Interval = 15 };
 
     // 出力先
-    private readonly RadioButton _toSubfolder = new() { Text = "中のフォルダ:", AutoSize = true };
-    private readonly TextBox _subfolderName = new() { Width = 120 };
-    private readonly RadioButton _toSame = new() { Text = "同じフォルダ", AutoSize = true };
-    private readonly RadioButton _toCustom = new() { Text = "指定:", AutoSize = true };
-    private readonly TextBox _customFolder = new() { Width = 250 };
-    private readonly Button _browse = new() { Text = "参照...", AutoSize = true };
-    private readonly RadioButton _skipExisting = new() { Text = "同名のファイルがあれば飛ばす", AutoSize = true };
-    private readonly RadioButton _overwrite = new() { Text = "上書きする", AutoSize = true };
+    private readonly OutputDestinationPicker _output = new();
 
     private readonly ListView _list = new()
     {
@@ -128,18 +121,9 @@ public sealed class AdjustBatchDialog : ThemedForm
             RebuildAdjusted();
         };
 
-        _browse.Click += (_, _) =>
-        {
-            using var dlg = new FolderBrowserDialog { Description = "出力先のフォルダ", InitialDirectory = _customFolder.Text };
-            if (dlg.ShowDialog(this) != DialogResult.OK) return;
-            _customFolder.Text = dlg.SelectedPath;
-            _toCustom.Checked = true;
-        };
-        _subfolderName.Enter += (_, _) => _toSubfolder.Checked = true;
-        _customFolder.Enter += (_, _) => _toCustom.Checked = true;
         var outputGroup = Group("出力先",
-            Flow(_toSubfolder, _subfolderName, _toSame, _toCustom, _customFolder, _browse),
-            Flow(_skipExisting, _overwrite, Hint("形式は元のまま。HEIC・RAW など書き出せない形式は同じ名前の JPG に")));
+            Flow(_output.FolderRow),
+            Flow(_output.ExistingRow.Append(Hint("形式は元のまま。HEIC・RAW など書き出せない形式は同じ名前の JPG に")).ToArray()));
         outputGroup.Dock = DockStyle.Bottom;
 
         _list.Columns.Add("元の画像", 260);
@@ -175,10 +159,7 @@ public sealed class AdjustBatchDialog : ThemedForm
         _inputs = new Control[] { side, outputGroup, _prev, _next };
 
         Apply(initial);
-        foreach (var rb in new[] { _toSubfolder, _toSame, _toCustom, _skipExisting, _overwrite })
-            rb.CheckedChanged += (_, _) => { if (rb.Checked) UpdatePlan(); };
-        foreach (var t in new[] { _subfolderName, _customFolder })
-            t.TextChanged += (_, _) => UpdatePlan();
+        _output.Changed += UpdatePlan;
         UpdatePlan();
 
         Shown += async (_, _) => await ShowIndexAsync(0);
@@ -198,24 +179,16 @@ public sealed class AdjustBatchDialog : ThemedForm
     {
         _autoLevels.Checked = o.AutoLevels;
         _panel.LevelsEnabled = !o.AutoLevels;
-        _subfolderName.Text = string.IsNullOrWhiteSpace(o.SubfolderName) ? "adjusted" : o.SubfolderName;
-        _customFolder.Text = o.CustomFolder ?? "";
-        (o.OutputMode switch
-        {
-            OutputFolderMode.Same => _toSame,
-            OutputFolderMode.Custom when !string.IsNullOrWhiteSpace(o.CustomFolder) => _toCustom,
-            _ => _toSubfolder,
-        }).Checked = true;
-        (o.Overwrite ? _overwrite : _skipExisting).Checked = true;
+        _output.Show(o.Output(), "adjusted");
     }
 
     private AdjustBatchOptions CurrentOptions() => new()
     {
         AutoLevels = _autoLevels.Checked,
-        OutputMode = _toSame.Checked ? OutputFolderMode.Same : _toCustom.Checked ? OutputFolderMode.Custom : OutputFolderMode.Subfolder,
-        SubfolderName = _subfolderName.Text.Trim(),
-        CustomFolder = string.IsNullOrWhiteSpace(_customFolder.Text) ? null : _customFolder.Text.Trim(),
-        Overwrite = _overwrite.Checked,
+        OutputMode = _output.Current.Mode,
+        SubfolderName = _output.Current.SubfolderName,
+        CustomFolder = _output.Current.CustomFolder,
+        Overwrite = _output.Current.Overwrite,
     };
 
     /// <summary>補正の値（1 枚ずつ自動で決めるときは、レベル補正を既定にしておく。実際の値は画像ごとに決まる）</summary>

@@ -37,14 +37,7 @@ public sealed class ResizeDialog : ThemedForm
     private readonly CheckBox _lowercase = new() { Text = "すべて小文字にする（拡張子も）", AutoSize = true };
 
     // 出力先
-    private readonly RadioButton _toSubfolder = new() { Text = "中のフォルダ:", AutoSize = true };
-    private readonly TextBox _subfolderName = new() { Width = 120 };
-    private readonly RadioButton _toSame = new() { Text = "同じフォルダ", AutoSize = true };
-    private readonly RadioButton _toCustom = new() { Text = "指定:", AutoSize = true };
-    private readonly TextBox _customFolder = new() { Width = 250 };
-    private readonly Button _browse = new() { Text = "参照...", AutoSize = true };
-    private readonly RadioButton _skipExisting = new() { Text = "同名のファイルがあれば飛ばす", AutoSize = true };
-    private readonly RadioButton _overwrite = new() { Text = "上書きする", AutoSize = true };
+    private readonly OutputDestinationPicker _output = new();
 
     private readonly ListView _preview = new()
     {
@@ -112,18 +105,9 @@ public sealed class ResizeDialog : ThemedForm
             Flow(Caption("置換前"), _search, Caption("→ 置換後"), _replace, _useSuffix, _suffix, Hint("例: _s → photo_s.jpg")),
             Flow(_lowercase));
 
-        _browse.Click += (_, _) =>
-        {
-            using var dlg = new FolderBrowserDialog { Description = "出力先のフォルダ", InitialDirectory = _customFolder.Text };
-            if (dlg.ShowDialog(this) != DialogResult.OK) return;
-            _customFolder.Text = dlg.SelectedPath;
-            _toCustom.Checked = true;
-        };
-        _subfolderName.Enter += (_, _) => _toSubfolder.Checked = true;
-        _customFolder.Enter += (_, _) => _toCustom.Checked = true;
         var outputGroup = Group("出力先",
-            Flow(_toSubfolder, _subfolderName, _toSame, _toCustom, _customFolder, _browse),
-            Flow(_skipExisting, _overwrite));
+            Flow(_output.FolderRow),
+            Flow(_output.ExistingRow));
 
         _preview.Columns.Add("元の画像", 230);
         _preview.Columns.Add("出力", 230);
@@ -153,10 +137,11 @@ public sealed class ResizeDialog : ThemedForm
 
         Apply(initial);
         foreach (var rb in _sizeRadios.Select(r => r.Radio).Concat(_formatRadios.Select(r => r.Radio)).Concat(_algorithmRadios.Select(r => r.Radio))
-                     .Concat(new[] { _customSize, _exactSize, _keepSize, _toSubfolder, _toSame, _toCustom, _skipExisting, _overwrite }))
+                     .Concat(new[] { _customSize, _exactSize, _keepSize }))
             rb.CheckedChanged += (_, _) => { if (rb.Checked) UpdatePreview(); };
-        foreach (var t in new[] { _search, _replace, _suffix, _subfolderName, _customFolder })
+        foreach (var t in new[] { _search, _replace, _suffix })
             t.TextChanged += (_, _) => UpdatePreview();
+        _output.Changed += () => UpdatePreview();
         _lowercase.CheckedChanged += (_, _) => UpdatePreview();
         // オフにしても入力した文字列は消さずに残す（オンに戻せばまた付ける）
         _useSuffix.CheckedChanged += (_, _) =>
@@ -199,15 +184,7 @@ public sealed class ResizeDialog : ThemedForm
         _useSuffix.Checked = o.UseSuffix;
         _suffix.Enabled = o.UseSuffix;
         _lowercase.Checked = o.Lowercase;
-        _subfolderName.Text = string.IsNullOrWhiteSpace(o.SubfolderName) ? "resized" : o.SubfolderName;
-        _customFolder.Text = o.CustomFolder ?? "";
-        (o.OutputMode switch
-        {
-            OutputFolderMode.Same => _toSame,
-            OutputFolderMode.Custom when !string.IsNullOrWhiteSpace(o.CustomFolder) => _toCustom,
-            _ => _toSubfolder,
-        }).Checked = true;
-        (o.Overwrite ? _overwrite : _skipExisting).Checked = true;
+        _output.Show(o.Output(), "resized");
     }
 
     private ConvertOptions CurrentOptions() => new()
@@ -227,10 +204,10 @@ public sealed class ResizeDialog : ThemedForm
         Suffix = _suffix.Text,
         UseSuffix = _useSuffix.Checked,
         Lowercase = _lowercase.Checked,
-        OutputMode = _toSame.Checked ? OutputFolderMode.Same : _toCustom.Checked ? OutputFolderMode.Custom : OutputFolderMode.Subfolder,
-        SubfolderName = _subfolderName.Text.Trim(),
-        CustomFolder = string.IsNullOrWhiteSpace(_customFolder.Text) ? null : _customFolder.Text.Trim(),
-        Overwrite = _overwrite.Checked,
+        OutputMode = _output.Current.Mode,
+        SubfolderName = _output.Current.SubfolderName,
+        CustomFolder = _output.Current.CustomFolder,
+        Overwrite = _output.Current.Overwrite,
     };
 
     /// <summary>出力先の指定の誤り（無ければ null）</summary>
