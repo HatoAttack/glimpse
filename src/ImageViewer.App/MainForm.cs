@@ -427,7 +427,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         }
         if (images.Count != 1)
         {
-            SetSelectionText(images.Count == 0 ? "" : $"{images.Count} 枚 ・ 合計 {FormatBytes(images.Sum(f => f.Length))}");
+            SetSelectionText(images.Count == 0 ? "" : $"{images.Count} 枚 ・ 合計 {DetailsPanel.FormatBytes(images.Sum(f => f.Length))}");
             foreach (var panel in panels)
             {
                 if (images.Count == 0) panel.ShowNothing();
@@ -437,7 +437,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         }
 
         var file = images[0];
-        string rest = $"{FormatBytes(file.Length)} ・ {file.LastWriteTime:yyyy/MM/dd HH:mm}";
+        string rest = $"{DetailsPanel.FormatBytes(file.Length)} ・ {file.LastWriteTime:yyyy/MM/dd HH:mm}";
         var key = ThumbnailKey.From(file);
         if (!_infoCache.TryGetValue(key, out var info))
         {
@@ -467,14 +467,6 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _footer.SelectionInfo = _inspectorItem.Checked ? "" : text;
     }
 
-
-    private static string FormatBytes(long bytes) => bytes switch
-    {
-        < 1024 => $"{bytes} B",
-        < 1024 * 1024 => $"{bytes / 1024.0:0.#} KB",
-        < 1024L * 1024 * 1024 => $"{bytes / 1024.0 / 1024:0.#} MB",
-        _ => $"{bytes / 1024.0 / 1024 / 1024:0.##} GB",
-    };
 
     // ---- 新しいフォルダー ----
 

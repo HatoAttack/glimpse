@@ -238,7 +238,7 @@ public sealed class QuickLookView : Control
         bool reload = false;
         foreach (var f in items)
         {
-            if (!old.TryGetValue(f.FullName, out var before) || !Modified(before, f)) continue;
+            if (!old.TryGetValue(f.FullName, out var before) || !ViewerParts.Modified(before, f)) continue;
             _failed.Remove(f.FullName);
             if (_cache.Remove(f.FullName, out var stale)) stale.Dispose();
             if (string.Equals(f.FullName, current, StringComparison.OrdinalIgnoreCase))
@@ -258,18 +258,6 @@ public sealed class QuickLookView : Control
 
         static bool SameFolder(string a, string b) =>
             string.Equals(Path.GetDirectoryName(a), Path.GetDirectoryName(b), StringComparison.OrdinalIgnoreCase);
-
-        static bool Modified(ImageFile before, ImageFile after)
-        {
-            try
-            {
-                return before.LastWriteTimeUtc != after.LastWriteTimeUtc || before.Length != after.Length || before.Version != after.Version;
-            }
-            catch (IOException)
-            {
-                return true;
-            }
-        }
     }
 
     private void ShowIndex(int index)
@@ -369,7 +357,7 @@ public sealed class QuickLookView : Control
         Rectangle imageRect = Rectangle.Empty;
         if (ShownBitmap(file) is Bitmap bmp)
         {
-            imageRect = Fit(bmp.Size, area, allowUpscale: false);
+            imageRect = ViewerParts.Fit(bmp.Size, area, allowUpscale: false);
             // フィルムストリップが出てくる間は速さを優先する（止まったら高い品質で描き直す）
             g.InterpolationMode = _filmSliding ? InterpolationMode.Low
                 : imageRect.Width < bmp.Width ? InterpolationMode.HighQualityBicubic : InterpolationMode.NearestNeighbor;
@@ -384,13 +372,13 @@ public sealed class QuickLookView : Control
         else if (PlaceholderProvider?.Invoke(file) is Bitmap thumb)
         {
             // 読み込み中: サムネイルを引き伸ばして先に見せる
-            imageRect = Fit(thumb.Size, area, allowUpscale: true);
+            imageRect = ViewerParts.Fit(thumb.Size, area, allowUpscale: true);
             g.InterpolationMode = InterpolationMode.Bilinear;
             g.DrawImage(thumb, imageRect);
         }
         _lastImageRect = imageRect;
 
-        if (IsMarked?.Invoke(_index) == true && !imageRect.IsEmpty) DrawCheck(g, imageRect);
+        if (IsMarked?.Invoke(_index) == true && !imageRect.IsEmpty) ViewerParts.DrawCheck(g, imageRect, LogicalToDeviceUnits(34));
         if (_filmstrip) PaintFilmstrip(g);
 
         // 上: ファイル名と位置、チェック数
@@ -405,7 +393,7 @@ public sealed class QuickLookView : Control
         // 下: 操作の案内
         var bottom = new Rectangle(16, ClientSize.Height - bar, ContentWidth - 32, bar);
         string actualSize = KeyFree(ActualSizeKey) ? "    Z 100%" : "";
-        TextRenderer.DrawText(g, $"← → 前後    {KeyName(MarkKey)} チェック    {KeyName(MarkNextKey)} チェックして次へ{actualSize}{AnimationGuide}{AdjustGuide}    I 詳細    Space / Esc 閉じる",
+        TextRenderer.DrawText(g, $"← → 前後    {ViewerParts.KeyName(MarkKey)} チェック    {ViewerParts.KeyName(MarkNextKey)} チェックして次へ{actualSize}{AnimationGuide}{AdjustGuide}    I 詳細    Space / Esc 閉じる",
             Font, bottom, Color.Gray, TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter | TextFormatFlags.NoPrefix);
 
         if (_notice != null && !imageRect.IsEmpty) PaintNotice(g, imageRect);
@@ -433,41 +421,9 @@ public sealed class QuickLookView : Control
     private (Image Image, Rectangle Rect)? CurrentImage()
     {
         var file = _items[_index];
-        if (ShownBitmap(file) is Bitmap bmp) return (bmp, Fit(bmp.Size, ImageArea, allowUpscale: false));
-        if (PlaceholderProvider?.Invoke(file) is Bitmap thumb) return (thumb, Fit(thumb.Size, ImageArea, allowUpscale: true));
+        if (ShownBitmap(file) is Bitmap bmp) return (bmp, ViewerParts.Fit(bmp.Size, ImageArea, allowUpscale: false));
+        if (PlaceholderProvider?.Invoke(file) is Bitmap thumb) return (thumb, ViewerParts.Fit(thumb.Size, ImageArea, allowUpscale: true));
         return null;
-    }
-
-    private static string KeyName(Keys key) => key switch
-    {
-        Keys.Oem5 => "¥",
-        Keys.Oem7 => "^",
-        _ => new KeysConverter().ConvertToString(key) ?? key.ToString(),
-    };
-
-    private static Rectangle Fit(Size image, Rectangle area, bool allowUpscale)
-    {
-        double scale = Math.Min((double)area.Width / image.Width, (double)area.Height / image.Height);
-        if (!allowUpscale) scale = Math.Min(1.0, scale);
-        int w = Math.Max(1, (int)(image.Width * scale)), h = Math.Max(1, (int)(image.Height * scale));
-        return new Rectangle(area.X + (area.Width - w) / 2, area.Y + (area.Height - h) / 2, w, h);
-    }
-
-    private void DrawCheck(Graphics g, Rectangle image)
-    {
-        int d = LogicalToDeviceUnits(34);
-        var r = new Rectangle(image.X + 8, image.Y + 8, d, d);
-        g.SmoothingMode = SmoothingMode.AntiAlias;
-        using (var fill = new SolidBrush(Color.FromArgb(232, 112, 0))) g.FillEllipse(fill, r);
-        using (var ring = new Pen(Color.White, 2.5f)) g.DrawEllipse(ring, r);
-        using (var tick = new Pen(Color.White, 3.5f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
-            g.DrawLines(tick, new[]
-            {
-                new PointF(r.X + d * 0.27f, r.Y + d * 0.52f),
-                new PointF(r.X + d * 0.44f, r.Y + d * 0.68f),
-                new PointF(r.X + d * 0.74f, r.Y + d * 0.34f),
-            });
-        g.SmoothingMode = SmoothingMode.None;
     }
 
     // ---- 開く / 閉じる動き ----
@@ -825,7 +781,7 @@ public sealed class QuickLookView : Control
             if (!cell.IntersectsWith(strip)) continue;
             if (PlaceholderProvider?.Invoke(_items[i]) is Bitmap thumb)
             {
-                var r = Fit(thumb.Size, cell, allowUpscale: true);
+                var r = ViewerParts.Fit(thumb.Size, cell, allowUpscale: true);
                 g.DrawImage(thumb, r);
                 if (i != _index)
                     using (var dim = new SolidBrush(Color.FromArgb(90, 0, 0, 0))) g.FillRectangle(dim, r); // 今の画像以外は少し暗く
