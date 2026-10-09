@@ -6,7 +6,6 @@
 // - 「保存」は元の画像を残して別の名前で、「上書き保存」は元の画像を置き換える（確かめない。アニメ・書き出せない形式などは上書きしない）
 // - 表示は描いた後の見た目（縮小した画像に同じ処理で描く）
 using ImageViewer.Core.Editing;
-using ImageViewer.Core.Imaging;
 using ImageViewer.Core.Thumbnails;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
@@ -28,18 +27,11 @@ public sealed class AnnotateDialog : ThemedForm
     private static bool _lastToCustomFolder;
     private static string _lastFolder = "";
 
-    private readonly IReadOnlyList<string> _paths;
-    private int _index = -1;
-    private SixLabors.ImageSharp.Image<Rgba32>? _image; // 回転補正済みの原寸（保存元）
+    private readonly ImageStepper _stepper;  // 画像送りと、表示中の画像（原寸。保存元）
+    private readonly EditSavePanel _saver;   // 保存先・保存のボタン・保存中の制御
+    private readonly EditCanvas _canvas = new();
     private SixLabors.ImageSharp.Image<Rgba32>? _small; // キャンバスの大きさに縮小した、描く前の画像
     private Bitmap? _display;                           // _small に描いた表示用
-    private CancellationTokenSource? _loadCts;
-    private bool _busy;
-    // 画像を読み込み中（_index はもう次の画像なのに _image はまだ前の画像）。この間は保存しない（前の画像の画素で上書きしないように）
-    private bool _loading;
-
-    // 画像 → キャンバスの変換
-    private double _scale = 1, _offX, _offY;
 
     // 描いたもの（画像座標）。後のものほど上（クリックで先に当たる）
     private List<Annotation> _items => _edits.Current;
@@ -54,10 +46,6 @@ public sealed class AnnotateDialog : ThemedForm
     private Color _color = _lastColor;
     private bool _syncing;                 // 選んだものの見た目を部品へ写している途中（変更として扱わない）
 
-    private readonly CanvasPanel _canvas = new() { Dock = DockStyle.Fill, BackColor = Color.FromArgb(32, 32, 32), Cursor = Cursors.Cross };
-    private readonly Label _name = new() { AutoSize = true, Margin = new Padding(8, 8, 3, 3) };
-    private readonly Button _prev = new() { Text = "◀ 前", AutoSize = true };
-    private readonly Button _next = new() { Text = "次 ▶", AutoSize = true };
     private readonly RadioButton _toolFrame = new() { Text = "四角の枠", AutoSize = true };
     private readonly RadioButton _toolArrow = new() { Text = "矢印", AutoSize = true };
     private readonly SwatchPanel _swatch = new() { Width = 40, Height = 24, Margin = new Padding(3, 3, 6, 3), Cursor = Cursors.Hand };
@@ -72,25 +60,10 @@ public sealed class AnnotateDialog : ThemedForm
     private readonly Button _removeSelected = new() { Text = "選んだものを消す (Del)", Width = 200, Height = 26 };
     private readonly Button _removeAll = new() { Text = "すべて消す", Width = 200, Height = 26 };
     private readonly Label _selectionInfo = new() { AutoSize = true, MaximumSize = new Size(210, 0), Margin = new Padding(3, 8, 3, 3) };
-    private readonly RadioButton _toSame = new() { Text = "元と同じフォルダ", AutoSize = true };
-    private readonly RadioButton _toCustom = new() { Text = "指定のフォルダ", AutoSize = true };
-    private readonly TextBox _folder = new() { Width = 190 };
-    private readonly Label _outputHint = new() { AutoSize = true, MaximumSize = new Size(190, 0) };
-    private readonly Button _save = new() { Text = "保存", Width = 200, Height = 30 };
-    private readonly Button _saveOver = new() { Text = "上書き保存", Width = 200, Height = 30 };
-    private readonly Button _saveNext = new() { Text = "保存して次へ (Enter)", Width = 200, Height = 30 };
-    private readonly Button _saveNextOver = new() { Text = "上書きして次へ (Shift+Enter)", Width = 200, Height = 30 };
-    private readonly Label _status = new() { AutoSize = true, MaximumSize = new Size(210, 0), Margin = new Padding(3, 8, 3, 3) };
-    private readonly System.Windows.Forms.Timer _resizeDelay = new() { Interval = 80 };
     private readonly ToolTip _toolTip = new();
 
     /// <summary>保存したファイルの数（一覧の読み直しの判断用）</summary>
-    public int SavedCount { get; private set; }
-
-    private sealed class CanvasPanel : Panel
-    {
-        public CanvasPanel() => SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
-    }
+    public int SavedCount => _saver.SavedCount;
 
     /// <summary>今の色の見本（テーマの配色に塗り替えられないように自分で描く）</summary>
     private sealed class SwatchPanel : Control
@@ -115,32 +88,21 @@ public sealed class AnnotateDialog : ThemedForm
 
     public AnnotateDialog(IReadOnlyList<string> paths, int startIndex = 0)
     {
-        _paths = paths;
-        Text = paths.Count == 1 ? "枠・矢印" : $"枠・矢印（{paths.Count} 枚）";
-        Font = new Font("Yu Gothic UI", 9F);
-        StartPosition = FormStartPosition.CenterParent;
-        ShowInTaskbar = false;
-        KeyPreview = true;
-        var screen = Screen.FromPoint(Cursor.Position).WorkingArea;
-        Size = new Size(Math.Min(1200, screen.Width * 9 / 10), Math.Min(860, screen.Height * 9 / 10));
-        MinimumSize = new Size(700, 560);
-
-        var top = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, Padding = new Padding(6, 4, 6, 0) };
-        _prev.Click += async (_, _) => await StepAsync(-1);
-        _next.Click += async (_, _) => await StepAsync(1);
-        _prev.Enabled = _next.Enabled = paths.Count > 1;
-        top.Controls.AddRange(new Control[] { _prev, _next, _name });
+        _stepper = new ImageStepper(paths);
+        _stepper.StepRequested += async delta => await StepAsync(delta);
+        _saver = new EditSavePanel(this, paths.Count,
+            "「保存」は「元の名前_mark」で保存します（同名があれば (2) などを付けます）。" +
+            "「上書き保存」は元のファイルを置き換えます（元には戻せません。HEIC・RAW など書き出せない形式やアニメーションは上書きしません）",
+            _lastFolder, _lastToCustomFolder, withSaveAll: false);
+        _saver.SaveRequested += async (advance, overwrite) => await SaveCurrentAsync(advance, overwrite);
+        _saver.BusyChanged += UpdateButtons;
 
         _canvas.Paint += Canvas_Paint;
         _canvas.MouseDown += Canvas_MouseDown;
         _canvas.MouseMove += Canvas_MouseMove;
         _canvas.MouseUp += Canvas_MouseUp;
-        _canvas.Resize += (_, _) => { _resizeDelay.Stop(); _resizeDelay.Start(); };
-        _resizeDelay.Tick += (_, _) => { _resizeDelay.Stop(); RebuildDisplay(); };
-
-        Controls.Add(_canvas);
-        Controls.Add(BuildSidePanel());
-        Controls.Add(top);
+        _canvas.Settled += (_, _) => RebuildDisplay();
+        EditDialogShell.Setup(this, "枠・矢印", _stepper, _canvas, BuildSidePanel(), new Size(700, 560));
 
         _syncing = true;
         (_lastKind == AnnotationKind.Arrow ? _toolArrow : _toolFrame).Checked = true;
@@ -157,19 +119,13 @@ public sealed class AnnotateDialog : ThemedForm
         _shadow.CheckedChanged += (_, _) => OnStyleChanged();
         _swatch.Click += (_, _) => PickColor();
         _pickColor.Click += (_, _) => PickColor();
-        _folder.Text = _lastFolder;
-        (_lastToCustomFolder && _lastFolder.Length > 0 ? _toCustom : _toSame).Checked = true;
-        _outputHint.Text = "「保存」は「元の名前_mark」で保存します（同名があれば (2) などを付けます）。" +
-                           "「上書き保存」は元のファイルを置き換えます（元には戻せません。HEIC・RAW など書き出せない形式やアニメーションは上書きしません）";
-        _outputHint.ForeColor = Theme.Current.TextMuted;
         UpdateStyleControls();
         UpdateButtons();
 
         Shown += async (_, _) => await ShowIndexAsync(Math.Clamp(startIndex, 0, paths.Count - 1));
         FormClosed += (_, _) =>
         {
-            _loadCts?.Cancel();
-            _image?.Dispose();
+            _stepper.Dispose();
             _small?.Dispose();
             _display?.Dispose();
             _toolTip.Dispose();
@@ -182,8 +138,8 @@ public sealed class AnnotateDialog : ThemedForm
             }
             _lastHead = _head.Value;
             _lastShadow = _shadow.Checked;
-            _lastFolder = _folder.Text.Trim();
-            _lastToCustomFolder = _toCustom.Checked;
+            _lastFolder = _saver.FolderText;
+            _lastToCustomFolder = _saver.ToCustom;
         };
     }
 
@@ -195,26 +151,13 @@ public sealed class AnnotateDialog : ThemedForm
 
     private Control BuildSidePanel()
     {
-        var side = new FlowLayoutPanel
-        {
-            Dock = DockStyle.Right, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true,
-            Width = 250, Padding = new Padding(6, 4, 6, 4), // 縦のスクロールバーが出ても横にはみ出さない幅
-        };
-
-        var toolStack = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Dock = DockStyle.Fill };
-        toolStack.Controls.AddRange(new Control[] { _toolFrame, _toolArrow });
-        var toolBox = new GroupBox { Text = "描くもの", AutoSize = true, Width = 210, Padding = new Padding(8) };
-        toolBox.Controls.Add(toolStack);
-        side.Controls.Add(toolBox);
+        var side = EditDialogShell.SidePanel(250); // 縦のスクロールバーが出ても横にはみ出さない幅
+        side.Controls.Add(EditDialogShell.Group("描くもの", vertical: false, _toolFrame, _toolArrow));
         _toolTip.SetToolTip(_toolArrow, "指したい所へ向かってドラッグします（離した所が先端）。\nShift を押しながらドラッグすると、向きを 45° ごとにそろえます");
 
         var colorRow = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
         colorRow.Controls.AddRange(new Control[] { _swatch, _pickColor });
-        var styleStack = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false, Dock = DockStyle.Fill };
-        styleStack.Controls.AddRange(new Control[] { colorRow, _thicknessText, _thickness, _radiusText, _radius, _headText, _head, _shadow });
-        var styleBox = new GroupBox { Text = "見た目", AutoSize = true, Width = 210, Padding = new Padding(8) };
-        styleBox.Controls.Add(styleStack);
-        side.Controls.Add(styleBox);
+        side.Controls.Add(EditDialogShell.Group("見た目", vertical: true, colorRow, _thicknessText, _thickness, _radiusText, _radius, _headText, _head, _shadow));
         _toolTip.SetToolTip(_radius, "四角の枠の角の丸み。枠の短い辺の半分より大きくはなりません");
         _toolTip.SetToolTip(_head, "矢印の先端の大きさ（線の太さの何倍か）");
 
@@ -222,26 +165,8 @@ public sealed class AnnotateDialog : ThemedForm
         _removeAll.Click += (_, _) => RemoveAll();
         side.Controls.AddRange(new Control[] { _selectionInfo, _removeSelected, _removeAll });
 
-        var browse = new Button { Text = "参照...", AutoSize = true };
-        browse.Click += (_, _) =>
-        {
-            using var dlg = new FolderBrowserDialog { Description = "保存先のフォルダ", InitialDirectory = _folder.Text };
-            if (dlg.ShowDialog(this) != DialogResult.OK) return;
-            _folder.Text = dlg.SelectedPath;
-            _toCustom.Checked = true;
-        };
-        _folder.Enter += (_, _) => _toCustom.Checked = true;
-        var outStack = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false, Dock = DockStyle.Fill };
-        outStack.Controls.AddRange(new Control[] { _toSame, _toCustom, _folder, browse, _outputHint });
-        var outBox = new GroupBox { Text = "保存先", AutoSize = true, Width = 210, Padding = new Padding(8), Margin = new Padding(3, 8, 3, 3) };
-        outBox.Controls.Add(outStack);
-        side.Controls.Add(outBox);
-
-        _save.Click += async (_, _) => await SaveCurrentAsync(advance: false, overwrite: false);
-        _saveOver.Click += async (_, _) => await SaveCurrentAsync(advance: false, overwrite: true);
-        _saveNext.Click += async (_, _) => await SaveCurrentAsync(advance: true, overwrite: false);
-        _saveNextOver.Click += async (_, _) => await SaveCurrentAsync(advance: true, overwrite: true);
-        side.Controls.AddRange(new Control[] { _save, _saveOver, _saveNext, _saveNextOver, _status });
+        side.Controls.Add(_saver.FolderBox);
+        side.Controls.AddRange(_saver.Buttons);
         return side;
     }
 
@@ -267,7 +192,7 @@ public sealed class AnnotateDialog : ThemedForm
     private void OnStyleChanged()
     {
         UpdateStyleControls();
-        if (_syncing || _busy || _selected < 0 || _selected >= _items.Count) return;
+        if (_syncing || _saver.Busy || _selected < 0 || _selected >= _items.Count) return;
         var a = _items[_selected];
         _items[_selected] = NewItem(a.Kind, a.X0, a.Y0, a.X1, a.Y1);
         RenderPreview();
@@ -304,10 +229,10 @@ public sealed class AnnotateDialog : ThemedForm
     {
         switch (keyData)
         {
-            case Keys.Enter when !_busy && !(ActiveControl is TextBox or NumericUpDown):
+            case Keys.Enter when !_saver.Busy && !(ActiveControl is TextBox or NumericUpDown):
                 _ = SaveCurrentAsync(advance: true, overwrite: false);
                 return true;
-            case Keys.Shift | Keys.Enter when !_busy && !(ActiveControl is TextBox or NumericUpDown):
+            case Keys.Shift | Keys.Enter when !_saver.Busy && !(ActiveControl is TextBox or NumericUpDown):
                 _ = SaveCurrentAsync(advance: true, overwrite: true);
                 return true;
             case Keys.Delete or Keys.Back when !(ActiveControl is TextBox):
@@ -330,54 +255,26 @@ public sealed class AnnotateDialog : ThemedForm
 
     private async Task StepAsync(int delta)
     {
-        if (_paths.Count < 2 || _busy) return;
-        await ShowIndexAsync(((_index + delta) % _paths.Count + _paths.Count) % _paths.Count);
+        if (_stepper.Count < 2 || _saver.Busy) return;
+        await ShowIndexAsync(_stepper.IndexAt(delta));
     }
 
     /// <param name="keepItems">false なら描いたものを空にする（上書きして読み直すとき。同じものを二重に描かないように）</param>
     private async Task ShowIndexAsync(int index, bool keepItems = true)
     {
-        _loadCts?.Cancel();
-        var cts = _loadCts = new CancellationTokenSource();
-        if (_index >= 0 && _image != null && !_loading) _edits.Remember(_index);
-        _index = index;
-        _loading = true;
+        if (_stepper.Ready) _edits.Remember(_stepper.Index);
         _mode = DragMode.None;
-        UpdateButtons();
-        string path = _paths[index];
-        _name.Text = $"[{index + 1}/{_paths.Count}] {Path.GetFileName(path)}  （読み込み中…）";
-        SixLabors.ImageSharp.Image<Rgba32> image;
-        try
+        var outcome = await _stepper.ShowAsync(index, UpdateButtons);
+        if (outcome == ImageStepper.Outcome.Superseded) return;
+        _selected = -1;
+        if (outcome == ImageStepper.Outcome.Failed)
         {
-            image = await Task.Run(() => ImageLoader.Load(path), cts.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            return;
-        }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
-        {
-            if (cts.IsCancellationRequested) return;
-            _loading = false;
-            _image?.Dispose();
-            _image = null;
             _edits.Set(new());
-            _selected = -1;
             RebuildDisplay();
-            _name.Text = $"[{index + 1}/{_paths.Count}] {Path.GetFileName(path)}  （読み込めません: {ex.Message}）";
             UpdateButtons();
             return;
         }
-        if (cts.IsCancellationRequested)
-        {
-            image.Dispose();
-            return;
-        }
-        _loading = false;
-        _image?.Dispose();
-        _image = image;
-        _selected = -1;
-        _name.Text = $"[{index + 1}/{_paths.Count}] {Path.GetFileName(path)}  （{image.Width} × {image.Height}）";
+        var image = _stepper.Image!;
         if (keepItems) _edits.Recall(index);
         else _edits.Discard(index);
         if (!_styleReady)
@@ -397,13 +294,11 @@ public sealed class AnnotateDialog : ThemedForm
 
     private void UpdateButtons()
     {
-        bool ready = !_busy && !_loading && _image != null;
-        _save.Enabled = _saveOver.Enabled = _saveNext.Enabled = _saveNextOver.Enabled = ready && _items.Count > 0;
-        _saveNext.Visible = _saveNextOver.Visible = _paths.Count > 1;
-        _removeSelected.Enabled = !_busy && _selected >= 0;
-        _removeAll.Enabled = !_busy && _items.Count > 0;
-        _prev.Enabled = _next.Enabled = !_busy && _paths.Count > 1;
-        _selectionInfo.Text = _image == null ? ""
+        _saver.SaveEnabled = !_saver.Busy && _stepper.Ready && _items.Count > 0;
+        _removeSelected.Enabled = !_saver.Busy && _selected >= 0;
+        _removeAll.Enabled = !_saver.Busy && _items.Count > 0;
+        _stepper.StepEnabled = !_saver.Busy;
+        _selectionInfo.Text = _stepper.Image == null ? ""
             : _items.Count == 0 ? "画像の上をドラッグして、枠や矢印を描いてください（いくつでも描けます）"
             : _selected < 0 ? $"枠・矢印 {_items.Count} 個（線の上をクリックすると選べます）"
             : _items[_selected] is { Kind: AnnotationKind.Frame } f
@@ -421,7 +316,7 @@ public sealed class AnnotateDialog : ThemedForm
 
     private void RemoveSelected()
     {
-        if (_busy || _selected < 0 || _selected >= _items.Count) return;
+        if (_saver.Busy || _selected < 0 || _selected >= _items.Count) return;
         _items.RemoveAt(_selected);
         _selected = -1;
         OnItemsChanged();
@@ -429,19 +324,11 @@ public sealed class AnnotateDialog : ThemedForm
 
     private void RemoveAll()
     {
-        if (_busy || _items.Count == 0) return;
+        if (_saver.Busy || _items.Count == 0) return;
         _items.Clear();
         _selected = -1;
         OnItemsChanged();
     }
-
-    // ---- 座標の変換 ----
-
-    private (double X, double Y) ImageToCanvas(double ix, double iy) => (_offX + ix * _scale, _offY + iy * _scale);
-    private (double X, double Y) CanvasToImage(double cx, double cy) => ((cx - _offX) / _scale, (cy - _offY) / _scale);
-    private (double X, double Y) ClampToImage((double X, double Y) p) =>
-        (Math.Clamp(p.X, 0, _image!.Width), Math.Clamp(p.Y, 0, _image.Height));
-    private int HandleRadius => Math.Max(7, 7 * DeviceDpi / 96);
 
     // ---- 描画（重い縮小は RebuildDisplay だけ。描いたものを変えたときは縮小済みの画像に描き直すだけ） ----
 
@@ -449,16 +336,12 @@ public sealed class AnnotateDialog : ThemedForm
     {
         _small?.Dispose();
         _small = null;
-        if (_image != null)
+        if (_stepper.Image != null)
         {
-            int cw = Math.Max(1, _canvas.ClientSize.Width), ch = Math.Max(1, _canvas.ClientSize.Height);
-            _scale = Math.Min((double)cw / _image.Width, (double)ch / _image.Height);
-            int dw = Math.Max(1, (int)Math.Round(_image.Width * _scale)), dh = Math.Max(1, (int)Math.Round(_image.Height * _scale));
-            _offX = (cw - dw) / 2.0;
-            _offY = (ch - dh) / 2.0;
-            _small = dw == _image.Width && dh == _image.Height
-                ? _image.Clone()
-                : _image.Clone(x => x.Resize(dw, dh, KnownResamplers.Triangle));
+            var size = _canvas.FitImage(_stepper.Image.Width, _stepper.Image.Height);
+            _small = size.Width == _stepper.Image.Width && size.Height == _stepper.Image.Height
+                ? _stepper.Image.Clone()
+                : _stepper.Image.Clone(x => x.Resize(size.Width, size.Height, KnownResamplers.Triangle));
         }
         RenderPreview();
     }
@@ -468,7 +351,7 @@ public sealed class AnnotateDialog : ThemedForm
     {
         _display?.Dispose();
         _display = null;
-        if (_small != null && _image != null)
+        if (_small != null && _stepper.Image != null)
         {
             if (_items.Count == 0)
             {
@@ -477,7 +360,7 @@ public sealed class AnnotateDialog : ThemedForm
             else
             {
                 using var preview = _small.Clone();
-                Annotator.Draw(preview, _items.Select(a => a.Scale(_scale)));
+                Annotator.Draw(preview, _items.Select(a => a.Scale(_canvas.Zoom)));
                 _display = ThumbnailGenerator.ToPArgbBitmap(preview);
             }
         }
@@ -493,19 +376,9 @@ public sealed class AnnotateDialog : ThemedForm
     {
         if (_display == null) return;
         var g = e.Graphics;
-        g.DrawImageUnscaled(_display, (int)Math.Round(_offX), (int)Math.Round(_offY));
-        if (_selected < 0 || _selected >= _items.Count) return;
-
+        _canvas.DrawDisplay(g, _display);
         // 選んだものだけ、つかむ点を出す
-        using var fill = new SolidBrush(Color.White);
-        using var border = new Pen(Color.FromArgb(0, 120, 215), 1);
-        int hs = HandleRadius - 3;
-        foreach (var (hx, hy) in HandlesOf(_items[_selected]))
-        {
-            var (cx, cy) = ImageToCanvas(hx, hy);
-            g.FillRectangle(fill, (float)cx - hs, (float)cy - hs, hs * 2, hs * 2);
-            g.DrawRectangle(border, (float)cx - hs, (float)cy - hs, hs * 2, hs * 2);
-        }
+        if (_selected >= 0 && _selected < _items.Count) _canvas.DrawHandles(g, HandlesOf(_items[_selected]));
     }
 
     // ---- マウス ----
@@ -513,7 +386,7 @@ public sealed class AnnotateDialog : ThemedForm
     /// <summary>点が線の上（少し外れていてもよい）にあるもの（上にあるものから。無ければ -1）</summary>
     private int HitItem(double ix, double iy)
     {
-        double tolerance = HandleRadius / _scale;
+        double tolerance = _canvas.HandleRadius / _canvas.Zoom;
         for (int i = _items.Count - 1; i >= 0; i--)
             if (_items[i].Distance(ix, iy) <= tolerance) return i;
         return -1;
@@ -521,9 +394,9 @@ public sealed class AnnotateDialog : ThemedForm
 
     private void Canvas_MouseDown(object? sender, MouseEventArgs e)
     {
-        if (_image == null || _busy || _loading) return;
+        if (_stepper.Image == null || _saver.Busy || _stepper.Loading) return;
         _canvas.Focus();
-        var (ix, iy) = CanvasToImage(e.X, e.Y);
+        var (ix, iy) = _canvas.CanvasToImage(e.X, e.Y);
 
         // 右クリック: それを消す
         if (e.Button == MouseButtons.Right)
@@ -542,11 +415,9 @@ public sealed class AnnotateDialog : ThemedForm
         {
             var a = _items[_selected];
             var handles = HandlesOf(a);
-            int hr = HandleRadius;
             for (int i = 0; i < handles.Length; i++)
             {
-                var (cx, cy) = ImageToCanvas(handles[i].X, handles[i].Y);
-                if (Math.Abs(e.X - cx) > hr || Math.Abs(e.Y - cy) > hr) continue;
+                if (!_canvas.HitsHandle(e.X, e.Y, handles[i])) continue;
                 _mode = DragMode.Resize;
                 _creating = false;
                 _fixed = handles[(i + handles.Length / 2) % handles.Length]; // 枠は対角、矢印は反対の端を固定
@@ -566,7 +437,7 @@ public sealed class AnnotateDialog : ThemedForm
         }
         else
         {
-            _fixed = ClampToImage((ix, iy));
+            _fixed = _canvas.ClampToImage((ix, iy));
             _items.Add(NewItem(CurrentTool, _fixed.X, _fixed.Y, _fixed.X, _fixed.Y));
             _selected = _items.Count - 1;
             _mode = DragMode.Resize;
@@ -580,7 +451,7 @@ public sealed class AnnotateDialog : ThemedForm
 
     private void Canvas_MouseMove(object? sender, MouseEventArgs e)
     {
-        if (_mode == DragMode.None || _image == null || _selected < 0) return;
+        if (_mode == DragMode.None || _stepper.Image == null || _selected < 0) return;
         if (_mode == DragMode.Move) DoMove(e);
         else DoResize(e);
         RenderPreview();
@@ -609,11 +480,11 @@ public sealed class AnnotateDialog : ThemedForm
 
     private void DoMove(MouseEventArgs e)
     {
-        var (ix, iy) = CanvasToImage(e.X, e.Y);
+        var (ix, iy) = _canvas.CanvasToImage(e.X, e.Y);
         var a = _items[_selected];
         // 画像の外へ出ない範囲で動かす
-        double dx = Math.Clamp(ix - _moveLast.X, -Math.Min(a.X0, a.X1), _image!.Width - Math.Max(a.X0, a.X1));
-        double dy = Math.Clamp(iy - _moveLast.Y, -Math.Min(a.Y0, a.Y1), _image.Height - Math.Max(a.Y0, a.Y1));
+        double dx = Math.Clamp(ix - _moveLast.X, -Math.Min(a.X0, a.X1), _stepper.Image!.Width - Math.Max(a.X0, a.X1));
+        double dy = Math.Clamp(iy - _moveLast.Y, -Math.Min(a.Y0, a.Y1), _stepper.Image.Height - Math.Max(a.Y0, a.Y1));
         _items[_selected] = a.Offset(dx, dy);
         _moveLast = (_moveLast.X + dx, _moveLast.Y + dy);
     }
@@ -622,10 +493,10 @@ public sealed class AnnotateDialog : ThemedForm
     {
         var (fx, fy) = _fixed;
         var a = _items[_selected];
-        var (mx, my) = CanvasToImage(e.X, e.Y);
+        var (mx, my) = _canvas.CanvasToImage(e.X, e.Y);
         if (a.Kind == AnnotationKind.Frame)
         {
-            (mx, my) = ClampToImage((mx, my));
+            (mx, my) = _canvas.ClampToImage((mx, my));
             double x0 = Math.Min(fx, mx), x1 = Math.Max(fx, mx), y0 = Math.Min(fy, my), y1 = Math.Max(fy, my);
             // 描いている途中は小さくてもよい（離したときに確かめる）。描いた枠を小さくしすぎることはできない
             if (_creating || (x1 - x0 >= MinSizePx && y1 - y0 >= MinSizePx)) _items[_selected] = a with { X0 = x0, Y0 = y0, X1 = x1, Y1 = y1 };
@@ -639,83 +510,46 @@ public sealed class AnnotateDialog : ThemedForm
             double angle = Math.Round(Math.Atan2(my - fy, mx - fx) / (Math.PI / 4)) * (Math.PI / 4);
             (mx, my) = (fx + Math.Cos(angle) * length, fy + Math.Sin(angle) * length);
         }
-        (mx, my) = ClampToImage((mx, my));
+        (mx, my) = _canvas.ClampToImage((mx, my));
         if (!_creating && Math.Sqrt((mx - fx) * (mx - fx) + (my - fy) * (my - fy)) < MinSizePx) return;
         _items[_selected] = _dragTip ? a with { X0 = fx, Y0 = fy, X1 = mx, Y1 = my } : a with { X0 = mx, Y0 = my, X1 = fx, Y1 = fy };
     }
 
     // ---- 保存 ----
 
-    /// <summary>保存先のフォルダ（指定のフォルダが正しくなければメッセージを出して null）</summary>
-    private string? OutputFolderFor(string source, bool overwrite)
-    {
-        if (_toSame.Checked || overwrite) return Path.GetDirectoryName(source)!;
-        string folder = _folder.Text.Trim();
-        if (folder.Length > 0 && Path.IsPathFullyQualified(folder)) return folder;
-        MessageBox.Show(this, "保存先のフォルダを C:\\… の形で指定してください。", Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
-        return null;
-    }
-
     /// <param name="overwrite">true なら元の画像を置き換える（確かめない）</param>
     private async Task SaveCurrentAsync(bool advance, bool overwrite)
     {
-        if (_busy || _loading || _image == null) return;
-        string src = _paths[_index];
+        if (_saver.Busy || !_stepper.Ready) return;
+        string src = _stepper.CurrentPath;
         var items = _items.ToList();
         if (items.Count == 0)
         {
-            _status.ForeColor = Theme.Current.TextMuted;
-            _status.Text = "枠か矢印を描いてから保存してください";
+            _saver.ShowNotice("枠か矢印を描いてから保存してください");
             return;
         }
-        if (OutputFolderFor(src, overwrite) is not string folder) return;
+        if (_saver.FolderFor(src, overwrite) is not string folder) return;
 
-        var image = _image;
-        SetBusy(true);
-        try
-        {
-            string dst = await Task.Run(() => Annotator.SaveAnnotated(image, items, src, overwrite ? src : Annotator.OutputPathFor(src, folder)));
-            SavedCount++;
-            _status.ForeColor = Theme.Current.Text;
-            _status.Text = overwrite ? $"上書きしました: {Path.GetFileName(dst)}" : $"保存しました: {Path.GetFileName(dst)}";
-            if (overwrite)
+        var image = _stepper.Image!;
+        int index = _stepper.Index;
+        bool saved = await _saver.SaveOneAsync(
+            () => Annotator.SaveAnnotated(image, items, src, overwrite ? src : Annotator.OutputPathFor(src, folder)),
+            overwrite, saved: () =>
             {
+                if (!overwrite) return;
                 // 元の画像にはもう描いてあるので、覚えているものは捨てる（戻ってきたときに二重に描かないように）
-                _edits.Discard(_index);
+                _edits.Discard(index);
                 _selected = -1;
-            }
-        }
-        catch (Exception ex) when (ex is not OutOfMemoryException)
-        {
-            _status.ForeColor = Theme.Current.Danger;
-            _status.Text = $"保存できませんでした: {ex.Message}";
-            return;
-        }
-        finally
-        {
-            SetBusy(false);
-        }
+            });
+        if (!saved) return;
         if (advance)
         {
-            if (_index + 1 < _paths.Count) await ShowIndexAsync(_index + 1);
+            if (index + 1 < _stepper.Count) await ShowIndexAsync(index + 1);
             else Close(); // 最後の 1 枚を保存したら閉じる
         }
         else if (overwrite)
         {
-            await ShowIndexAsync(_index, keepItems: false); // 描いた後の画像を出し直す（同じものを二重に描かないよう空に）
+            await ShowIndexAsync(index, keepItems: false); // 描いた後の画像を出し直す（同じものを二重に描かないよう空に）
         }
-    }
-
-    private void SetBusy(bool busy)
-    {
-        _busy = busy;
-        UseWaitCursor = busy;
-        UpdateButtons();
-    }
-
-    protected override void OnFormClosing(FormClosingEventArgs e)
-    {
-        if (_busy) e.Cancel = true; // 保存中は閉じない（元の画像を使っている）
-        base.OnFormClosing(e);
     }
 }
