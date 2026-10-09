@@ -1,5 +1,6 @@
 // ファイラとしての移動（戻る / 進むの履歴・サブフォルダの一覧・アドレスバーの入力）の動作確認
 using ImageViewer.Core.Navigation;
+using ImageViewer.Core.Ordering;
 
 static class NavigationTests
 {
@@ -28,6 +29,35 @@ static class NavigationTests
         check(hr.Current == @"C:\写真2" && hr.GoBack() == @"C:\画像" && hr.GoBack() == @"C:\画像\旅行", "フォルダー名の変更で戻るの履歴を付け替える");
         hr.GoForward();
         check(hr.GoForward() == @"C:\写真2" && hr.GoForward() == @"C:\画像\家族", "進むの履歴も付け替える（似た名前の「写真2」は変えない）");
+
+        // ---- フォルダの読み込み: 続けて別のフォルダを開いたら、最後に頼んだ読み込みの結果だけを返す ----
+        using var started = new SemaphoreSlim(0);
+        using var release = new ManualResetEventSlim();
+        var loader = new FolderLoader((folder, _, mode, _) =>
+        {
+            if (folder.StartsWith("slow"))
+            {
+                started.Release();
+                release.Wait(); // 打ち切りを見ないまま進む遅い読み込み
+                if (folder == "slow-broken") throw new IOException("読めません");
+            }
+            return new FolderContents(new() { new DirectoryInfo(Path.Combine(dir, folder)) }, new(), mode, false);
+        });
+        check(!loader.Started, "読み込み: まだ何も頼んでいない");
+        var slow = loader.LoadAsync("slow", false, SortMode.Name);
+        started.Wait();
+        var broken = loader.LoadAsync("slow-broken", false, SortMode.Name);
+        started.Wait();
+        var latest = loader.LoadAsync("B", false, SortMode.Size).GetAwaiter().GetResult();
+        release.Set(); // B を開いた後で、前の読み込みが終わる
+        check(loader.Started && latest is { Mode: SortMode.Size } && latest.Folders[0].Name == "B", "読み込み: 最後に頼んだフォルダの結果が返る");
+        check(slow.GetAwaiter().GetResult() == null, "読み込み: 後から別のフォルダを開いていたら、遅れて読み終えた古い結果は返さない");
+        bool staleThrew = false;
+        try { staleThrew = broken.GetAwaiter().GetResult() != null; } catch (IOException) { staleThrew = true; }
+        check(!staleThrew, "読み込み: 古い読み込みの失敗も知らせない（エラーを出さない）");
+        bool latestThrew = false;
+        try { loader.LoadAsync("slow-broken", false, SortMode.Name).GetAwaiter().GetResult(); } catch (IOException) { latestThrew = true; }
+        check(latestThrew, "読み込み: 最後に頼んだ読み込みの失敗は例外で知らせる");
 
         // ---- サブフォルダの一覧 ----
         Directory.CreateDirectory(dir);

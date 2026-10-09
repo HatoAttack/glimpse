@@ -15,16 +15,9 @@ public static class Rotator
     /// </summary>
     public static void RotateFile(string path, RotateDirection direction)
     {
-        if (!ImageSaver.CanWrite(Path.GetExtension(path)))
-            throw new NotSupportedException($"この形式は書き出せないので回転できません: {Path.GetExtension(path)}");
-        // 読むのは先頭のコマだけなので、アニメや複数ページを保存すると残りが消える。数えられないものも上書きしない
-        int? frames = Adjuster.FrameCount(path);
-        if (frames > 1) throw new NotSupportedException("アニメーションや複数ページの画像は回転できません（保存すると先頭の 1 枚だけになるため）");
-        if (frames == null) throw new NotSupportedException("ページの数を確かめられない画像なので、回転しませんでした");
-
+        SourceGuard.EnsureReplaceable(path, "回転");
         using var image = ImageLoader.Load(path); // EXIF の向きは反映済み（向きの値は「そのまま」になっている）
-        if (!Adjuster.KeepsMetadata(image))
-            throw new NotSupportedException("撮影情報（EXIF など）を残して保存できない画像なので、回転しませんでした");
+        SourceGuard.EnsureKeepsMetadata(image, "回転");
         image.Mutate(x => x.Rotate(direction switch
         {
             RotateDirection.Right90 => RotateMode.Rotate90,
@@ -36,26 +29,6 @@ public static class Rotator
 
     /// <summary>選んだ画像を順に回す（重い処理なので呼び出し側で別スレッドへ）。失敗は「名前: 理由」で返す</summary>
     public static ConvertResult RotateFiles(IReadOnlyList<string> paths, RotateDirection direction,
-        IProgress<ConvertProgress>? progress = null, CancellationToken ct = default)
-    {
-        int done = 0;
-        var errors = new List<string>();
-        for (int i = 0; i < paths.Count; i++)
-        {
-            if (ct.IsCancellationRequested) return new(done, 0, errors, true);
-            string name = Path.GetFileName(paths[i]);
-            progress?.Report(new(i, paths.Count, name));
-            try
-            {
-                RotateFile(paths[i], direction);
-                done++;
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                errors.Add($"{name}: {ex.Message}");
-            }
-        }
-        progress?.Report(new(paths.Count, paths.Count, ""));
-        return new(done, 0, errors, false);
-    }
+        IProgress<ConvertProgress>? progress = null, CancellationToken ct = default) =>
+        BatchRunner.Run(paths, Path.GetFileName, path => RotateFile(path, direction), skippedBefore: 0, progress, ct);
 }

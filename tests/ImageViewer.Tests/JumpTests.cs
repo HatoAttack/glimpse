@@ -1,4 +1,6 @@
 // フォルダジャンプ（索引・一致の点数・開いた記録・検索）の動作確認
+using System.Windows.Forms;
+using ImageViewer.App.Jump;
 using ImageViewer.Core.Jump;
 
 static class JumpTests
@@ -166,5 +168,43 @@ static class JumpTests
         check(r.Any(x => x.Path == @"D:\other\資料") && r.All(x => !x.Path.StartsWith(root)), "外部の結果（Everything）を渡したときはそれを使う");
 
         Directory.Delete(link);
+
+        // ---- ☰ メニューの項目を名前で探す（アドレスバーのコマンドの候補） ----
+        check(MenuSearch.StripMnemonic("画像(&I)") == "画像" && MenuSearch.StripMnemonic("&File") == "File" && MenuSearch.StripMnemonic(null) == "",
+            "メニュー: アクセスキーの印を除く");
+        using var menu = new ContextMenuStrip();
+        int clicked = 0;
+        var view = new ToolStripMenuItem("表示(&V)");
+        var sort = new ToolStripMenuItem("並び順(&S)");
+        sort.DropDownItems.Add(new ToolStripMenuItem("名前順(&N)", null, (_, _) => clicked++) { ShortcutKeyDisplayString = "Ctrl+1" });
+        sort.DropDownItems.Add(new ToolStripMenuItem("更新日時順(&M)"));
+        view.DropDownItems.Add(sort);
+        view.DropDownItems.Add(new ToolStripMenuItem("テーマを切り替え(&T)..."));
+        view.DropDownItems.Add(new ToolStripSeparator());
+        view.DropDownItems.Add(new ToolStripMenuItem("表示を更新(&R)") { Enabled = false });
+        view.DropDownItems.Add(new ToolStripMenuItem("隠した項目") { Available = false });
+        var file = new ToolStripMenuItem("ファイル(&F)");
+        file.DropDownItems.Add(new ToolStripMenuItem("名前の変更(&R)…"));
+        file.DropDownItems.Add(new ToolStripMenuItem("ABC を開く"));
+        menu.Items.Add(file);
+        menu.Items.Add(view);
+
+        var everything = MenuSearch.Find(menu.Items, "", int.MaxValue);
+        check(everything.Select(c => c.Name).SequenceEqual(new[] { "名前の変更", "ABC を開く", "名前順", "更新日時順", "テーマを切り替え", "表示を更新" }),
+            $"メニュー: 空の入力は全部（使える項目が先。隠した項目・区切り・中に項目のある見出しは出さない）: {string.Join(",", everything.Select(c => c.Name))}");
+        check(everything.First(c => c.Name == "名前順") is { Where: "表示 › 並び順", Shortcut: "Ctrl+1", Enabled: true }
+              && everything.First(c => c.Name == "表示を更新") is { Where: "表示", Enabled: false }, "メニュー: 場所・ショートカット・今使えるかを持つ");
+        var named = MenuSearch.Find(menu.Items, "名前", int.MaxValue).Select(c => c.Name).ToArray();
+        check(named.SequenceEqual(new[] { "名前の変更", "名前順" }), $"メニュー: 名前の先頭が合うもの（{string.Join(",", named)}）");
+        var shown = MenuSearch.Find(menu.Items, "表示", int.MaxValue).Select(c => c.Name).ToArray();
+        check(shown.SequenceEqual(new[] { "表示を更新", "名前順", "更新日時順", "テーマを切り替え" }),
+            $"メニュー: 名前の先頭 → 名前に含む → 場所だけ合うもの の順（{string.Join(",", shown)}）");
+        check(MenuSearch.Find(menu.Items, "てーま", 5).Select(c => c.Name).SequenceEqual(new[] { "テーマを切り替え" })
+              && MenuSearch.Find(menu.Items, "ａｂｃ", 5).Select(c => c.Name).SequenceEqual(new[] { "ABC を開く" }),
+            "メニュー: ひらがな / カタカナ・全角 / 半角・大文字 / 小文字を区別しない");
+        check(MenuSearch.Find(menu.Items, "並び　更新", 5).Select(c => c.Name).SequenceEqual(new[] { "更新日時順" }), "メニュー: スペース区切り（全角も）はすべてを含むもの");
+        check(MenuSearch.Find(menu.Items, "", 2).Count == 2 && MenuSearch.Find(menu.Items, "どこにも無い", 5).Count == 0, "メニュー: 件数の上限・合うものが無ければ空");
+        everything.First(c => c.Name == "名前順").Run();
+        check(clicked == 1, "メニュー: 候補を実行すると、その項目を押したのと同じ");
     }
 }

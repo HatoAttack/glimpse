@@ -10,17 +10,6 @@ namespace ImageViewer.Core.Editing;
 
 public enum ResizeAlgorithm { Bilinear, Bicubic, Lanczos }
 
-/// <summary>出力先の決め方</summary>
-public enum OutputFolderMode
-{
-    /// <summary>元の画像のフォルダの中のサブフォルダ（既定 resized）</summary>
-    Subfolder,
-    /// <summary>元の画像と同じフォルダ</summary>
-    Same,
-    /// <summary>指定したフォルダ</summary>
-    Custom,
-}
-
 public sealed record ConvertOptions
 {
     /// <summary>LongEdge に指定するとリサイズしない</summary>
@@ -59,22 +48,10 @@ public sealed record ConvertOptions
 
     /// <summary>出力先に同名のファイルがあるとき上書きする（false ならその画像は飛ばす）</summary>
     public bool Overwrite { get; init; }
+
+    /// <summary>出力先の設定だけを取り出す（設定ファイルの形を変えないよう、値はこのレコードに平らに持つ）</summary>
+    public OutputDestination Output() => new(OutputMode, SubfolderName, CustomFolder, Overwrite);
 }
-
-public enum ConvertStatus { Ok, Skip, Error }
-
-/// <summary>1 枚分の変換予定。Skip は同名ファイルがあるので飛ばす、Error は実行できない理由つき</summary>
-public sealed record ConvertPlanItem(string Source, string Target, ConvertStatus Status, string? Note)
-{
-    public string SourceName => Path.GetFileName(Source);
-    public string TargetName => Path.GetFileName(Target);
-    /// <summary>元の画像を変換結果で置き換える</summary>
-    public bool ReplacesSource => string.Equals(Path.GetFullPath(Source), Path.GetFullPath(Target), StringComparison.OrdinalIgnoreCase);
-}
-
-public sealed record ConvertProgress(int Done, int Total, string Name);
-
-public sealed record ConvertResult(int Converted, int Skipped, IReadOnlyList<string> Errors, bool Canceled);
 
 public static class Converter
 {
@@ -101,22 +78,8 @@ public static class Converter
         return stem + ext;
     }
 
-    /// <summary>元の画像のフォルダから出力先フォルダを決める</summary>
-    public static string OutputFolderFor(string sourceFolder, ConvertOptions options) => options.OutputMode switch
-    {
-        OutputFolderMode.Same => sourceFolder,
-        OutputFolderMode.Custom => options.CustomFolder ?? sourceFolder,
-        _ => Path.Combine(sourceFolder, options.SubfolderName),
-    };
-
     /// <summary>出力先の指定の誤り（無ければ null）</summary>
-    public static string? ValidateOutput(ConvertOptions o) => o.OutputMode switch
-    {
-        OutputFolderMode.Subfolder when Rename.RenamePlanner.ValidateName(o.SubfolderName) is string e => $"中のフォルダの名前: {e}",
-        OutputFolderMode.Custom when o.CustomFolder == null => "出力先のフォルダを指定してください",
-        OutputFolderMode.Custom when !Path.IsPathFullyQualified(o.CustomFolder!) => "出力先のフォルダは C:\\… の形で指定してください",
-        _ => null,
-    };
+    public static string? ValidateOutput(ConvertOptions o) => o.Output().Validate();
 
     /// <summary>
     /// 設定画面を出さずに「前回の設定のまま」実行してよいか。新しいファイルを作るだけ（同名のファイルは飛ばす）なら null、
@@ -134,37 +97,11 @@ public static class Converter
     }
 
     /// <summary>出力先の名前を決めて検査する（ファイルには触らない）</summary>
-    public static List<ConvertPlanItem> Plan(IReadOnlyList<string> sources, ConvertOptions options)
-    {
-        var names = sources.Select(s => BuildDestName(Path.GetFileName(s), options)).ToList();
-        var targets = sources.Select((s, i) => Path.Combine(OutputFolderFor(Path.GetDirectoryName(s)!, options), names[i])).ToList();
-        var counts = targets.GroupBy(t => Path.GetFullPath(t), StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
-        string? folderError = options.OutputMode == OutputFolderMode.Subfolder && Rename.RenamePlanner.ValidateName(options.SubfolderName) is string e
-            ? $"中のフォルダの名前: {e}" : null;
+    public static List<ConvertPlanItem> Plan(IReadOnlyList<string> sources, ConvertOptions options) =>
+        options.Output().Plan(sources, name => BuildDestName(name, options),
+            src => !options.StripMetadata && !KeepsMetadata(src) ? MetadataLossNote : null);
 
-        var plan = new List<ConvertPlanItem>(sources.Count);
-        for (int i = 0; i < sources.Count; i++)
-        {
-            string src = sources[i], dst = targets[i];
-            // 組み立てる前の名前を調べる（置換や末尾に \ や .. があっても出力先の外に書かないように）
-            string? nameError = folderError ?? Rename.RenamePlanner.ValidateName(names[i]);
-            if (nameError != null)
-                plan.Add(new(src, dst, ConvertStatus.Error, nameError));
-            else if (counts[Path.GetFullPath(dst)] > 1)
-                plan.Add(new(src, dst, ConvertStatus.Error, "出力先の名前が重複しています"));
-            else if (File.Exists(dst) && !options.Overwrite)
-                plan.Add(new(src, dst, ConvertStatus.Skip, "同名のファイルがあるので飛ばします"));
-            else
-            {
-                var notes = new List<string>();
-                if (Path.GetFullPath(src).Equals(Path.GetFullPath(dst), StringComparison.OrdinalIgnoreCase)) notes.Add("元の画像を置き換えます");
-                else if (File.Exists(dst)) notes.Add("上書きします");
-                if (!options.StripMetadata && !KeepsMetadata(src)) notes.Add("メタデータは残せません");
-                plan.Add(new(src, dst, ConvertStatus.Ok, notes.Count > 0 ? string.Join("・", notes) : null));
-            }
-        }
-        return plan;
-    }
+    public const string MetadataLossNote = "メタデータは残せません";
 
     /// <summary>
     /// メタデータ（EXIF など）を残して変換できる形式か。
@@ -181,30 +118,7 @@ public static class Converter
         IProgress<ConvertProgress>? progress = null, CancellationToken ct = default, bool createOnly = false)
     {
         bool overwrite = options.Overwrite && !createOnly;
-        var todo = plan.Where(p => p.Status == ConvertStatus.Ok).ToList();
-        int converted = 0, skipped = plan.Count(p => p.Status == ConvertStatus.Skip);
-        var errors = new List<string>();
-        for (int i = 0; i < todo.Count; i++)
-        {
-            if (ct.IsCancellationRequested) return new(converted, skipped, errors, true);
-            var item = todo[i];
-            progress?.Report(new(i, todo.Count, item.SourceName));
-            try
-            {
-                ConvertOne(item.Source, item.Target, options, overwrite);
-                converted++;
-            }
-            catch (DestinationExistsException)
-            {
-                skipped++;
-            }
-            catch (Exception ex) when (ex is not OutOfMemoryException)
-            {
-                errors.Add($"{item.SourceName}: {ex.Message}");
-            }
-        }
-        progress?.Report(new(todo.Count, todo.Count, ""));
-        return new(converted, skipped, errors, false);
+        return BatchRunner.Run(plan, item => ConvertOne(item.Source, item.Target, options, overwrite), progress, ct);
     }
 
     /// <summary>
@@ -268,10 +182,5 @@ public static class Converter
     }
 
     /// <summary>出力先の説明（「resized フォルダへ」など）</summary>
-    public static string DescribeOutput(ConvertOptions options) => options.OutputMode switch
-    {
-        OutputFolderMode.Same => "同じフォルダへ",
-        OutputFolderMode.Custom => $"{options.CustomFolder} へ",
-        _ => $"{options.SubfolderName} フォルダへ",
-    };
+    public static string DescribeOutput(ConvertOptions options) => options.Output().Describe();
 }

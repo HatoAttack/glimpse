@@ -234,26 +234,28 @@ public static class Masker
     };
 
     /// <summary>src から読み込み済みの画像に、regions の範囲でかけて保存する（image 自体は変えない。dst が src なら上書き）</summary>
-    public static void SaveMasked(Image<Rgba32> image, IReadOnlyList<MaskRegion> regions, MaskEffect effect, int level, string src, string dst)
+    /// <returns>実際に保存したパス</returns>
+    public static string SaveMasked(Image<Rgba32> image, IReadOnlyList<MaskRegion> regions, MaskEffect effect, int level, string src, string dst)
     {
-        if (Cropper.IsSameFile(src, dst))
+        if (SourceGuard.IsSameFile(src, dst))
         {
-            Cropper.EnsureOverwritable(src);
-            Cropper.EnsureKeepsMetadata(image);
+            SourceGuard.EnsureReplaceable(src);
+            SourceGuard.EnsureKeepsMetadata(image);
         }
         using var masked = image.Clone();
         Apply(masked, regions, effect, EffectSize(image.Width, image.Height, level));
-        ImageSaver.Save(masked, dst);
+        return SourceGuard.Save(masked, src, dst);
     }
 
     /// <summary>ファイルを読み、ほかの画像（fromWidth × fromHeight）で決めた範囲を引き継いでかけ、保存する（一括用。dst が src なら上書き）</summary>
-    public static void MaskCarried(string src, IReadOnlyList<MaskRegion> regions, int fromWidth, int fromHeight, MaskEffect effect, int level, string dst)
+    /// <returns>実際に保存したパス</returns>
+    public static string MaskCarried(string src, IReadOnlyList<MaskRegion> regions, int fromWidth, int fromHeight, MaskEffect effect, int level, string dst)
     {
-        bool overwrite = Cropper.IsSameFile(src, dst);
-        if (overwrite) Cropper.EnsureOverwritable(src);
+        bool overwrite = SourceGuard.IsSameFile(src, dst);
+        if (overwrite) SourceGuard.EnsureReplaceable(src);
         using var image = ImageLoader.Load(src);
-        if (overwrite) Cropper.EnsureKeepsMetadata(image);
+        if (overwrite) SourceGuard.EnsureKeepsMetadata(image);
         Apply(image, CarryRegions(regions, fromWidth, fromHeight, image.Width, image.Height), effect, EffectSize(image.Width, image.Height, level));
-        ImageSaver.Save(image, dst);
+        return SourceGuard.Save(image, src, dst);
     }
 }
