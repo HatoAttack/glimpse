@@ -112,6 +112,26 @@ public sealed class MaskCommand(Form owner) : ImageCommandBase
     }
 }
 
+/// <summary>画像の特定の所を指し示すために、四角の枠や矢印を描く</summary>
+public sealed class AnnotateCommand(Form owner) : ImageCommandBase
+{
+    public override string Id => "image.annotate";
+    public override string Name => "枠・矢印...";
+    public override string? DefaultShortcut => "Ctrl+D";
+
+    public override Task ExecuteAsync(CommandContext context)
+    {
+        using var dialog = new AnnotateDialog(context.Paths);
+        dialog.ShowDialog(owner);
+        if (dialog.SavedCount > 0)
+        {
+            context.Host.RequestRefresh();
+            context.Host.Notify($"{dialog.SavedCount} 枚に枠・矢印を描いて保存しました");
+        }
+        return Task.CompletedTask;
+    }
+}
+
 /// <summary>選んだ画像にまとめて色調補正をかける。値は 1 枚表示の補正と「前回の補正」を共有する</summary>
 public sealed class AdjustCommand(Form owner, ISettingsAccess settings) : ImageCommandBase
 {

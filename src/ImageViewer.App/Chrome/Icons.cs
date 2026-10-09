@@ -78,6 +78,22 @@ public static class Icons
         });
     };
 
+    /// <summary>枠・矢印（角の丸い枠と、その中を指す矢印）</summary>
+    public static readonly IconPainter Annotate = (g, r, c) => Stroke(g, r, c, 1.4f, p =>
+    {
+        p.AddArc(2, 2, 4, 4, 180, 90);
+        p.AddArc(10, 2, 4, 4, 270, 90);
+        p.AddLine(14, 4, 14, 7);
+        p.StartFigure();
+        p.AddLine(7, 14, 4, 14);
+        p.AddArc(2, 10, 4, 4, 90, 90);
+        p.AddLine(2, 12, 2, 4);
+        p.StartFigure();
+        p.AddLine(14, 14, 7.5f, 7.5f);
+        p.StartFigure();
+        p.AddLines(new PointF[] { new(7.5f, 11), new(7.5f, 7.5f), new(11, 7.5f) });
+    });
+
     /// <summary>回転（右回りの矢印）</summary>
     public static readonly IconPainter Rotate = (g, r, c) => Stroke(g, r, c, 1.5f, p =>
     {

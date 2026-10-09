@@ -1099,7 +1099,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         var more = new IconButton { Icon = Icons.More, AccessibleName = "その他の操作" };
         _toolTip.SetToolTip(more, "その他の操作");
         more.Click += (_, _) => ShowFooterMenu(more, _moreMenu, null);
-        bar.AddActions(Action("image.resize", "リサイズ", Icons.Resize), resizeMore, Action("image.crop", "切り抜き", Icons.Crop), Action("image.mask", "モザイク", Icons.Mosaic), rotate,
+        bar.AddActions(Action("image.resize", "リサイズ", Icons.Resize), resizeMore, Action("image.crop", "切り抜き", Icons.Crop), Action("image.mask", "モザイク", Icons.Mosaic), Action("image.annotate", "枠・矢印", Icons.Annotate), rotate,
             Action("image.adjust", "補正", Icons.Adjust), Action("image.combine", "連結", Icons.Combine), Action("file.rename", "名前", Icons.Rename), move, more);
 
         var clear = new IconButton { Icon = Icons.Close, AccessibleName = "選択を解除" };
@@ -1370,6 +1370,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _registry.Register(new QuickResizeCommand(this, this, resize));
         _registry.Register(new CropCommand(this));
         _registry.Register(new MaskCommand(this));
+        _registry.Register(new AnnotateCommand(this));
         _registry.Register(new AdjustCommand(this, this));
         _registry.Register(new RotateCommand(this, RotateDirection.Right90));
         _registry.Register(new RotateCommand(this, RotateDirection.Left90));

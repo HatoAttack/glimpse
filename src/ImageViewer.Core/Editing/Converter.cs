@@ -31,8 +31,16 @@ public sealed record ConvertOptions
     /// <summary>長辺の大きさ（KeepSize ならリサイズしない）</summary>
     public int LongEdge { get; init; } = 1600;
     public ResizeAlgorithm Algorithm { get; init; } = ResizeAlgorithm.Lanczos;
-    /// <summary>長辺が指定より小さい画像は拡大しない</summary>
+    /// <summary>指定より小さい画像は拡大しない</summary>
     public bool NoUpscale { get; init; } = true;
+    /// <summary>
+    /// 幅 × 高さをぴったり指定する（LongEdge は使わない）。元の画像と比率が合わない分は中央から切る。
+    /// 長辺だけの指定だと、比率が少しずれた画像（16:9 より 2px 低い など）で短い辺が 1px ずれるので
+    /// </summary>
+    public bool ExactSize { get; init; }
+    /// <summary>ExactSize のときの幅・高さ（オフでも値は覚えておく）</summary>
+    public int ExactWidth { get; init; } = 560;
+    public int ExactHeight { get; init; } = 315;
     /// <summary>EXIF・XMP・IPTC・PNG のテキストを消す（ICC プロファイルは残す）</summary>
     public bool StripMetadata { get; init; } = true;
     public OutputFormat Format { get; init; } = OutputFormat.Keep;
@@ -199,22 +207,43 @@ public static class Converter
         return new(converted, skipped, errors, false);
     }
 
+    /// <summary>
+    /// width × height の画像の出来上がりの大きさと、その前に切る範囲（切らないなら画像全体）。
+    /// 長辺の指定は比率を保って縮める。幅 × 高さの指定は、その比率になるよう中央から切ってからぴったりの大きさにする
+    /// </summary>
+    public static (Rectangle Crop, int Width, int Height) OutputGeometry(int width, int height, ConvertOptions options)
+    {
+        var whole = new Rectangle(0, 0, width, height);
+        if (options.ExactSize)
+        {
+            int tw = Math.Max(1, options.ExactWidth), th = Math.Max(1, options.ExactHeight);
+            if (options.NoUpscale && (width < tw || height < th)) return (whole, width, height);
+            // 幅と高さの比を整数のまま比べる（小数の誤差で 1px 余分に切らないように）
+            int cw = width, ch = height;
+            if ((long)width * th > (long)height * tw) cw = Math.Clamp(RoundHalfUp((double)height * tw / th), 1, width);
+            else ch = Math.Clamp(RoundHalfUp((double)width * th / tw), 1, height);
+            return (new Rectangle((width - cw) / 2, (height - ch) / 2, cw, ch), tw, th);
+        }
+
+        int longNow = Math.Max(width, height);
+        if (options.LongEdge == ConvertOptions.KeepSize || longNow == options.LongEdge || (options.NoUpscale && longNow < options.LongEdge))
+            return (whole, width, height);
+        double scale = (double)options.LongEdge / longNow;
+        return (whole, Math.Max(1, RoundHalfUp(width * scale)), Math.Max(1, RoundHalfUp(height * scale)));
+    }
+
+    /// <summary>四捨五入（Math.Round の既定は .5 を偶数側に丸めるので、314.5 が 314 になる）</summary>
+    private static int RoundHalfUp(double value) => (int)Math.Round(value, MidpointRounding.AwayFromZero);
+
     /// <summary>1 枚を変換して保存する（上書きの判断は済んでいる前提）</summary>
     public static void ConvertOne(string src, string dst, ConvertOptions options, bool overwrite = true)
     {
         // 回転補正済み・先頭フレームだけ（アニメーションは静止画になる）
         using var image = ImageLoader.Load(src);
 
-        int longNow = Math.Max(image.Width, image.Height);
-        bool resize = options.LongEdge != ConvertOptions.KeepSize && longNow != options.LongEdge
-                      && !(options.NoUpscale && longNow < options.LongEdge);
-        if (resize)
-        {
-            double scale = (double)options.LongEdge / longNow;
-            int w = Math.Max(1, (int)Math.Round(image.Width * scale));
-            int h = Math.Max(1, (int)Math.Round(image.Height * scale));
-            image.Mutate(x => x.Resize(w, h, ResamplerOf(options.Algorithm)));
-        }
+        var (crop, w, h) = OutputGeometry(image.Width, image.Height, options);
+        if (crop.Width != image.Width || crop.Height != image.Height) image.Mutate(x => x.Crop(crop));
+        if (w != image.Width || h != image.Height) image.Mutate(x => x.Resize(w, h, ResamplerOf(options.Algorithm)));
 
         if (options.StripMetadata)
         {
@@ -229,7 +258,8 @@ public static class Converter
     /// <summary>設定の説明（1 行）</summary>
     public static string Describe(ConvertOptions options)
     {
-        string size = options.LongEdge == ConvertOptions.KeepSize ? "サイズそのまま" : $"長辺 {options.LongEdge}px";
+        string size = options.ExactSize ? $"{options.ExactWidth} × {options.ExactHeight}px"
+            : options.LongEdge == ConvertOptions.KeepSize ? "サイズそのまま" : $"長辺 {options.LongEdge}px";
         string format = options.Format switch
         {
             OutputFormat.Jpeg => "JPG", OutputFormat.Png => "PNG", OutputFormat.Webp => "WEBP", _ => "形式そのまま",
