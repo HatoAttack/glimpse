@@ -128,6 +128,28 @@ public static class ImageSaver
         }
     }
 
+    /// <summary>
+    /// 新しいファイルとして保存する（既にあるファイルは置き換えない）。path が空いていなければ「名前 (2).拡張子」…の空いている名前にする。
+    /// 空いているのを確かめてから書き終えるまでの間に別の処理が同じ名前で作ったときも、そのファイルは残して別の名前で保存する
+    /// </summary>
+    /// <returns>実際に保存したパス</returns>
+    public static string SaveNew(Image<Rgba32> image, string path)
+    {
+        for (int attempt = 0; ; attempt++)
+        {
+            string dst = UniquePath(path);
+            try
+            {
+                Save(image, dst, overwrite: false);
+                return dst;
+            }
+            catch (DestinationExistsException) when (attempt < 20)
+            {
+                // 別の処理が先に作った。空いている名前を選び直す
+            }
+        }
+    }
+
     /// <summary>path が既にあれば「名前 (2).拡張子」「名前 (3).拡張子」…の空いている名前を返す</summary>
     public static string UniquePath(string path)
     {

@@ -42,10 +42,10 @@ public sealed class MaskDialog : ThemedForm
     private double _scale = 1, _offX, _offY;
 
     // 範囲（画像座標）。後のものほど上（クリックで先に当たる）
-    private List<MaskRegion> _rects = new();
+    private List<MaskRegion> _rects => _edits.Current;
     private int _selected = -1;
     // 「同じ範囲にかける」がオフのときに、画像ごとに選んだ範囲（行き来しても消えないように）
-    private readonly Dictionary<int, List<MaskRegion>> _rectsByIndex = new();
+    private readonly PendingEdits<MaskRegion> _edits = new();
     // 引き継ぐ元: 最後に自分で範囲を変えた画像の範囲と、その画像の大きさ
     private (List<MaskRegion> Rects, int Width, int Height)? _anchor;
     private enum DragMode { None, Move, Resize, Draw }
@@ -292,7 +292,7 @@ public sealed class MaskDialog : ThemedForm
     {
         _loadCts?.Cancel();
         var cts = _loadCts = new CancellationTokenSource();
-        if (_index >= 0 && _image != null && !_loading) _rectsByIndex[_index] = _rects;
+        if (_index >= 0 && _image != null && !_loading) _edits.Remember(_index);
         _index = index;
         _loading = true;
         UpdateButtons();
@@ -313,7 +313,7 @@ public sealed class MaskDialog : ThemedForm
             _loading = false;
             _image?.Dispose();
             _image = null;
-            _rects = new();
+            _edits.Set(new());
             _selected = -1;
             RebuildDisplay();
             _name.Text = $"[{index + 1}/{_paths.Count}] {Path.GetFileName(path)}  （読み込めません: {ex.Message}）";
@@ -332,12 +332,11 @@ public sealed class MaskDialog : ThemedForm
         _name.Text = $"[{index + 1}/{_paths.Count}] {Path.GetFileName(path)}  （{image.Width} × {image.Height}）";
         if (!carry)
         {
-            _rects = new();
-            _rectsByIndex.Remove(index);
+            _edits.Discard(index);
         }
         else if (_keepPosition.Checked && _anchor is { } from)
         {
-            _rects = Masker.CarryRegions(from.Rects, from.Width, from.Height, image.Width, image.Height);
+            _edits.Set(Masker.CarryRegions(from.Rects, from.Width, from.Height, image.Width, image.Height));
             bool resized = from.Width != image.Width || from.Height != image.Height;
             if (resized && _rects.Count > 0)
             {
@@ -351,7 +350,7 @@ public sealed class MaskDialog : ThemedForm
         }
         else
         {
-            _rects = _rectsByIndex.TryGetValue(index, out var saved) ? saved : new();
+            _edits.Recall(index);
         }
         UpdateLevelText();
         RebuildDisplay();
@@ -691,15 +690,18 @@ public sealed class MaskDialog : ThemedForm
         SetBusy(true);
         try
         {
-            string dst = await Task.Run(() =>
-            {
-                string d = overwrite ? src : Masker.OutputPathFor(src, folder, effect);
-                Masker.SaveMasked(image, regions, effect, level, src, d);
-                return d;
-            });
+            string dst = await Task.Run(() => Masker.SaveMasked(image, regions, effect, level, src,
+                overwrite ? src : Masker.OutputPathFor(src, folder, effect)));
             SavedCount++;
             _status.ForeColor = Theme.Current.Text;
             _status.Text = overwrite ? $"上書きしました: {Path.GetFileName(dst)}" : $"保存しました: {Path.GetFileName(dst)}";
+            if (overwrite)
+            {
+                // 元の画像にはもうかけてあるので、覚えている範囲は捨てる（次の画像へ移ってから戻ってきたときに二重にかけないように）。
+                // 引き継ぐ元（_anchor）は残すので、「次の画像も同じ範囲にかける」はそのまま続けられる
+                _edits.Discard(_index);
+                _selected = -1;
+            }
         }
         catch (Exception ex) when (ex is not OutOfMemoryException)
         {
@@ -767,7 +769,8 @@ public sealed class MaskDialog : ThemedForm
             MessageBox.Show(this, string.Join("\n", errors.Take(15)), $"かけられなかった画像（{errors.Count} 枚）", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         if (overwrite && ok > 0 && _index >= 0)
         {
-            _rectsByIndex.Clear(); // 上書きした画像に覚えていた範囲は、もう使わない
+            _edits.DiscardAll(); // 上書きした画像に覚えていた範囲は、もう使わない
+            _selected = -1;
             await ShowIndexAsync(_index, carry: false); // 表示中の画像もかけた後のものにする
         }
     }

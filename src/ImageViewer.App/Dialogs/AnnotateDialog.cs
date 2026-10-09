@@ -42,9 +42,9 @@ public sealed class AnnotateDialog : ThemedForm
     private double _scale = 1, _offX, _offY;
 
     // 描いたもの（画像座標）。後のものほど上（クリックで先に当たる）
-    private List<Annotation> _items = new();
+    private List<Annotation> _items => _edits.Current;
     private int _selected = -1;
-    private readonly Dictionary<int, List<Annotation>> _itemsByIndex = new();
+    private readonly PendingEdits<Annotation> _edits = new();
     private enum DragMode { None, Move, Resize }
     private DragMode _mode;
     private bool _creating;                // 新しく描いている途中（小さすぎれば離したときに消す）
@@ -339,7 +339,7 @@ public sealed class AnnotateDialog : ThemedForm
     {
         _loadCts?.Cancel();
         var cts = _loadCts = new CancellationTokenSource();
-        if (_index >= 0 && _image != null && !_loading) _itemsByIndex[_index] = _items;
+        if (_index >= 0 && _image != null && !_loading) _edits.Remember(_index);
         _index = index;
         _loading = true;
         _mode = DragMode.None;
@@ -361,7 +361,7 @@ public sealed class AnnotateDialog : ThemedForm
             _loading = false;
             _image?.Dispose();
             _image = null;
-            _items = new();
+            _edits.Set(new());
             _selected = -1;
             RebuildDisplay();
             _name.Text = $"[{index + 1}/{_paths.Count}] {Path.GetFileName(path)}  （読み込めません: {ex.Message}）";
@@ -378,8 +378,8 @@ public sealed class AnnotateDialog : ThemedForm
         _image = image;
         _selected = -1;
         _name.Text = $"[{index + 1}/{_paths.Count}] {Path.GetFileName(path)}  （{image.Width} × {image.Height}）";
-        if (!keepItems) _itemsByIndex.Remove(index);
-        _items = _itemsByIndex.TryGetValue(index, out var saved) ? saved : new();
+        if (keepItems) _edits.Recall(index);
+        else _edits.Discard(index);
         if (!_styleReady)
         {
             // 前回の設定が無いので、初めの画像の大きさに合った太さ・角の丸みから始める
@@ -674,19 +674,14 @@ public sealed class AnnotateDialog : ThemedForm
         SetBusy(true);
         try
         {
-            string dst = await Task.Run(() =>
-            {
-                string d = overwrite ? src : Annotator.OutputPathFor(src, folder);
-                Annotator.SaveAnnotated(image, items, src, d);
-                return d;
-            });
+            string dst = await Task.Run(() => Annotator.SaveAnnotated(image, items, src, overwrite ? src : Annotator.OutputPathFor(src, folder)));
             SavedCount++;
             _status.ForeColor = Theme.Current.Text;
             _status.Text = overwrite ? $"上書きしました: {Path.GetFileName(dst)}" : $"保存しました: {Path.GetFileName(dst)}";
             if (overwrite)
             {
                 // 元の画像にはもう描いてあるので、覚えているものは捨てる（戻ってきたときに二重に描かないように）
-                _items = new();
+                _edits.Discard(_index);
                 _selected = -1;
             }
         }

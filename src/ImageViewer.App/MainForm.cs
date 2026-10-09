@@ -54,7 +54,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
     private string? _folder;
     private bool _inArchive; // ZIP の中を開いている（見るだけ。書き換える操作は使えない）
-    private CancellationTokenSource? _loadCts;
+    private readonly FolderLoader _loader;
 
     // ---- ファイラ（移動） ----
     private readonly NavigationHistory _history = new();
@@ -120,6 +120,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
     public MainForm(string? initialFolder = null)
     {
+        _loader = new FolderLoader(_orderStore);
         Text = AppTitle;
         Icon = AppIcon.Current;
         Font = new Font("Yu Gothic UI", 9F);
@@ -263,7 +264,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             Shown += async (_, _) =>
             {
                 bool exists = await Task.Run(() => FolderListing.CanOpen(start));
-                if (_loadCts != null) return; // 確かめている間にほかのフォルダを開いていたら、そちらのまま
+                if (_loader.Started) return; // 確かめている間にほかのフォルダを開いていたら、そちらのまま
                 if (exists)
                 {
                     await LoadFolderAsync(start);
@@ -1906,7 +1907,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
         UpdateSortChecks();
         var saved = _sortMode == SortMode.Manual ? _orderStore.Load(_folder) : null;
-        _grid.SetItems(Arrange(items, _sortMode, saved), reload: true, renamed: map);
+        _grid.SetItems(FolderLoader.Arrange(items, _sortMode, saved), reload: true, renamed: map);
         _undoItem.Enabled = _lastRename != null;
         _undoItem.Text = _lastRename != null ? "元に戻す: 名前の変更(&U)" : "元に戻す(&U)";
     }
@@ -2002,59 +2003,15 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             if (_folder != null) await _tree.RevealAsync(_folder);
             return;
         }
-        _loadCts?.Cancel();
-        var cts = _loadCts = new CancellationTokenSource();
         bool reload = string.Equals(_folder, folder, StringComparison.OrdinalIgnoreCase);
         if (!reload) _noticeActive = false; // 別のフォルダへ移ったら、前のフォルダでのお知らせは消す
         // 別のフォルダへ移る間は見張りを止める（前のフォルダの変化で読み直して、移る途中の読み込みを打ち切らないように）
         if (!reload) _watcher.Watch(null);
         if (!_noticeActive && !quiet) _footer.Status = "読み込み中…";
-        List<DirectoryInfo> folders;
-        List<ImageFile> files;
-        SortMode mode;
-        bool inArchive = false;
+        FolderContents? contents;
         try
         {
-            // 大きなフォルダでも UI を止めないよう列挙は別スレッドで行う。
-            // 別のフォルダを開いたときは、手動の並び順が保存されていれば手動、無ければ名前順で始める
-            (folders, files, mode, inArchive) = await Task.Run(() =>
-            {
-                bool archive = ArchivePath.TrySplit(folder, out string zip, out string inner);
-                List<ImageFile> listed;
-                List<DirectoryInfo> subfolders;
-                if (archive)
-                {
-                    // ZIP そのもの・ZIP の中のフォルダ: 中の一覧から作る（ZIP の中の ZIP は開かない）
-                    ArchiveListing listing;
-                    try
-                    {
-                        // 読み直し（F5）は目次から。大きさも日時も変えずに置き換えられた ZIP にも追いつく
-                        if (reload) ZipStore.Forget(zip);
-                        listing = ZipStore.List(zip, inner, cts.Token);
-                    }
-                    catch (InvalidDataException ex)
-                    {
-                        throw new IOException($"ZIP を開けませんでした（壊れているか、ZIP ではありません）: {ex.Message}", ex);
-                    }
-                    listed = listing.Images.ToList();
-                    subfolders = listing.Folders.Select(f => new DirectoryInfo(f))
-                        .OrderBy(d => d.Name, FileSorting.NaturalNameComparer).ToList();
-                }
-                else
-                {
-                    listed = ImageFormats.ListImages(folder, cts.Token);
-                    // ZIP はフォルダのタイルとして、サブフォルダの後ろに並べる
-                    subfolders = FolderListing.ListSubfolders(folder, cts.Token);
-                    subfolders.AddRange(FolderListing.ListArchives(folder, cts.Token));
-                }
-                var saved = _orderStore.Load(folder);
-                var m = reload ? _sortMode : saved != null ? SortMode.Manual : SortMode.Name;
-                return (subfolders, Arrange(listed, m, saved), m, archive);
-            }, cts.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            return; // 後から別のフォルダが開かれた
+            contents = await _loader.LoadAsync(folder, reload, _sortMode);
         }
         catch (Exception ex)
         {
@@ -2068,6 +2025,9 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             UpdateCommandStates();
             return;
         }
+        // 読んでいる間に別のフォルダが開かれた（古い結果は出さない。見張りも、後から開いたほうに任せる）
+        if (contents == null) return;
+        var (folders, files, mode, inArchive) = contents;
 
         if (!reload) ClearUndo();
         _folder = folder;
@@ -2100,13 +2060,6 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
     // ---- 並び順 ----
 
-    /// <summary>並び順を当てる。手動は保存した並び（無ければ名前順）</summary>
-    private static List<ImageFile> Arrange(IReadOnlyList<ImageFile> files, SortMode mode, IReadOnlyList<string>? savedOrder)
-    {
-        var sorted = FileSorting.Sort(files, mode);
-        return mode == SortMode.Manual && savedOrder != null ? ManualOrder.Apply(sorted, savedOrder) : sorted;
-    }
-
     private async Task ChangeSortAsync(SortMode mode)
     {
         _sortMode = mode;
@@ -2114,7 +2067,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         if (_folder == null) return;
         string folder = _folder;
         var saved = mode == SortMode.Manual ? await Task.Run(() => _orderStore.Load(folder)) : null;
-        _grid.SetItems(Arrange(_grid.Items, mode, saved), reload: true);
+        _grid.SetItems(FolderLoader.Arrange(_grid.Items, mode, saved), reload: true);
     }
 
     /// <summary>ドラッグで並べ替えた: 手動に切り替えて今の並びを保存</summary>

@@ -70,7 +70,8 @@ public static class Cropper
     }
 
     /// <summary>ファイルを読み、ほかの画像（fromWidth × fromHeight）で決めた枠を引き継いで切り抜き、保存する（一括用。dst が src なら上書き）</summary>
-    public static void CropCarried(string src, (double X0, double Y0, double X1, double Y1) rect, int fromWidth, int fromHeight, string dst)
+    /// <returns>実際に保存したパス</returns>
+    public static string CropCarried(string src, (double X0, double Y0, double X1, double Y1) rect, int fromWidth, int fromHeight, string dst)
     {
         bool overwrite = IsSameFile(src, dst);
         if (overwrite) EnsureOverwritable(src);
@@ -79,7 +80,19 @@ public static class Cropper
         var (x0, y0, x1, y1) = CarryRect(rect, fromWidth, fromHeight, image.Width, image.Height);
         var box = ClampBox(x0, y0, x1, y1, image.Width, image.Height);
         image.Mutate(c => c.Crop(box));
+        return SaveEdited(image, src, dst);
+    }
+
+    /// <summary>
+    /// 編集した画像を保存する。dst が src なら元の画像を置き換え、そうでなければ新しいファイルとして保存する
+    /// （保存先を決めた後に同じ名前のファイルができていても置き換えず、別の名前にする）
+    /// </summary>
+    /// <returns>実際に保存したパス</returns>
+    internal static string SaveEdited(Image<Rgba32> image, string src, string dst)
+    {
+        if (!IsSameFile(src, dst)) return ImageSaver.SaveNew(image, dst);
         ImageSaver.Save(image, dst);
+        return dst;
     }
 
     internal static bool IsSameFile(string a, string b) =>
@@ -111,7 +124,8 @@ public static class Cropper
             Path.GetFileNameWithoutExtension(source) + "_crop" + ImageSaver.ExtensionFor(OutputFormat.Keep, Path.GetExtension(source))));
 
     /// <summary>src から読み込み済みの画像の box の範囲を保存する（dst が src なら上書き）</summary>
-    public static void SaveCrop(Image<Rgba32> image, Rectangle box, string src, string dst)
+    /// <returns>実際に保存したパス</returns>
+    public static string SaveCrop(Image<Rgba32> image, Rectangle box, string src, string dst)
     {
         if (IsSameFile(src, dst))
         {
@@ -119,11 +133,12 @@ public static class Cropper
             EnsureKeepsMetadata(image);
         }
         using var cropped = image.Clone(x => x.Crop(box));
-        ImageSaver.Save(cropped, dst);
+        return SaveEdited(cropped, src, dst);
     }
 
     /// <summary>ファイルを読み、中央を指定の比で切り抜いて保存する（一括用。dst が src なら上書き）</summary>
-    public static void CropCenter(string src, double aspect, string dst)
+    /// <returns>実際に保存したパス</returns>
+    public static string CropCenter(string src, double aspect, string dst)
     {
         bool overwrite = IsSameFile(src, dst);
         if (overwrite) EnsureOverwritable(src);
@@ -132,6 +147,6 @@ public static class Cropper
         var (x, y, w, h) = CenterRect(image.Width, image.Height, aspect);
         var box = ClampBox(x, y, x + w, y + h, image.Width, image.Height);
         image.Mutate(c => c.Crop(box));
-        ImageSaver.Save(image, dst);
+        return SaveEdited(image, src, dst);
     }
 }

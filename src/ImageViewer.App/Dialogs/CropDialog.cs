@@ -537,12 +537,7 @@ public sealed class CropDialog : ThemedForm
         SetBusy(true);
         try
         {
-            string dst = await Task.Run(() =>
-            {
-                string d = overwrite ? src : Cropper.OutputPathFor(src, folder);
-                Cropper.SaveCrop(image, box, src, d);
-                return d;
-            });
+            string dst = await Task.Run(() => Cropper.SaveCrop(image, box, src, overwrite ? src : Cropper.OutputPathFor(src, folder)));
             SavedCount++;
             _status.ForeColor = Theme.Current.Text;
             _status.Text = overwrite
@@ -587,7 +582,7 @@ public sealed class CropDialog : ThemedForm
     }
 
     /// <summary>選んだ画像を全部、crop(元, 保存先) で切り抜いて保存する（overwrite なら元の画像を置き換える）</summary>
-    private async Task SaveAllAsync(Action<string, string> crop, bool overwrite)
+    private async Task SaveAllAsync(Func<string, string, string> crop, bool overwrite)
     {
         if (!overwrite && _toCustom.Checked && OutputFolderFor(_paths[0], overwrite) == null) return;
         var targets = _paths.Select(p => (Src: p, Folder: _toCustom.Checked && !overwrite ? _folder.Text.Trim() : Path.GetDirectoryName(p)!)).ToList();

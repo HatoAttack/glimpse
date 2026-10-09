@@ -203,7 +203,8 @@ public static class Annotator
             Path.GetFileNameWithoutExtension(source) + "_mark" + ImageSaver.ExtensionFor(OutputFormat.Keep, Path.GetExtension(source))));
 
     /// <summary>src から読み込み済みの画像に枠・矢印を描いて保存する（image 自体は変えない。dst が src なら上書き）</summary>
-    public static void SaveAnnotated(Image<Rgba32> image, IReadOnlyList<Annotation> items, string src, string dst)
+    /// <returns>実際に保存したパス</returns>
+    public static string SaveAnnotated(Image<Rgba32> image, IReadOnlyList<Annotation> items, string src, string dst)
     {
         if (Cropper.IsSameFile(src, dst))
         {
@@ -212,6 +213,6 @@ public static class Annotator
         }
         using var drawn = image.Clone();
         Draw(drawn, items);
-        ImageSaver.Save(drawn, dst);
+        return Cropper.SaveEdited(drawn, src, dst);
     }
 }

@@ -470,6 +470,61 @@ static class EditingTests
         var loaded = store.Load();
         check(loaded.Resize == new ConvertOptions { LongEdge = 777, Format = OutputFormat.Webp, OutputMode = OutputFolderMode.Custom, CustomFolder = @"D:\x" }
               && loaded.Combine?.Columns == 3, "リサイズ・連結の設定を保存して読み戻せる");
+
+        // ---- 別の名前で保存: 保存先を決めた後に同じ名前のファイルができても、そのファイルは置き換えない ----
+        using (var img = new Image<Rgba32>(40, 20, Red)) img.SaveAsPng(P("late.png"));
+        var region = new[] { MaskRegion.Rect(0, 0, 10, 10) };
+        var mark = new[] { new Annotation(AnnotationKind.Frame, 2, 2, 20, 18, Blue, 2, 0, 4, false) };
+        using (var whole = Image.Load<Rgba32>(P("late.png")))
+        {
+            var saves = new (string Name, string Decided, Func<string, string> Save)[]
+            {
+                ("切り抜き", Cropper.OutputPathFor(P("late.png"), dir), d => Cropper.SaveCrop(whole, new Rectangle(0, 0, 10, 10), P("late.png"), d)),
+                ("切り抜き（中央・一括）", P("late_center.png"), d => Cropper.CropCenter(P("late.png"), 1.0, d)),
+                ("切り抜き（引き継ぎ・一括）", P("late_carried.png"), d => Cropper.CropCarried(P("late.png"), (0, 0, 20, 10), 40, 20, d)),
+                ("モザイク", Masker.OutputPathFor(P("late.png"), dir, MaskEffect.Mosaic), d => Masker.SaveMasked(whole, region, MaskEffect.Mosaic, 5, P("late.png"), d)),
+                ("モザイク（一括）", P("late_all.png"), d => Masker.MaskCarried(P("late.png"), region, 40, 20, MaskEffect.Fill, 5, d)),
+                ("枠・矢印", Annotator.OutputPathFor(P("late.png"), dir), d => Annotator.SaveAnnotated(whole, mark, P("late.png"), d)),
+            };
+            foreach (var (name, decided, save) in saves)
+            {
+                File.WriteAllText(decided, "other"); // 保存先を決めた後に、ほかの処理が同じ名前で作った
+                string actual = save(decided);
+                check(File.ReadAllText(decided) == "other" && actual != decided && Path.GetDirectoryName(actual) == dir && Image.Identify(actual).Width > 0,
+                    $"{name}: 決めた保存先に後からできたファイルは置き換えず、別の名前（{Path.GetFileName(actual)}）で保存する");
+            }
+        }
+        check(!Directory.GetFiles(dir, "*.tmp").Any(), "別の名前で保存し直したときも一時ファイルが残らない");
+        using (var fresh = new Image<Rgba32>(8, 8, Blue))
+        {
+            string savedFirst = ImageSaver.SaveNew(fresh, P("fresh.png")), savedAgain = ImageSaver.SaveNew(fresh, P("fresh.png"));
+            check(savedFirst == P("fresh.png") && savedAgain == P("fresh (2).png"), "新しいファイルとして保存: 空いていればその名前、無ければ (2)…");
+        }
+
+        // ---- 画像ごとに覚える編集（モザイクの範囲・枠や矢印）: 上書きした分は戻ってきても残さない ----
+        var edits = new PendingEdits<string>();
+        edits.Recall(0);
+        edits.Current.Add("A の範囲");
+        edits.Remember(0); // 保存せずに次の画像へ
+        edits.Recall(1);
+        check(edits.Current.Count == 0, "編集: 別の画像へ移ると、その画像の分（無ければ空）になる");
+        edits.Remember(1);
+        edits.Recall(0);
+        check(edits.Current.SequenceEqual(new[] { "A の範囲" }), "編集: 保存していない（保存に失敗した）範囲は、戻ってきても残っている");
+        edits.Discard(0);  // 上書きして次へ: ダイアログは上書きできたら捨ててから、今の編集を覚えて次の画像へ移る
+        edits.Remember(0);
+        edits.Recall(1);
+        edits.Remember(1);
+        edits.Recall(0);
+        check(edits.Current.Count == 0, "編集: 上書きした画像に戻っても、かけ終えた範囲は残っていない（二重にかけない）");
+        edits.Current.Add("A のやり直し");
+        edits.Remember(0);
+        edits.Set(new() { "引き継いだ範囲" });
+        edits.Recall(0);
+        check(edits.Current.SequenceEqual(new[] { "A のやり直し" }), "編集: 引き継いだ範囲に置き換えても、覚えている分は変わらない");
+        edits.DiscardAll();
+        edits.Recall(0);
+        check(edits.Current.Count == 0, "編集: 全部に上書きしたら、覚えていた分をすべて捨てる");
     }
 
     static Image<Rgba32> SplitImage(int w, int h)
