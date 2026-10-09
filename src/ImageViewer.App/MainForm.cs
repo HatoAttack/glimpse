@@ -95,18 +95,9 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     private readonly List<(IconButton Button, IImageCommand Command)> _actionButtons = new();
     private readonly ContextMenuStrip _moveMenu = new(), _moreMenu = new(), _rotateMenu = new();
 
-    // ---- フォルダジャンプ ----
-    private readonly FolderJumpService _jump = new(FolderJumpService.DefaultDataDir);
-    private readonly JumpList _jumpList = new();
-    private readonly System.Windows.Forms.Timer _jumpDelay = new() { Interval = 120 };
-    private EverythingClient? _everything;
-    private CancellationTokenSource? _jumpCts;
-    private int _visitsSinceSave;
-
-    // ---- 更新の確認 ----
-    private ToolStripMenuItem _updateItem = null!;
-    private HttpClient? _http;
-    private ReleaseInfo? _available;
+    // フォルダジャンプ（索引・候補の一覧・検索）と、更新の確認（見つけたバージョン・「更新」のメニュー項目）は、それぞれの持ち主に任せる
+    private readonly JumpController _jumper;
+    private readonly UpdateFlow _updates;
 
     private readonly SettingsStore _settingsStore = SettingsStore.CreateDefault();
     private AppSettings _settings;
@@ -121,6 +112,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     public MainForm(string? initialFolder = null)
     {
         _loader = new FolderLoader(_orderStore);
+        _updates = new UpdateFlow(this, this, _footer, Notify, () => _folder);
         Text = AppTitle;
         Icon = AppIcon.Current;
         Font = new Font("Yu Gothic UI", 9F);
@@ -133,6 +125,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         ApplySaveQuality();
         RegisterCommands();
         _addressBox = new AddressBox(_address);
+        _jumper = new JumpController(this, _address, _addressBox, this, () => _folder, FindCommands);
         // 開いているフォルダの外での変化（削除・追加・編集）を見張り、落ち着いたら読み直す
         _watcher = new FolderWatcher(this);
         _watcher.Changed += async (_, folder) => await OnFolderChangedAsync(folder);
@@ -166,14 +159,12 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         FormClosed += (_, _) =>
         {
             _watcher.Dispose();
-            _http?.Dispose();
+            _updates.Dispose();
             _thumbnails.Dispose();
-            _jump.SaveVisits();
-            _everything?.Dispose();
+            _jumper.Dispose();
             ZipStore.CloseAll();
         };
 
-        _footer.UpdateClicked += (_, _) => ShowUpdateDialog();
         _noticeTimer.Tick += (_, _) =>
         {
             _noticeTimer.Stop();
@@ -288,7 +279,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         };
         // 前にコピー・ドラッグで ZIP から書き出したもののうち、古いものを片付ける
         _ = Task.Run(() => ArchiveExport.CleanUp(TimeSpan.FromDays(1)));
-        SetUpUpdateCheck();
+        _updates.CheckOnStartup();
     }
 
     // ---- Quick Look（Space / ダブルクリックで大きく表示） ----
@@ -579,7 +570,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         // 古いパスを覚えているもの（ツリー・戻る / 進む・フォルダジャンプ・ホーム）を新しいパスに付け替える
         _tree.FolderRenamed(oldPath, newPath);
         _history.Retarget(oldPath, newPath);
-        _jump.FolderRenamed(oldPath, newPath);
+        _jumper.Service.FolderRenamed(oldPath, newPath);
         if (_settings.HomeFolder is string home && FolderListing.Retarget(home, oldPath, newPath) is string newHome) SetHome(newHome);
         await LoadFolderAsync(_folder, NavKind.Reload);
         _grid.SelectPath(newPath);
@@ -694,27 +685,23 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
         _address.KeyDown += async (_, e) =>
         {
-            if (_jumpList.Visible && e.KeyCode is Keys.Down or Keys.Up or Keys.PageDown or Keys.PageUp)
+            if (_jumper.MoveSelection(e.KeyCode))
             {
                 e.SuppressKeyPress = true;
-                _jumpList.MoveSelection(e.KeyCode switch
-                {
-                    Keys.Down => 1, Keys.Up => -1, Keys.PageDown => _jumpList.MaxVisibleItems, _ => -_jumpList.MaxVisibleItems,
-                });
             }
             else if (e.KeyCode == Keys.Enter)
             {
                 e.SuppressKeyPress = true;
-                if (_jumpList.Visible && _jumpList.SelectedCommand is { } command) RunCommandCandidate(command);
-                else if (_jumpList.Visible && _jumpList.SelectedPath is string picked) await JumpToAsync(picked);
+                if (_jumper.SelectedCommand is { } command) RunCommandCandidate(command);
+                else if (_jumper.SelectedPath is string picked) await JumpToAsync(picked);
                 else await NavigateFromAddressAsync();
             }
             else if (e.KeyCode == Keys.Escape)
             {
                 e.SuppressKeyPress = true;
-                if (_jumpList.Visible)
+                if (_jumper.ListVisible)
                 {
-                    HideJumpList();
+                    _jumper.Hide();
                     return;
                 }
                 _address.Text = _folder ?? "";
@@ -731,116 +718,16 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
     private void SetUpJump()
     {
-        _jumpList.Font = Font;
-        _jumpList.ItemHeight = Font.Height * 2 + LogicalToDeviceUnits(6);
-        Controls.Add(_jumpList);
-        _jumpList.BringToFront();
-        _jumpList.Picked += async (_, path) => await JumpToAsync(path);
-        _jumpList.CommandPicked += (_, command) => RunCommandCandidate(command);
-        // 候補をクリックすると一覧にフォーカスが移る。その間はアドレスバーの入力を続け、一覧からも離れたら閉じる
-        _addressBox.KeepEditing = () => _jumpList.Focused;
-        _jumpList.LostFocus += (_, _) => BeginInvoke(() =>
-        {
-            if (!_jumpList.Focused && !_address.Focused) HideJumpList();
-        });
-
-        // 入力が止まってから検索する（1 文字ごとに走らせない）
-        _address.TextChanged += (_, _) =>
-        {
-            if (!_address.Focused) return;
-            _jumpDelay.Stop();
-            _jumpDelay.Start();
-        };
-        _jumpDelay.Tick += async (_, _) =>
-        {
-            _jumpDelay.Stop();
-            await UpdateJumpListAsync();
-        };
-        // 候補をクリックしたときはアドレスバーからフォーカスが移るので、それ以外で外れたときだけ閉じる
-        _address.LostFocus += (_, _) => BeginInvoke(() =>
-        {
-            if (!_jumpList.Focused && !_address.Focused) HideJumpList();
-        });
-
-        Shown += (_, _) => _ = _jump.StartAsync(_settings.EffectiveJumpRoots);
+        _jumper.FolderPicked += async path => await JumpToAsync(path);
+        _jumper.CommandPicked += RunCommandCandidate;
+        _jumper.Attach();
     }
 
-    /// <summary>
-    /// アドレスバーの入力から候補を出す: ☰ メニューのコマンド（先に数件）とフォルダ。
-    /// 「>」で始めるとコマンドだけ（「>」だけなら全部）。パスらしい入力・今のフォルダのままなら出さない
-    /// </summary>
-    private async Task UpdateJumpListAsync()
-    {
-        string query = _address.Text.Trim();
-        bool commandsOnly = query.StartsWith('>');
-        string text = commandsOnly ? query[1..].Trim() : query;
-        if (!_address.Focused || query.Length == 0
-            || (!commandsOnly && (FolderListing.LooksLikePath(query) || string.Equals(query, _folder, StringComparison.OrdinalIgnoreCase))))
-        {
-            HideJumpList();
-            return;
-        }
-
-        _jumpCts?.Cancel();
-        var cts = _jumpCts = new CancellationTokenSource();
-        var commands = FindCommands(text, commandsOnly ? int.MaxValue : 5);
-        IReadOnlyList<JumpResult> results = Array.Empty<JumpResult>();
-        string? message = commandsOnly ? "コマンドが見つかりません" : null;
-        if (!commandsOnly)
-        {
-            try
-            {
-                (results, message) = await SearchFoldersAsync(text, cts.Token);
-            }
-            catch (OperationCanceledException)
-            {
-                return; // 次の入力で検索し直している
-            }
-        }
-        if (cts.IsCancellationRequested || !_address.Focused) return;
-
-        _jumpList.SetResults(commands, results, message);
-        var below = PointToClient(_addressBox.Parent!.PointToScreen(new Point(_addressBox.Left, _addressBox.Bottom)));
-        _jumpList.SetBounds(below.X, below.Y + LogicalToDeviceUnits(4), _addressBox.Width, _jumpList.Height);
-        _jumpList.Visible = true;
-        _jumpList.BringToFront();
-    }
-
-    /// <summary>
-    /// ☰ メニューの項目（コマンド・表示の切り替えなど）を名前とメニューの場所で探す。スペース区切りはすべてを含むもの。
-    /// ひらがな / カタカナ・全角 / 半角・大文字 / 小文字は区別しない。名前の先頭が合うもの → 名前に含むもの → 場所だけ合うもの の順
-    /// </summary>
+    /// <summary>☰ メニューから、アドレスバーの入力に合うコマンドの候補を探す（今使えるかどうかを合わせてから）</summary>
     private List<CommandCandidate> FindCommands(string text, int max)
     {
         UpdateCommandEnabled();
-        var compare = System.Globalization.CultureInfo.GetCultureInfo("ja-JP").CompareInfo;
-        const System.Globalization.CompareOptions options = System.Globalization.CompareOptions.IgnoreCase
-            | System.Globalization.CompareOptions.IgnoreKanaType | System.Globalization.CompareOptions.IgnoreWidth;
-        var tokens = text.Split(' ', '　').Where(t => t.Length > 0).ToArray();
-
-        var found = new List<(CommandCandidate Candidate, int Score, int Order)>();
-        void Walk(ToolStripItemCollection items, string where)
-        {
-            foreach (var item in items.OfType<ToolStripMenuItem>())
-            {
-                if (!item.Available) continue;
-                string name = StripMnemonic(item.Text).TrimEnd('.', '…').Trim();
-                if (item.DropDownItems.Count > 0)
-                {
-                    Walk(item.DropDownItems, where.Length > 0 ? $"{where} › {name}" : name);
-                    continue;
-                }
-                string all = $"{name} {where}";
-                if (!tokens.All(t => compare.IndexOf(all, t, options) >= 0)) continue;
-                int score = tokens.Length == 0 || compare.IsPrefix(name, tokens[0], options) ? 0
-                    : tokens.All(t => compare.IndexOf(name, t, options) >= 0) ? 1 : 2;
-                var target = item;
-                found.Add((new CommandCandidate(name, where, item.ShortcutKeyDisplayString ?? "", item.Enabled, () => target.PerformClick()), score, found.Count));
-            }
-        }
-        Walk(_mainMenu.Items, "");
-        return found.OrderBy(f => f.Score).ThenBy(f => f.Candidate.Enabled ? 0 : 1).ThenBy(f => f.Order)
-            .Take(max).Select(f => f.Candidate).ToList();
+        return MenuSearch.Find(_mainMenu.Items, text, max);
     }
 
     private void RunCommandCandidate(CommandCandidate command)
@@ -857,38 +744,15 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             }
             return;
         }
-        HideJumpList();
+        _jumper.Hide();
         _address.Text = _folder ?? "";
         _grid.Focus(); // アドレスバーから離れてから実行する（ダイアログ・キー操作が一覧に戻るように）
         command.Run();
     }
 
-    /// <summary>フォルダ名で検索（アドレスバーのフォルダジャンプと「フォルダーへ移動 / コピー」で共通）</summary>
-    private async Task<(IReadOnlyList<JumpResult> Results, string? Message)> SearchFoldersAsync(string query, CancellationToken ct)
-    {
-        IReadOnlyList<string>? extra = null;
-        if (_settings.UseEverything && EverythingClient.IsRunning)
-        {
-            _everything ??= new EverythingClient();
-            extra = await _everything.QueryFoldersAsync(query, 300, TimeSpan.FromSeconds(1)); // 応答が無ければ null → 自前の索引
-        }
-        var results = await Task.Run(() => _jump.Search(query, 30, extra, ct), ct);
-        string? message = results.Count > 0 ? null
-            : _jump.Index == null && _jump.IsBuilding ? "フォルダの索引を作成中です…（少し待ってから入力し直してください）"
-            : "見つかりません";
-        return (results, message);
-    }
-
-    private void HideJumpList()
-    {
-        _jumpCts?.Cancel();
-        _jumpList.Visible = false;
-        if (!_address.Focused) _addressBox.EndEdit(); // 一覧をクリックしていた: 入力もやめる
-    }
-
     private async Task JumpToAsync(string path)
     {
-        HideJumpList();
+        _jumper.Hide();
         if (!Directory.Exists(path))
         {
             System.Media.SystemSounds.Beep.Play();
@@ -923,7 +787,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
     private void ShowJumpSettings()
     {
-        using var dlg = new JumpSettingsDialog(_settings.EffectiveJumpRoots, _settings.UseEverything, _jump);
+        using var dlg = new JumpSettingsDialog(_settings.EffectiveJumpRoots, _settings.UseEverything, _jumper.Service);
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
         bool rootsChanged = !dlg.Roots.SequenceEqual(_settings.EffectiveJumpRoots, StringComparer.OrdinalIgnoreCase);
         _settings = _settings with { JumpRoots = dlg.Roots.ToList(), UseEverything = dlg.UseEverything };
@@ -935,7 +799,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         {
             Notify($"設定を保存できませんでした（この起動中だけ有効）: {ex.Message}");
         }
-        if (rootsChanged) _jump.Rebuild(_settings.EffectiveJumpRoots);
+        if (rootsChanged) _jumper.Service.Rebuild(_settings.EffectiveJumpRoots);
     }
 
     private async Task NavigateFromAddressAsync()
@@ -1342,7 +1206,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _split.Panel2.BackColor = p.Background;
         _tree.ApplyTheme();
         _grid.ApplyTheme();
-        _jumpList.ApplyTheme();
+        _jumper.ApplyTheme();
         _inspector.Invalidate();
         Theme.ApplyTitleBar(this);
     }
@@ -1370,8 +1234,9 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _registry.Register(new RotateCommand(this, RotateDirection.Half));
         _registry.Register(new CombineCommand(this, this));
         _registry.Register(new RenameCommand(this));
-        _registry.Register(new MoveToFolderCommand(this, this, SearchFoldersAsync));
-        _registry.Register(new CopyToFolderCommand(this, this, SearchFoldersAsync));
+        // フォルダの検索は使うときに _jumper へ頼む（コマンドの登録は _jumper を作るより前に行うので）
+        _registry.Register(new MoveToFolderCommand(this, this, (query, ct) => _jumper.SearchFoldersAsync(query, ct)));
+        _registry.Register(new CopyToFolderCommand(this, this, (query, ct) => _jumper.SearchFoldersAsync(query, ct)));
         _registry.Register(new DeleteCommand(this));
         _registry.Register(new CopyPathsCommand());
         _registry.Register(new RevealInExplorerCommand());
@@ -1412,7 +1277,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         foreach (var group in _registry.ByCategory())
         {
             var top = menu.Items.OfType<ToolStripMenuItem>()
-                .FirstOrDefault(m => StripMnemonic(m.Text) == group.Key);
+                .FirstOrDefault(m => MenuSearch.StripMnemonic(m.Text) == group.Key);
             if (top == null)
             {
                 top = new ToolStripMenuItem(group.Key);
@@ -1427,7 +1292,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         }
 
         // 保存の画質は画像の編集（リサイズ・切り抜き・連結）の保存に使うので、画像メニューの最後に置く
-        var imageMenu = menu.Items.OfType<ToolStripMenuItem>().FirstOrDefault(m => StripMnemonic(m.Text) == "画像");
+        var imageMenu = menu.Items.OfType<ToolStripMenuItem>().FirstOrDefault(m => MenuSearch.StripMnemonic(m.Text) == "画像");
         if (imageMenu != null)
         {
             imageMenu.DropDownItems.Add(new ToolStripSeparator());
@@ -1438,21 +1303,20 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         fileMenu.DropDownItems.Add(new ToolStripMenuItem("終了(&X)", null, (_, _) => Close()));
 
         var helpMenu = new ToolStripMenuItem("ヘルプ(&H)");
-        _updateItem = new ToolStripMenuItem("更新(&N)...", null, (_, _) => ShowUpdateDialog()) { Visible = false };
         var checkOnStartup = new ToolStripMenuItem("起動時に更新を確認(&S)") { CheckOnClick = true, Checked = _settings.CheckUpdatesOnStartup ?? true };
         checkOnStartup.CheckedChanged += (_, _) =>
             ((ISettingsAccess)this).UpdateSettings(s => s with { CheckUpdatesOnStartup = checkOnStartup.Checked });
-        helpMenu.DropDownItems.Add(_updateItem);
+        helpMenu.DropDownItems.Add(_updates.MenuItem);
         helpMenu.DropDownItems.Add(new ToolStripMenuItem("対応形式(&F)...", null, (_, _) => ShowSupportedFormats()));
         helpMenu.DropDownItems.Add(new ToolStripSeparator());
-        helpMenu.DropDownItems.Add(new ToolStripMenuItem("更新を確認(&U)...", null, async (_, _) => await CheckForUpdatesAsync(manual: true)));
+        helpMenu.DropDownItems.Add(new ToolStripMenuItem("更新を確認(&U)...", null, async (_, _) => await _updates.CheckAsync(manual: true)));
         helpMenu.DropDownItems.Add(checkOnStartup);
         menu.Items.Add(helpMenu);
 
         // よく使うものを上に（カテゴリで増えたメニューはヘルプの前）
         string[] order = { "ファイル", "編集", "画像", "移動", "表示", "チェック" };
         var sorted = menu.Items.Cast<ToolStripItem>()
-            .OrderBy(i => i == helpMenu ? int.MaxValue : Array.IndexOf(order, StripMnemonic(i.Text)) is var n and >= 0 ? n : order.Length)
+            .OrderBy(i => i == helpMenu ? int.MaxValue : Array.IndexOf(order, MenuSearch.StripMnemonic(i.Text)) is var n and >= 0 ? n : order.Length)
             .ToList();
         menu.Items.Clear();
         menu.Items.AddRange(sorted.ToArray());
@@ -1569,80 +1433,6 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         return markMenu;
     }
 
-    // ---- 更新の確認（起動時に 1 回。新しければステータスバーとヘルプメニューに出すだけで、更新はユーザーが選んだときだけ） ----
-
-    private static Version CurrentVersion => typeof(MainForm).Assembly.GetName().Version ?? new Version(0, 0, 0);
-
-    /// <summary>
-    /// 自分で入れ替えられる exe（リリース用の単一ファイル）のパス。
-    /// 開発用のビルド（横に Glimpse.dll がある）では null（確認はするが入れ替えない）
-    /// </summary>
-    private static string? UpdatableExe =>
-        Environment.ProcessPath is string exe && !File.Exists(Path.Combine(Path.GetDirectoryName(exe) ?? "", typeof(MainForm).Assembly.GetName().Name + ".dll")) ? exe : null;
-
-    private void SetUpUpdateCheck()
-    {
-        if (UpdatableExe is not string exe) return; // 開発用のビルドでは起動時に確認しない（手動の確認はできる）
-        SelfUpdate.CleanUp(exe); // 前回の更新で残った古い exe を消す
-        if (_settings.CheckUpdatesOnStartup ?? true) Shown += async (_, _) => await CheckForUpdatesAsync(manual: false);
-    }
-
-    private async Task CheckForUpdatesAsync(bool manual)
-    {
-        _http ??= UpdateChecker.CreateClient(CurrentVersion);
-        // 起動時は短めに打ち切る（つながらなければ何も出さない）
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(manual ? 15 : 5));
-        var latest = await UpdateChecker.GetLatestAsync(_http, cts.Token);
-        if (latest == null)
-        {
-            if (manual)
-                MessageBox.Show(this, "新しいバージョンを確認できませんでした。インターネットにつながっているか確かめてください。", "更新を確認",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return;
-        }
-        if (!UpdateChecker.IsNewer(latest, CurrentVersion))
-        {
-            if (manual)
-                MessageBox.Show(this, $"最新のバージョンです（v{UpdateChecker.Normalize(CurrentVersion)}）。", "更新を確認",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return;
-        }
-        if (!manual && latest.Tag == _settings.SkippedVersion) return; // 「このバージョンは飛ばす」を選んだもの
-
-        _available = latest;
-        _footer.UpdateText = $"新しいバージョン {latest.Tag} があります（クリックで更新）";
-        _updateItem.Text = $"{latest.Tag} に更新(&N)...";
-        _updateItem.Visible = true;
-        if (manual) ShowUpdateDialog();
-    }
-
-    private void ShowUpdateDialog()
-    {
-        if (_available is not { } release || _http == null) return;
-        UpdateDialog.Outcome outcome;
-        using (var dlg = new UpdateDialog(release, CurrentVersion, _http, UpdatableExe))
-        {
-            dlg.ShowDialog(this);
-            outcome = dlg.Result;
-        }
-        switch (outcome)
-        {
-            case UpdateDialog.Outcome.Skip:
-                ((ISettingsAccess)this).UpdateSettings(s => s with { SkippedVersion = release.Tag });
-                _footer.UpdateText = "";
-                _updateItem.Visible = false;
-                Notify($"{release.Tag} は飛ばします（☰ → ヘルプ →「更新を確認」からいつでも更新できます）");
-                break;
-            case UpdateDialog.Outcome.Updated when UpdatableExe is string exe:
-                // 新しい exe で、今のフォルダを開いた状態で起動し直す
-                var start = new System.Diagnostics.ProcessStartInfo(exe) { UseShellExecute = false };
-                if (_folder != null) start.ArgumentList.Add(_folder);
-                System.Diagnostics.Process.Start(start);
-                Close();
-                break;
-        }
-    }
-
     /// <summary>ImageSharp で常に読める形式と、この PC の WIC 拡張機能で読める形式を表示</summary>
     private void ShowSupportedFormats()
     {
@@ -1721,9 +1511,6 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _commandItems.Add((item, cmd));
         return item;
     }
-
-    private static string StripMnemonic(string? text) =>
-        System.Text.RegularExpressions.Regex.Replace(text ?? "", @"\(&.\)|&", "");
 
     // ---- コマンド実行 ----
 
@@ -2032,12 +1819,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         // フォルダジャンプの記録は本当のフォルダだけ
         if (!reload && !inArchive)
         {
-            _jump.RecordVisit(folder);
-            if (++_visitsSinceSave >= 10)
-            {
-                _visitsSinceSave = 0;
-                _ = Task.Run(_jump.SaveVisits);
-            }
+            _jumper.RecordVisit(folder);
         }
         UpdateSortChecks();
         _grid.SetContents(folders, files, reload);
