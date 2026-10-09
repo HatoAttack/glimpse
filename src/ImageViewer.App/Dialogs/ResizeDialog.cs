@@ -155,6 +155,7 @@ public sealed class ResizeDialog : ThemedForm
             UpdatePreview();
         };
         _stripMetadata.CheckedChanged += (_, _) => UpdatePreview();
+        _noUpscale.CheckedChanged += (_, _) => UpdatePreview();
         _customSizeValue.ValueChanged += (_, _) => UpdatePreview();
         _keepSize.CheckedChanged += (_, _) => _noUpscale.Enabled = !_keepSize.Checked;
         _noUpscale.Enabled = !_keepSize.Checked;
