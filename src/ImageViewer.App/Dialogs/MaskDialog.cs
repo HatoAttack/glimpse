@@ -599,6 +599,7 @@ public sealed class MaskDialog : ThemedForm
             if (Math.Abs(e.X - last.X) + Math.Abs(e.Y - last.Y) < 2) return;
             _path.Add(ClampToImage(CanvasToImage(e.X, e.Y)));
             _canvas.Invalidate();
+            _canvas.Update(); // 下の移動・大きさの変更と同じ理由
             return;
         }
         if (_mode == DragMode.None || _image == null || _selected < 0) return;
@@ -606,6 +607,9 @@ public sealed class MaskDialog : ThemedForm
         else DoResize(e);
         RenderPreview();
         UpdateButtons();
+        // マウスの移動が続いている間は描き直しが後回しになる（移動のほうが先に処理される）ので、ここで描き直しまで済ませる。
+        // こうしないと、描くものが増えて 1 回の処理が長くなるほど、こまが飛んでちらついて見える
+        _canvas.Update();
     }
 
     private void Canvas_MouseUp(object? sender, MouseEventArgs e)

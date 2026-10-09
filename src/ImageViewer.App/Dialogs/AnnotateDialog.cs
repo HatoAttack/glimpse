@@ -585,6 +585,9 @@ public sealed class AnnotateDialog : ThemedForm
         else DoResize(e);
         RenderPreview();
         UpdateButtons();
+        // マウスの移動が続いている間は描き直しが後回しになる（移動のほうが先に処理される）ので、ここで描き直しまで済ませる。
+        // こうしないと、描くものが増えて 1 回の処理が長くなるほど、こまが飛んでちらついて見える
+        _canvas.Update();
     }
 
     private void Canvas_MouseUp(object? sender, MouseEventArgs e)

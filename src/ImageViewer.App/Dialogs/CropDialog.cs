@@ -479,6 +479,7 @@ public sealed class CropDialog : ThemedForm
         else DoResize(e);
         SetAnchor();
         _canvas.Invalidate();
+        _canvas.Update(); // マウスの移動が続いている間も、動かすたびに描き直す（描き直しは移動より後回しにされるので）
     }
 
     private void DoMove(MouseEventArgs e)
