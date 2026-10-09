@@ -87,6 +87,24 @@ static class EditingTests
         using (var img = Image.Load<Rgba32>(P("photo_up.webp")))
             check(img.Width == 1500 && img.Height == 3000, "拡大あり・WEBP へ");
 
+        // ---- 幅 × 高さをぴったり指定 ----
+        var exact = new ConvertOptions { ExactSize = true, ExactWidth = 560, ExactHeight = 315 };
+        check(Converter.OutputGeometry(1920, 1078, new ConvertOptions { LongEdge = 560 }) is (_, 560, 314),
+            "長辺の指定: 16:9 より少し低い画像は短い辺が 1px 足りなくなる（比率を保つので）");
+        check(Converter.OutputGeometry(1120, 629, new ConvertOptions { LongEdge = 560 }) is (_, 560, 315), "長辺の指定: ちょうど .5 は切り上げる（314.5 → 315）");
+        check(Converter.OutputGeometry(1920, 1078, exact) is ({ X: 2, Y: 0, Width: 1916, Height: 1078 }, 560, 315),
+            "幅 × 高さの指定: 比率が合わない分は中央から切って、ぴったりの大きさにする（横を切る）");
+        check(Converter.OutputGeometry(1920, 1080, exact) is ({ X: 0, Y: 0, Width: 1920, Height: 1080 }, 560, 315), "幅 × 高さの指定: 比率が同じなら切らない");
+        check(Converter.OutputGeometry(1000, 2000, exact) is ({ X: 0, Y: 718, Width: 1000, Height: 563 }, 560, 315), "幅 × 高さの指定: 縦長の画像は上下を切る");
+        check(Converter.OutputGeometry(400, 300, exact) is ({ Width: 400, Height: 300 }, 400, 300)
+              && Converter.OutputGeometry(400, 300, exact with { NoUpscale = false }) is ({ X: 0, Y: 37, Width: 400, Height: 225 }, 560, 315),
+            "幅 × 高さの指定: 指定より小さい画像は「拡大しない」ならそのまま、オフなら切って拡大");
+        opts = new ConvertOptions { ExactSize = true, ExactWidth = 200, ExactHeight = 100, Suffix = "_exact", OutputMode = OutputFolderMode.Same };
+        Converter.Run(Converter.Plan(new[] { src }, opts), opts);
+        using (var img = Image.Load<Rgba32>(P("photo_exact.jpg")))
+            check(img.Width == 200 && img.Height == 100, $"幅 × 高さの指定: 保存した画像がぴったりの大きさ（{img.Width}x{img.Height}）");
+        check(Converter.Describe(exact).StartsWith("560 × 315px"), "幅 × 高さの指定: 設定の説明に大きさを出す");
+
         string transparent = P("clear.png");
         using (var img = new Image<Rgba32>(10, 10, new Rgba32(0, 0, 0, 0))) img.SaveAsPng(transparent);
         opts = new ConvertOptions { LongEdge = ConvertOptions.KeepSize, Format = OutputFormat.Jpeg, OutputMode = OutputFolderMode.Same };
@@ -293,6 +311,66 @@ static class EditingTests
         try { Masker.MaskCarried(P("over.gif"), new[] { MaskRegion.Rect(0, 0, 10, 10) }, 20, 20, MaskEffect.Mosaic, 5, P("over.gif")); }
         catch (NotSupportedException) { refused = true; }
         check(refused && new FileInfo(P("over.gif")).Length == gifSize, "モザイク: アニメーションは上書きしない（元のまま）");
+
+        // ---- 枠・矢印 ----
+        var frame = new Annotation(AnnotationKind.Frame, 20, 20, 80, 60, Red, 4, 0, 4, false);
+        using (var img = new Image<Rgba32>(100, 80, Blue))
+        {
+            Annotator.Draw(img, new[] { frame });
+            check(img[20, 40] == Red && img[50, 20] == Red && img[79, 59] == Red && img[18, 18] == Red, "枠: 線の中心が四角の辺を通り、丸みが 0 なら外側の角まで塗る");
+            check(img[50, 40] == Blue && img[10, 10] == Blue && img[50, 63] == Blue, "枠: 中と外は変えない");
+        }
+        using (var img = new Image<Rgba32>(100, 80, Blue))
+        {
+            Annotator.Draw(img, new[] { frame with { CornerRadius = 20 } });
+            check(img[18, 18] == Blue && img[20, 40] == Red && img[50, 20] == Red, "枠: 角の丸みを付けると角が丸くなる（辺はそのまま）");
+        }
+        check((frame with { CornerRadius = 999 }).Distance(19.5, 19.5) == (frame with { CornerRadius = 20 }).Distance(19.5, 19.5),
+            "枠: 角の丸みは短い辺の半分まで");
+        using (var img = new Image<Rgba32>(100, 80, Blue))
+        {
+            Annotator.Draw(img, new[] { frame with { Thickness = 12 } });
+            check(img[15, 40] == Red && img[25, 40] == Red && img[27, 40] == Blue, "枠: 太さを変えると線が両側に太る");
+        }
+        using (var img = new Image<Rgba32>(100, 80, Blue))
+        {
+            Annotator.Draw(img, new[] { frame with { Shadow = true } });
+            check(img[50, 63].B < 255 && img[50, 63].R == 0 && img[50, 16] == Blue && img[20, 40] == Red, "枠: 影は右下にだけ落ちる（線の色は変えない）");
+        }
+        var arrow = new Annotation(AnnotationKind.Arrow, 10, 40, 90, 40, Red, 4, 0, 4, false);
+        using (var img = new Image<Rgba32>(100, 80, Blue))
+        {
+            Annotator.Draw(img, new[] { arrow });
+            check(img[50, 40] == Red && img[50, 45] == Blue && img[76, 45] == Red && img[86, 40] == Red, "矢印: 軸と、(X1, Y1) 側に先端の三角を描く");
+            check(img[95, 40] == Blue && img[5, 40] == Blue && img[60, 50] == Blue, "矢印: 端より先と横は変えない");
+        }
+        using (var img = new Image<Rgba32>(100, 80, Blue))
+        {
+            Annotator.Draw(img, new[] { arrow with { HeadSize = 8 }, arrow with { X0 = 50, Y0 = 70, X1 = 50, Y1 = 70 } });
+            check(img[60, 50] == Red && img[50, 70] == Blue, "矢印: 先端の大きさを変えると三角が大きくなる（長さ 0 の矢印は描かない）");
+        }
+        var halfFrame = frame.Scale(0.5);
+        check(halfFrame is { X0: 10, Y0: 10, X1: 40, Y1: 30, Thickness: 2 }, "枠・矢印: 縮小した画像には位置も太さも同じ倍率で描く");
+        check(frame.Distance(20, 40) < 0 && frame.Distance(50, 40) > 10 && arrow.Distance(50, 40) < 0 && arrow.Distance(50, 60) > 10,
+            "枠・矢印: 線の上は距離が負、枠の中や離れた所は正（クリックで選ぶ判定用）");
+        check(Annotator.DefaultThickness(4000, 3000) == 20 && Annotator.DefaultThickness(100, 100) == 2, "枠・矢印: 太さの初めの値は長い辺に対する割合（最小 2px）");
+        string markOut = Annotator.OutputPathFor(P("mask.png"), dir);
+        check(markOut == P("mask_mark.png"), "枠・矢印: 保存先の名前は _mark");
+        using (var whole = ImageViewer.Core.Imaging.ImageLoader.Load(P("mask.png")))
+        {
+            var before = whole[5, 5];
+            Annotator.SaveAnnotated(whole, new[] { new Annotation(AnnotationKind.Frame, 2, 2, 20, 20, Blue, 4, 0, 4, true) }, P("mask.png"), markOut);
+            check(whole[2, 10] == before, "枠・矢印: 保存しても表示中の画像は変えない");
+        }
+        using (var img = Image.Load<Rgba32>(markOut))
+            check(img.Width == 60 && img[2, 10] == Blue, "枠・矢印: 別の名前で保存できる");
+        refused = false;
+        using (var gif = ImageViewer.Core.Imaging.ImageLoader.Load(P("over.gif")))
+        {
+            try { Annotator.SaveAnnotated(gif, new[] { frame }, P("over.gif"), P("over.gif")); }
+            catch (NotSupportedException) { refused = true; }
+        }
+        check(refused && new FileInfo(P("over.gif")).Length == gifSize, "枠・矢印: アニメーションは上書きしない（元のまま）");
 
         // ---- 連結 ----
         using (var a = new Image<Rgba32>(100, 50, Red))

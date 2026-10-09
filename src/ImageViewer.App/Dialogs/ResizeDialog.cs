@@ -16,7 +16,13 @@ public sealed class ResizeDialog : ThemedForm
     private readonly RadioButton _customSize = new() { Text = "指定:", AutoSize = true };
     private readonly NumericUpDown _customSizeValue = new() { Minimum = 1, Maximum = 65500, Value = 800, Width = 80, TextAlign = HorizontalAlignment.Right };
     private readonly RadioButton _keepSize = new() { Text = "変えない（形式の変換だけ）", AutoSize = true };
-    private readonly CheckBox _noUpscale = new() { Text = "長辺が指定より小さい画像は拡大しない", AutoSize = true };
+    // 幅 × 高さをぴったり指定（比率が合わない分は中央から切る）
+    private readonly RadioButton _exactSize = new() { Text = "幅 × 高さ:", AutoSize = true };
+    private readonly NumericUpDown _exactWidth = new() { Minimum = 1, Maximum = 65500, Value = 560, Width = 70, TextAlign = HorizontalAlignment.Right };
+    private readonly NumericUpDown _exactHeight = new() { Minimum = 1, Maximum = 65500, Value = 315, Width = 70, TextAlign = HorizontalAlignment.Right };
+    private readonly CheckBox _noUpscale = new() { Text = "指定より小さい画像は拡大しない", AutoSize = true };
+    // 「幅 × 高さ」のときに一覧へ出す、切る量を調べるための画像の大きさ（見えている行の分だけ読む。読めなければ null）
+    private readonly Dictionary<string, (int Width, int Height)?> _sourceSizes = new(StringComparer.OrdinalIgnoreCase);
 
     // 形式・画質
     private readonly List<(RadioButton Radio, OutputFormat Format)> _formatRadios = new();
@@ -77,9 +83,13 @@ public sealed class ResizeDialog : ThemedForm
             _sizeRadios.Add((rb, s));
             sizeRow.Controls.Add(rb);
         }
-        sizeRow.Controls.AddRange(new Control[] { _customSize, _customSizeValue, Caption("px"), _keepSize });
+        var customUnit = Caption("px");
+        sizeRow.Controls.AddRange(new Control[] { _customSize, _customSizeValue, customUnit, _exactSize, _exactWidth, Caption("×"), _exactHeight, Caption("px"), _keepSize });
+        sizeRow.SetFlowBreak(customUnit, true); // 「幅 × 高さ」からは次の行に（幅と高さの欄が行をまたがないように）
         _customSizeValue.Enter += (_, _) => _customSize.Checked = true;
-        var sizeGroup = Group("サイズ", sizeRow, Flow(_noUpscale));
+        _exactWidth.Enter += (_, _) => _exactSize.Checked = true;
+        _exactHeight.Enter += (_, _) => _exactSize.Checked = true;
+        var sizeGroup = Group("サイズ", sizeRow, Flow(_noUpscale, Hint("「幅 × 高さ」は、比率が合わない分を中央から切って、ぴったりその大きさにします")));
 
         var formatRow = Flow(Caption("形式:"));
         foreach (var (label, format) in new[] { ("元のまま", OutputFormat.Keep), ("JPG", OutputFormat.Jpeg), ("PNG", OutputFormat.Png), ("WEBP", OutputFormat.Webp) })
@@ -143,7 +153,7 @@ public sealed class ResizeDialog : ThemedForm
 
         Apply(initial);
         foreach (var rb in _sizeRadios.Select(r => r.Radio).Concat(_formatRadios.Select(r => r.Radio)).Concat(_algorithmRadios.Select(r => r.Radio))
-                     .Concat(new[] { _customSize, _keepSize, _toSubfolder, _toSame, _toCustom, _skipExisting, _overwrite }))
+                     .Concat(new[] { _customSize, _exactSize, _keepSize, _toSubfolder, _toSame, _toCustom, _skipExisting, _overwrite }))
             rb.CheckedChanged += (_, _) => { if (rb.Checked) UpdatePreview(); };
         foreach (var t in new[] { _search, _replace, _suffix, _subfolderName, _customFolder })
             t.TextChanged += (_, _) => UpdatePreview();
@@ -157,6 +167,8 @@ public sealed class ResizeDialog : ThemedForm
         _stripMetadata.CheckedChanged += (_, _) => UpdatePreview();
         _noUpscale.CheckedChanged += (_, _) => UpdatePreview();
         _customSizeValue.ValueChanged += (_, _) => UpdatePreview();
+        _exactWidth.ValueChanged += (_, _) => UpdatePreview();
+        _exactHeight.ValueChanged += (_, _) => UpdatePreview();
         _keepSize.CheckedChanged += (_, _) => _noUpscale.Enabled = !_keepSize.Checked;
         _noUpscale.Enabled = !_keepSize.Checked;
         UpdatePreview();
@@ -167,7 +179,10 @@ public sealed class ResizeDialog : ThemedForm
     private void Apply(ConvertOptions o)
     {
         var preset = _sizeRadios.FirstOrDefault(r => r.Size == o.LongEdge).Radio;
-        if (o.LongEdge == ConvertOptions.KeepSize) _keepSize.Checked = true;
+        _exactWidth.Value = Math.Clamp(o.ExactWidth, (int)_exactWidth.Minimum, (int)_exactWidth.Maximum);
+        _exactHeight.Value = Math.Clamp(o.ExactHeight, (int)_exactHeight.Minimum, (int)_exactHeight.Maximum);
+        if (o.ExactSize) _exactSize.Checked = true;
+        else if (o.LongEdge == ConvertOptions.KeepSize) _keepSize.Checked = true;
         else if (preset != null) preset.Checked = true;
         else
         {
@@ -201,6 +216,9 @@ public sealed class ResizeDialog : ThemedForm
             : _customSize.Checked ? (int)_customSizeValue.Value
             : _sizeRadios.FirstOrDefault(r => r.Radio.Checked).Size is int s and > 0 ? s : ConvertOptions.SizePresets[0],
         NoUpscale = _noUpscale.Checked,
+        ExactSize = _exactSize.Checked,
+        ExactWidth = (int)_exactWidth.Value,
+        ExactHeight = (int)_exactHeight.Value,
         Format = _formatRadios.First(r => r.Radio.Checked).Format,
         Algorithm = _algorithmRadios.First(r => r.Radio.Checked).Algorithm,
         StripMetadata = _stripMetadata.Checked,
@@ -246,14 +264,32 @@ public sealed class ResizeDialog : ThemedForm
         var p = _plan[e.ItemIndex];
         string where = Path.GetDirectoryName(p.Target) is string d && !string.Equals(d, Path.GetDirectoryName(p.Source), StringComparison.OrdinalIgnoreCase)
             ? Path.Combine(Path.GetFileName(d), p.TargetName) : p.TargetName;
-        e.Item = new ListViewItem(new[] { p.SourceName, where, p.Note ?? "" });
+        string? note = p.Status == ConvertStatus.Ok && CropNote(p.Source) is string crop ? (p.Note == null ? crop : $"{p.Note}・{crop}") : p.Note;
+        e.Item = new ListViewItem(new[] { p.SourceName, where, note ?? "" });
         e.Item.ForeColor = p.Status switch
         {
             ConvertStatus.Error => Theme.Current.Danger,
             ConvertStatus.Skip => Theme.Current.TextMuted,
-            _ when p.Note != null => Theme.Current.Warning,
+            _ when note != null => Theme.Current.Warning,
             _ => Theme.Current.Text,
         };
+    }
+
+    /// <summary>「幅 × 高さ」のとき、その画像のどこをどれだけ切るか（切らない・ほかの指定なら null）</summary>
+    private string? CropNote(string source)
+    {
+        if (!_exactSize.Checked) return null;
+        if (!_sourceSizes.TryGetValue(source, out var size))
+        {
+            var header = ImageViewer.Core.Imaging.ImageLoader.Identify(source);
+            _sourceSizes[source] = size = header == null ? null : (header.Width, header.Height);
+        }
+        if (size is not var (w, h)) return null;
+        var (box, outW, outH) = Converter.OutputGeometry(w, h, CurrentOptions());
+        if (outW == w && outH == h && (w != (int)_exactWidth.Value || h != (int)_exactHeight.Value)) return "指定より小さいので大きさは変えません";
+        return box.Width < w ? $"左右を合わせて {w - box.Width}px 切ります"
+            : box.Height < h ? $"上下を合わせて {h - box.Height}px 切ります"
+            : null;
     }
 
     // ---- 実行 ----
@@ -306,6 +342,7 @@ public sealed class ResizeDialog : ThemedForm
         }
         // 設定を変えて続けて実行できるように戻す。一覧は今できたファイルを踏まえて作り直し、結果の表示は設定を変えるまで残す
         foreach (var c in _inputs) c.Enabled = true;
+        _sourceSizes.Clear(); // 元の画像を置き換えたなら大きさが変わっている
         UpdatePreview(keepSummary: true);
         _summary.Text = Summarize(result);
         _summary.ForeColor = result.Errors.Count > 0 ? Theme.Current.Danger : Theme.Current.Text;
