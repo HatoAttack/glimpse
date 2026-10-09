@@ -217,7 +217,7 @@ public sealed class ResizeDialog : ThemedForm
     /// <summary>出力先の指定の誤り（無ければ null）</summary>
     private static string? OutputError(ConvertOptions o) => Converter.ValidateOutput(o);
 
-    private void UpdatePreview()
+    private void UpdatePreview(bool keepSummary = false)
     {
         var o = CurrentOptions();
         string? outputError = OutputError(o);
@@ -229,11 +229,12 @@ public sealed class ResizeDialog : ThemedForm
         int skip = _plan.Count(p => p.Status == ConvertStatus.Skip);
         int errors = _plan.Count(p => p.Status == ConvertStatus.Error);
         int replaces = _plan.Count(p => p.Status == ConvertStatus.Ok && p.ReplacesSource);
+        _run.Enabled = outputError == null && errors == 0 && ok > 0;
+        if (keepSummary) return;
         _summary.Text = outputError
             ?? (errors > 0 ? $"エラーが {errors} 件あります。直すまで実行できません"
                 : $"{ok} 枚を変換します" + (skip > 0 ? $"（{skip} 枚は飛ばします）" : "") + (replaces > 0 ? $"　元の画像 {replaces} 枚を置き換えます" : ""));
         _summary.ForeColor = outputError != null || errors > 0 ? Theme.Current.Danger : replaces > 0 ? Theme.Current.Warning : Theme.Current.Text;
-        _run.Enabled = outputError == null && errors == 0 && ok > 0;
 
         int firstError = _plan.FindIndex(p => p.Status == ConvertStatus.Error);
         if (firstError >= 0) _preview.EnsureVisible(firstError);
@@ -290,17 +291,23 @@ public sealed class ResizeDialog : ThemedForm
             _cts = null;
             cts.Dispose();
         }
-        Result = result;
+        // 続けて何度か実行したときは合計を返す
+        Result = Result is { } before
+            ? new ConvertResult(before.Converted + result.Converted, before.Skipped + result.Skipped, before.Errors.Concat(result.Errors).ToList(), result.Canceled)
+            : result;
 
         _progress.Visible = false;
         _close.Text = "閉じる";
-        _summary.Text = Summarize(result);
-        _summary.ForeColor = result.Errors.Count > 0 ? Theme.Current.Danger : Theme.Current.Text;
         if (_closeAfterCancel)
         {
             Close();
             return;
         }
+        // 設定を変えて続けて実行できるように戻す。一覧は今できたファイルを踏まえて作り直し、結果の表示は設定を変えるまで残す
+        foreach (var c in _inputs) c.Enabled = true;
+        UpdatePreview(keepSummary: true);
+        _summary.Text = Summarize(result);
+        _summary.ForeColor = result.Errors.Count > 0 ? Theme.Current.Danger : Theme.Current.Text;
         if (result.Errors.Count > 0)
             MessageBox.Show(this, string.Join("\n", result.Errors.Take(15)) + (result.Errors.Count > 15 ? $"\n…ほか {result.Errors.Count - 15} 件" : ""),
                 $"変換できなかった画像（{result.Errors.Count} 枚）", MessageBoxButtons.OK, MessageBoxIcon.Warning);
