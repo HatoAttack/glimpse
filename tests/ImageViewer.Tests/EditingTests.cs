@@ -501,6 +501,33 @@ static class EditingTests
             check(savedFirst == P("fresh.png") && savedAgain == P("fresh (2).png"), "新しいファイルとして保存: 空いていればその名前、無ければ (2)…");
         }
 
+        // ---- 一括処理の進め方（リサイズ・まとめて補正・回転で共通）: 打ち切り・進み具合・数え方 ----
+        Directory.CreateDirectory(P("batch"));
+        string B(string name) => Path.Combine(P("batch"), name);
+        using (var img = new Image<Rgba32>(40, 20, Red)) { img.SaveAsPng(B("1.png")); img.SaveAsPng(B("2.png")); img.SaveAsPng(B("3.png")); }
+        Directory.CreateDirectory(B("resized"));
+        File.WriteAllText(Path.Combine(B("resized"), "1.png"), "old"); // 計画の時点で同名がある → 飛ばす
+        File.WriteAllText(B("4.png"), "画像ではない");                    // 読めない → 失敗
+        var batchOptions = new ConvertOptions();
+        var batchPlan = Converter.Plan(new[] { B("1.png"), B("2.png"), B("3.png"), B("4.png") }, batchOptions);
+        using (var stop = new CancellationTokenSource())
+        {
+            var seen = new List<ConvertProgress>();
+            var progress = new SyncProgress(p => { seen.Add(p); if (p.Done == 1) stop.Cancel(); }); // 2 枚目（3.png）を始めた所で打ち切る
+            var stopped = Converter.Run(batchPlan, batchOptions, progress, stop.Token);
+            check(stopped.Canceled && stopped.Converted == 2 && stopped.Skipped == 1 && stopped.Errors.Count == 0,
+                $"一括: 打ち切ると、始めていた 1 枚は済ませて、次の 1 枚の前で止まる（済み {stopped.Converted}・飛ばした {stopped.Skipped}）");
+            check(seen.Select(p => (p.Done, p.Total, p.Name)).SequenceEqual(new[] { (0, 3, "2.png"), (1, 3, "3.png") }),
+                "一括: 進み具合は 1 枚ごとに始める前に知らせる（飛ばすものは数に入れない。打ち切ったら最後の知らせは出さない）");
+        }
+        {
+            var seen = new List<ConvertProgress>();
+            var all = Converter.Run(Converter.Plan(new[] { B("1.png"), B("2.png"), B("3.png"), B("4.png") }, batchOptions), batchOptions, new SyncProgress(seen.Add));
+            check(!all.Canceled && all.Converted == 0 && all.Skipped == 3 && all.Errors.Count == 1 && all.Errors[0].StartsWith("4.png: "),
+                $"一括: 済み・飛ばした・失敗を数える（済み {all.Converted}・飛ばした {all.Skipped}・失敗 {all.Errors.Count}）");
+            check(seen.SequenceEqual(new ConvertProgress[] { new(0, 1, "4.png"), new(1, 1, "") }), "一括: 終わったら「全部済み」を知らせる");
+        }
+
         // ---- 画像ごとに覚える編集（モザイクの範囲・枠や矢印）: 上書きした分は戻ってきても残さない ----
         var edits = new PendingEdits<string>();
         edits.Recall(0);
@@ -525,6 +552,12 @@ static class EditingTests
         edits.DiscardAll();
         edits.Recall(0);
         check(edits.Current.Count == 0, "編集: 全部に上書きしたら、覚えていた分をすべて捨てる");
+    }
+
+    /// <summary>知らせをその場で受ける（Progress&lt;T&gt; は後から別スレッドで届くので、順番を確かめられない）</summary>
+    sealed class SyncProgress(Action<ConvertProgress> report) : IProgress<ConvertProgress>
+    {
+        public void Report(ConvertProgress value) => report(value);
     }
 
     static Image<Rgba32> SplitImage(int w, int h)

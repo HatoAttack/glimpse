@@ -232,7 +232,7 @@ public sealed class AdjustBatchDialog : ThemedForm
     private void UpdatePlan()
     {
         var o = CurrentOptions();
-        _outputError = Converter.ValidateOutput(o.ToConvertOptions());
+        _outputError = o.Output().Validate();
         _plan = _outputError == null ? BatchAdjuster.Plan(_paths, o) : new List<ConvertPlanItem>();
         _list.VirtualListSize = _plan.Count;
         _list.Invalidate();

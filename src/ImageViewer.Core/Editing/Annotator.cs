@@ -206,13 +206,13 @@ public static class Annotator
     /// <returns>実際に保存したパス</returns>
     public static string SaveAnnotated(Image<Rgba32> image, IReadOnlyList<Annotation> items, string src, string dst)
     {
-        if (Cropper.IsSameFile(src, dst))
+        if (SourceGuard.IsSameFile(src, dst))
         {
-            Cropper.EnsureOverwritable(src);
-            Cropper.EnsureKeepsMetadata(image);
+            SourceGuard.EnsureReplaceable(src);
+            SourceGuard.EnsureKeepsMetadata(image);
         }
         using var drawn = image.Clone();
         Draw(drawn, items);
-        return Cropper.SaveEdited(drawn, src, dst);
+        return SourceGuard.Save(drawn, src, dst);
     }
 }

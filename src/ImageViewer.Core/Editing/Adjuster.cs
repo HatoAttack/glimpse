@@ -166,7 +166,7 @@ public static class Adjuster
         int? frames = FrameCount(src);
         if (frames > 1) throw new NotSupportedException(MultiFrameMessage);
         // 数えられなかった画像は、ページが消えるかもしれないので上書きしない（別のファイルに書くならよい）
-        if (frames == null && string.Equals(Path.GetFullPath(src), Path.GetFullPath(dst), StringComparison.OrdinalIgnoreCase))
+        if (frames == null && SourceGuard.IsSameFile(src, dst))
             throw new NotSupportedException("ページの数を確かめられない画像なので、上書きしませんでした");
         using var image = ImageLoader.Load(src); // 回転補正済み
         if (!allowMetadataLoss && !KeepsMetadata(image)) throw new MetadataLossException(src);
