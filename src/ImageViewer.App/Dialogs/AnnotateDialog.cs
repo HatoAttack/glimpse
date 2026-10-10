@@ -3,7 +3,8 @@
 // - 文字と番号はクリックした所に置く。文字は右の欄に打つ（背景は なし / 帯 / 吹き出し）。番号は置くたびに 1 ずつ増える。
 //   吹き出しは、置く所から指したい所へドラッグする（矢印と同じく、離した所がしっぽの先）
 // - 線の上（文字・番号は本体）をクリックで選ぶ。選んだものはドラッグで移動、枠は四隅・矢印は両端で形を変える。
-//   文字・番号は四隅で大きさを変え、吹き出しはしっぽの先も動かせる（本体を動かしても、しっぽの先は指している所に残る）。Delete か右クリックで消す
+//   文字は四隅で本体の大きさを変える（文字が収まる大きさより小さくはならない。文字の大きさは右の欄で変える）。番号は四隅で大きさを変える。
+//   吹き出しはしっぽの先も動かせる（本体を動かしても、しっぽの先は指している所に残る）。Delete か右クリックで消す
 // - 色・太さ・角の丸み・先端の大きさ・影・文字の大きさなどは、選んだものがあればそれを変え、無ければ次に描くものの見た目になる
 // - 選択した画像を ◀ ▶（PageUp / PageDown）で切り替え。Enter で保存して次へ。描いたものは画像ごとに覚える
 // - 「保存」は元の画像を残して別の名前で、「上書き保存」は元の画像を置き換える（確かめない。アニメ・書き出せない形式などは上書きしない）
@@ -48,7 +49,7 @@ public sealed class AnnotateDialog : ThemedForm
     private List<Annotation> _items => _edits.Current;
     private int _selected = -1;
     private readonly PendingEdits<Annotation> _edits = new();
-    private enum DragMode { None, Move, Resize, Scale, Tail } // Scale: 文字・番号の大きさ、Tail: 吹き出しのしっぽの先
+    private enum DragMode { None, Move, Resize, Box, Scale, Tail } // Box: 文字の本体の大きさ、Scale: 番号の大きさ、Tail: 吹き出しのしっぽの先
     private DragMode _mode;
     private bool _creating;                // 新しく描いている途中（小さすぎれば離したときに消す）
     private (double X, double Y) _fixed;   // 形を変えるときに動かない点（枠・文字は対角、矢印は反対の端）
@@ -245,7 +246,7 @@ public sealed class AnnotateDialog : ThemedForm
         side.Controls.Add(EditDialogShell.Group("文字", vertical: true, _text, Row(_fontText, _font), Row(_backText, _backNone, _backBox, _backBalloon),
             Row(_alignText, _alignLeft, _alignCenter, _alignRight)));
         foreach (var c in new Control[] { _alignText, _alignLeft, _alignCenter, _alignRight })
-            _toolTip.SetToolTip(c, "2 行以上の文字の、行のそろえ方（左 / 中央 / 右）。文字全体は本体の中央に置きます");
+            _toolTip.SetToolTip(c, "文字を本体の 左 / 中央 / 右 のどこに寄せるか（2 行以上なら行も同じ側にそろえます）");
         _toolTip.SetToolTip(_text, "選んだ文字の中身。Enter で改行します");
         _toolTip.SetToolTip(_backBox, "文字の後ろに角の丸い四角を置きます");
         _toolTip.SetToolTip(_backBalloon, "四角に、指したい所へ向かうしっぽを付けます");
@@ -254,7 +255,7 @@ public sealed class AnnotateDialog : ThemedForm
         foreach (var c in new Control[] { _thicknessText, _thickness }) _toolTip.SetToolTip(c, "線の太さ（枠・矢印と、帯・吹き出しの縁）");
         foreach (var c in new Control[] { _radiusText, _radius }) _toolTip.SetToolTip(c, "枠・帯・吹き出しの角の丸み。短い辺の半分より大きくはなりません");
         foreach (var c in new Control[] { _headText, _head }) _toolTip.SetToolTip(c, "矢印の先端の大きさ（線の太さの何倍か）");
-        foreach (var c in new Control[] { _fontText, _font }) _toolTip.SetToolTip(c, "文字・番号の大きさ。選んだ文字・番号の四隅をドラッグしても変えられます");
+        foreach (var c in new Control[] { _fontText, _font }) _toolTip.SetToolTip(c, "文字・番号の大きさ（文字の四隅のドラッグは、文字でなく本体の大きさを変えます）");
 
         _removeSelected.Click += (_, _) => RemoveSelected();
         _removeAll.Click += (_, _) => RemoveAll();
@@ -477,7 +478,7 @@ public sealed class AnnotateDialog : ThemedForm
                 AnnotationKind.Frame => $"描いたもの {_items.Count} 個（選んだ枠: {Math.Round(a.Width)} × {Math.Round(a.Height)} px）",
                 AnnotationKind.Arrow => $"描いたもの {_items.Count} 個（選んだ矢印: 長さ {Math.Round(a.Length)} px）",
                 AnnotationKind.Number => $"描いたもの {_items.Count} 個（選んだ番号: {a.Text}）",
-                _ => $"描いたもの {_items.Count} 個（選んだ文字: ダブルクリックで打ち直し）",
+                _ => $"描いたもの {_items.Count} 個（選んだ文字: {Math.Round(a.Body.Width)} × {Math.Round(a.Body.Height)} px。ダブルクリックで打ち直し）",
             };
     }
 
@@ -619,7 +620,7 @@ public sealed class AnnotateDialog : ThemedForm
                     _mode = DragMode.Tail;
                     return;
                 }
-                _mode = a.IsText ? DragMode.Scale : DragMode.Resize;
+                _mode = a.Kind == AnnotationKind.Text ? DragMode.Box : a.IsText ? DragMode.Scale : DragMode.Resize;
                 _fixed = handles[a.IsText ? (i + 2) % 4 : (i + handles.Length / 2) % handles.Length]; // 枠・文字は対角、矢印は反対の端を固定
                 _fixedRight = i is 0 or 3;
                 _fixedBottom = i is 0 or 1;
@@ -688,6 +689,7 @@ public sealed class AnnotateDialog : ThemedForm
     {
         if (_mode == DragMode.None || _stepper.Image == null || _selected < 0) return;
         if (_mode == DragMode.Move) DoMove(e);
+        else if (_mode == DragMode.Box) DoBox(e);
         else if (_mode == DragMode.Scale) DoScale(e);
         else if (_mode == DragMode.Tail) DoTail(e);
         else DoResize(e);
@@ -739,7 +741,19 @@ public sealed class AnnotateDialog : ThemedForm
         _moveLast = (_moveLast.X + dx, _moveLast.Y + dy);
     }
 
-    /// <summary>文字・番号: 対角の角を動かさずに、マウスの位置まで本体が届くように文字の大きさを変える</summary>
+    /// <summary>文字: 対角の角を動かさずに、本体の大きさをマウスの位置まで変える（文字が収まる大きさより小さくはならない）</summary>
+    private void DoBox(MouseEventArgs e)
+    {
+        var (fx, fy) = _fixed;
+        var a = _items[_selected];
+        var (mx, my) = _canvas.ClampToImage(_canvas.CanvasToImage(e.X, e.Y));
+        var (minWidth, minHeight) = a.MinBody;
+        // 動かない角の反対側へ引いたときは、それ以上小さくしない（裏返さない）
+        double w = Math.Max(minWidth, _fixedRight ? fx - mx : mx - fx), h = Math.Max(minHeight, _fixedBottom ? fy - my : my - fy);
+        _items[_selected] = a with { BoxWidth = w, BoxHeight = h, X0 = _fixedRight ? fx - w : fx, Y0 = _fixedBottom ? fy - h : fy };
+    }
+
+    /// <summary>番号: 対角の角を動かさずに、マウスの位置まで本体が届くように大きさを変える</summary>
     private void DoScale(MouseEventArgs e)
     {
         var (fx, fy) = _fixed;

@@ -9,7 +9,7 @@ namespace ImageViewer.Core.Editing;
 
 public enum AnnotationKind { Frame, Arrow, Text, Number }
 
-/// <summary>複数行の文字の、行のそろえ方（文字全体は本体の中央に置く）</summary>
+/// <summary>文字を本体の 左 / 中央 / 右 のどこに寄せるか（複数行なら行も同じ側にそろえる。縦はいつも中央）</summary>
 public enum TextLineAlign { Center, Left, Right }
 
 /// <summary>文字の後ろ: 何も置かない / 角丸の四角（帯）/ 帯にしっぽを付けた吹き出し</summary>
@@ -18,7 +18,8 @@ public enum TextBackground { None, Box, Balloon }
 /// <summary>
 /// 枠か矢印 1 つ（画像座標）。枠は (X0, Y0)〜(X1, Y1) が線の中心を通る四角、矢印は (X0, Y0) から (X1, Y1) へ向かう（先端が X1, Y1）。
 /// Thickness は線の太さ（px）、CornerRadius は枠の角の丸み（px。短い辺の半分まで）、HeadSize は矢印の先端の大きさ（太さの何倍か）。
-/// 文字と番号は (X0, Y0) が本体（文字を囲む四角・番号の丸）の左上で、大きさは文字と FontSize から決まる。
+/// 文字と番号は (X0, Y0) が本体（文字を囲む四角・番号の丸）の左上。番号の大きさは数字と FontSize から決まる。
+/// 文字の本体は BoxWidth × BoxHeight（文字が収まる大きさより小さくはならない。0 なら文字にぴったり）。
 /// 吹き出しは (X1, Y1) がしっぽの先。帯と吹き出しは Color が線、Fill が中の色、TextColor が文字の色。番号は Color が丸の色
 /// </summary>
 public sealed record Annotation(AnnotationKind Kind, double X0, double Y0, double X1, double Y1,
@@ -45,8 +46,35 @@ public sealed record Annotation(AnnotationKind Kind, double X0, double Y0, doubl
     /// <summary>書体の名前（空なら初めの書体。その PC に無い書体も初めの書体で描く）</summary>
     public string FontName { get; init; } = "";
 
-    /// <summary>複数行のときの行のそろえ方</summary>
+    /// <summary>文字を本体のどちらに寄せるか</summary>
     public TextLineAlign Align { get; init; }
+
+    /// <summary>文字の本体の大きさ（px）。文字が収まる大きさより小さければ、収まる大きさになる</summary>
+    public double BoxWidth { get; init; }
+    public double BoxHeight { get; init; }
+
+    /// <summary>帯・吹き出しの縁から文字までの余白（左右）。文字の大きさに比例させる</summary>
+    public double PaddingX => Kind == AnnotationKind.Text && Background != TextBackground.None ? FontSize * 0.5 : 0;
+
+    /// <summary>文字だけの大きさ（余白を含めない）</summary>
+    public (double Width, double Height) TextSize
+    {
+        get
+        {
+            var (w, h) = AnnotationText.UnitSize(Text, FontName, Align);
+            return (w * FontSize, h * FontSize);
+        }
+    }
+
+    /// <summary>文字が収まる本体の大きさ（これより小さくはできない）</summary>
+    public (double Width, double Height) MinBody
+    {
+        get
+        {
+            var (cw, ch) = TextSize;
+            return (cw + PaddingX * 2, ch + (PaddingX > 0 ? FontSize * 0.3 : 0));
+        }
+    }
 
     public bool IsText => Kind is AnnotationKind.Text or AnnotationKind.Number;
 
@@ -58,16 +86,14 @@ public sealed record Annotation(AnnotationKind Kind, double X0, double Y0, doubl
     {
         get
         {
-            var (w, h) = AnnotationText.UnitSize(Text, FontName, Align);
-            double cw = w * FontSize, ch = h * FontSize;
             if (Kind == AnnotationKind.Number)
             {
+                var (cw, ch) = TextSize;
                 double d = Math.Max(ch, cw + FontSize * 0.6); // 桁が増えたら丸を大きくする
                 return (X0, Y0, d, d);
             }
-            // 余白も文字の大きさに比例させる（本体の大きさが文字の大きさにそのまま比例する）
-            bool bare = Background == TextBackground.None;
-            return (X0, Y0, cw + (bare ? 0 : FontSize), ch + (bare ? 0 : FontSize * 0.3));
+            var (minWidth, minHeight) = MinBody;
+            return (X0, Y0, Math.Max(BoxWidth, minWidth), Math.Max(BoxHeight, minHeight));
         }
     }
 
@@ -86,6 +112,7 @@ public sealed record Annotation(AnnotationKind Kind, double X0, double Y0, doubl
     public Annotation Scale(double s) => this with
     {
         X0 = X0 * s, Y0 = Y0 * s, X1 = X1 * s, Y1 = Y1 * s, Thickness = Thickness * s, CornerRadius = CornerRadius * s, FontSize = FontSize * s,
+        BoxWidth = BoxWidth * s, BoxHeight = BoxHeight * s,
     };
 
     /// <summary>文字・番号の本体だけを動かす（吹き出しのしっぽの先は、指している所に残す）</summary>
@@ -306,7 +333,11 @@ public static class Annotator
             else FillShape(image, a, basis, a.Fill, null, 0);
         }
         // 帯や丸が無い文字は、文字の形そのものに影を落とす
-        AnnotationText.Render(image, a.Text, a.FontName, a.Align, a.FontSize, x + w / 2, y + h / 2, number ? ContrastOf(a.Color) : a.TextColor ?? a.Color,
+        // 本体が文字より広ければ、左・右に寄せる（余白は空ける）
+        double half = a.TextSize.Width / 2;
+        double centerX = number || a.Align == TextLineAlign.Center ? x + w / 2
+            : a.Align == TextLineAlign.Left ? x + a.PaddingX + half : x + w - a.PaddingX - half;
+        AnnotationText.Render(image, a.Text, a.FontName, a.Align, a.FontSize, centerX, y + h / 2, number ? ContrastOf(a.Color) : a.TextColor ?? a.Color,
             bare && a.Shadow ? ShadowOf(a.FontSize / 8) : null, ShadowAlpha);
     }
 

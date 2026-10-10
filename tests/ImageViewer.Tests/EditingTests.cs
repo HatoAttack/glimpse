@@ -407,6 +407,23 @@ static class EditingTests
             && InkAt(TextLineAlign.Right, left: false) > 0 && InkAt(TextLineAlign.Right, left: true) == 0
             && InkAt(TextLineAlign.Center, left: true) == 0 && InkAt(TextLineAlign.Center, left: false) == 0
             && (lines with { Align = TextLineAlign.Left }).Body == lines.Body, "文字: 行を 左 / 中央 / 右 にそろえられる（本体の大きさは変わらない）");
+        // 本体の大きさは文字と別に決められる（文字が収まる大きさより小さくはならない）
+        var roomy = boxed with { BoxWidth = 150, BoxHeight = 60 };
+        check(roomy.Body is { Width: 150, Height: 60 } && (boxed with { BoxWidth = 5, BoxHeight = 5 }).Body == boxed.Body && roomy.MinBody == (ow, oh)
+            && roomy.Scale(0.5).Body is { Width: 75, Height: 30 }, "文字: 本体の大きさを文字と別に決められる（文字より小さくはならない）");
+        int InkIn(TextLineAlign align, double from, double to)
+        {
+            using var img = new Image<Rgba32>(200, 120, Blue);
+            Annotator.Draw(img, new[] { roomy with { Align = align, TextColor = new Rgba32(0, 128, 0) } });
+            int count = 0;
+            for (int y = (int)oy + 4; y < oy + 56; y++)
+                for (int x = (int)(ox + from); x < ox + to; x++)
+                    if (img[x, y] != White) count++;
+            return count;
+        }
+        check(InkIn(TextLineAlign.Left, 4, 50) > 0 && InkIn(TextLineAlign.Left, 75, 146) == 0 && InkIn(TextLineAlign.Right, 100, 146) > 0 && InkIn(TextLineAlign.Right, 4, 75) == 0
+            && InkIn(TextLineAlign.Center, 4, 40) == 0 && InkIn(TextLineAlign.Center, 110, 146) == 0 && InkIn(TextLineAlign.Center, 50, 100) > 0,
+            "文字: 本体が文字より広ければ、左 / 中央 / 右 に寄せる");
         var balloon = boxed with { Background = TextBackground.Balloon, X1 = ox + ow / 2, Y1 = oy + oh + 30 };
         using (var img = new Image<Rgba32>(200, 120, Blue))
         {
