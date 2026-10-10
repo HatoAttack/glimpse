@@ -90,8 +90,10 @@ static class NavigationTests
             check(all.Select(f => f.Name).SequenceEqual(new[] { "file.jpg", "memo.txt" }) && all[0].IsImage && !all[1].IsImage,
                 $"一覧: 画像以外のファイルも出す設定（隠しファイル・ZIP は出さない。画像かどうかを見分ける） ({string.Join(",", Files())})");
             check(InZip().OrderBy(n => n).SequenceEqual(new[] { "001.jpg", "readme.txt" }), "一覧: ZIP の中も画像以外のファイルを出す");
-            check(ImageViewer.App.Filer.FolderWatcher.Relevant("memo.txt") && !ImageViewer.App.Filer.FolderWatcher.Relevant("a.jpg.0123abcd.tmp"),
-                "見張り: 画像以外のファイルも出す設定なら、その変化でも読み直す（一時ファイルは除く）");
+            check(ImageViewer.App.Filer.FolderWatcher.Relevant("memo.txt") && ImageViewer.App.Filer.FolderWatcher.Relevant("notes.tmp"),
+                "見張り: 画像以外のファイルも出す設定なら、その変化でも読み直す（ほかのアプリの .tmp も）");
+            check(!ImageViewer.App.Filer.FolderWatcher.Relevant($"a.jpg.{Guid.NewGuid():N}.tmp") && !ImageViewer.App.Filer.FolderWatcher.Relevant("~ivren_ab12_0.tmp"),
+                "見張り: このアプリが保存・名前の変更の途中に置く一時ファイルでは読み直さない");
             FolderListing.ShowHidden = true;
             check(Files().SequenceEqual(new[] { "file.jpg", "memo.txt", "secret.txt" }), $"一覧: 隠しファイルも出す設定（システムファイルは出さない） ({string.Join(",", Files())})");
             check(FolderListing.ListSubfolders(dir).Any(d => d.Name == ".cache"), "一覧: 隠しフォルダも出す設定");

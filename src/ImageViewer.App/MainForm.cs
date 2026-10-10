@@ -90,8 +90,8 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     /// <summary>操作の対象（選択中の画像 / チェックした画像）。選択が変わると「選択」に戻る</summary>
     private enum ActionTarget { Selection, Checked }
     private ActionTarget _target;
-    private readonly IconButton _targetSelection = new() { AccessibleName = "選択中の画像を対象にする" };
-    private readonly IconButton _targetChecked = new() { AccessibleName = "チェックした画像を対象にする" };
+    private readonly IconButton _targetSelection = new() { AccessibleName = "選択中の項目を対象にする" };
+    private readonly IconButton _targetChecked = new() { AccessibleName = "チェックした項目を対象にする" };
     private readonly List<(IconButton Button, IImageCommand Command)> _actionButtons = new();
     private readonly ContextMenuStrip _moveMenu = new(), _moreMenu = new(), _rotateMenu = new();
 
@@ -1037,8 +1037,8 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _targetChecked.Icon = Icons.Dot(Theme.Current.Check);
         _targetSelection.Click += (_, _) => SetTarget(ActionTarget.Selection);
         _targetChecked.Click += (_, _) => SetTarget(ActionTarget.Checked);
-        _toolTip.SetToolTip(_targetSelection, "選択中の画像に対して実行");
-        _toolTip.SetToolTip(_targetChecked, "チェックした画像に対して実行（選択し直さなくてよい）");
+        _toolTip.SetToolTip(_targetSelection, "選択中の項目に対して実行");
+        _toolTip.SetToolTip(_targetChecked, "チェックした項目に対して実行（選択し直さなくてよい）");
         bar.AddTargets(_targetSelection, _targetChecked);
 
         IconButton Action(string id, string text, IconPainter icon, bool danger = false)
@@ -1548,14 +1548,14 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         {
             new ToolStripMenuItem("チェックを付ける / 外す（複数選択ならまとめて）(&T)", null, (_, _) => _grid.ToggleMarks())
                 { ShortcutKeyDisplayString = "¥" },
-            new ToolStripMenuItem("選択中の画像にチェック(&M)", null, (_, _) => _grid.SetMarkOnSelected(true))
+            new ToolStripMenuItem("選択中の項目にチェック(&M)", null, (_, _) => _grid.SetMarkOnSelected(true))
                 { ShortcutKeyDisplayString = "Shift+¥" },
-            new ToolStripMenuItem("選択中の画像のチェックを外す(&U)", null, (_, _) => _grid.SetMarkOnSelected(false)),
+            new ToolStripMenuItem("選択中の項目のチェックを外す(&U)", null, (_, _) => _grid.SetMarkOnSelected(false)),
             new ToolStripSeparator(),
-            new ToolStripMenuItem("チェックした画像を選択(&S)", null, (_, _) => _grid.SelectMarked())
+            new ToolStripMenuItem("チェックした項目を選択(&S)", null, (_, _) => _grid.SelectMarked())
                 { ShortcutKeys = Keys.Control | Keys.Oem5, ShortcutKeyDisplayString = "Ctrl+¥" },
             new ToolStripSeparator(),
-            new ToolStripMenuItem("すべての画像にチェック(&A)", null, (_, _) => _grid.MarkAll()),
+            new ToolStripMenuItem("すべてにチェック(&A)", null, (_, _) => _grid.MarkAll()),
             new ToolStripMenuItem("チェックを反転(&I)", null, (_, _) => _grid.InvertMarks()),
             new ToolStripMenuItem("チェックをすべて外す(&C)", null, (_, _) => _grid.ClearMarks())
                 { ShortcutKeys = Keys.Control | Keys.Shift | Keys.Oem5, ShortcutKeyDisplayString = "Ctrl+Shift+¥" },
@@ -1594,7 +1594,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         checkMenu.DropDownItems.Add(new ToolStripMenuItem("チェックを付ける", null, (_, _) => _grid.SetMarkOnSelected(true))
             { ShortcutKeyDisplayString = "Shift+¥" });
         checkMenu.DropDownItems.Add(new ToolStripMenuItem("チェックを外す", null, (_, _) => _grid.SetMarkOnSelected(false)));
-        checkMenu.DropDownItems.Add(new ToolStripMenuItem("チェックした画像を選択", null, (_, _) => _grid.SelectMarked())
+        checkMenu.DropDownItems.Add(new ToolStripMenuItem("チェックした項目を選択", null, (_, _) => _grid.SelectMarked())
             { ShortcutKeyDisplayString = "Ctrl+¥" });
         _contextMenu.Items.Add(checkMenu);
 

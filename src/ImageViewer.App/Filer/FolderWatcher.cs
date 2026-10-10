@@ -84,11 +84,23 @@ public sealed class FolderWatcher : IDisposable
     /// <summary>
     /// 一覧に関わるファイルの名前か（画像と、フォルダのタイルとして出す ZIP）。保存のときの一時ファイル（.tmp）や、画像でないファイルでは読み直さない。
     /// フォルダの変化は別の見張りで受けるので、ここでは見ない。
-    /// 「画像以外のファイルも表示」の設定のときは、一時ファイル以外のどのファイルでも読み直す
+    /// 「画像以外のファイルも表示」の設定のときは、このアプリが作る一時ファイル以外のどのファイルでも読み直す
+    /// （ほかの .tmp は一覧に出るので読み直す）
     /// </summary>
     public static bool Relevant(string? name) =>
         string.IsNullOrEmpty(name) || ImageFormats.IsSupported(name) || Core.Archives.ArchivePath.IsArchiveName(name)
-        || (Core.Navigation.FolderListing.ShowOtherFiles && !name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase));
+        || (Core.Navigation.FolderListing.ShowOtherFiles && !IsOwnTempFile(name));
+
+    /// <summary>
+    /// このアプリが保存・名前の変更の途中だけ置く一時ファイルか（ImageSaver の「元の名前.32 桁の英数字.tmp」と、
+    /// RenameExecutor の「~ivren_….tmp」）。すぐに消えるので、これで読み直さない
+    /// </summary>
+    private static bool IsOwnTempFile(string name) =>
+        name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)
+        && (name.StartsWith("~ivren_", StringComparison.OrdinalIgnoreCase) || OwnTempSuffix.IsMatch(name));
+
+    private static readonly System.Text.RegularExpressions.Regex OwnTempSuffix =
+        new(@"\.[0-9a-f]{32}\.tmp$", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     private void Mark()
     {
