@@ -375,6 +375,67 @@ static class EditingTests
             check(ow > label.Body.Width && img[(int)ox, midY] == Red && img[(int)ox + 4, midY] == White && img[(int)ox - 3, midY] == Blue,
                 "文字: 帯は余白を足した角丸の四角（線は色、中は中の色）");
         }
+        using (var img = new Image<Rgba32>(200, 120, Blue))
+        {
+            var Green = new Rgba32(0, 128, 0);
+            Annotator.Draw(img, new[] { boxed with { TextColor = Green } });
+            int green = 0, red = 0; // 縁から離れた中の画素（文字）の色
+            for (int y = (int)oy + 4; y < oy + oh - 4; y++)
+                for (int x = (int)ox + 4; x < ox + ow - 4; x++)
+                {
+                    if (img[x, y] == Green) green++;
+                    else if (img[x, y] == Red) red++;
+                }
+            check(green > 10 && red == 0 && img[(int)ox, (int)(oy + oh / 2)] == Red, "文字: 文字の色は縁の色と別に決められる（決めなければ縁と同じ色）");
+        }
+        check((label with { FontName = "この名前の書体は無い" }).Body == label.Body && (label with { FontName = Annotator.DefaultFontName }).Body == label.Body
+            && Annotator.FontNames().Contains(Annotator.DefaultFontName), "文字: 書体を選べる（無い書体・空の名前は初めの書体で描く）");
+        // 2 行目が短い文字: 左寄せなら 2 行目は本体の左側に、右寄せなら右側に描く（本体の大きさは同じ）
+        var lines = label with { Text = "ABCDEFGH\nI" };
+        var (lx, ly, lw, lh) = lines.Body;
+        int InkAt(TextLineAlign align, bool left)
+        {
+            using var img = new Image<Rgba32>(300, 120, Blue);
+            Annotator.Draw(img, new[] { lines with { Align = align } });
+            int count = 0;
+            for (int y = (int)(ly + lh / 2); y < ly + lh; y++)
+                for (int x = left ? (int)lx : (int)(lx + lw * 0.75); x < (left ? lx + lw * 0.25 : lx + lw); x++)
+                    if (img[x, y] != Blue) count++;
+            return count;
+        }
+        check(InkAt(TextLineAlign.Left, left: true) > 0 && InkAt(TextLineAlign.Left, left: false) == 0
+            && InkAt(TextLineAlign.Right, left: false) > 0 && InkAt(TextLineAlign.Right, left: true) == 0
+            && InkAt(TextLineAlign.Center, left: true) == 0 && InkAt(TextLineAlign.Center, left: false) == 0
+            && (lines with { Align = TextLineAlign.Left }).Body == lines.Body, "文字: 行を 左 / 中央 / 右 にそろえられる（本体の大きさは変わらない）");
+        var thick = boxed with { Thickness = 12 };
+        using (var img = new Image<Rgba32>(200, 120, Blue))
+        {
+            Annotator.Draw(img, new[] { thick with { TextColor = new Rgba32(0, 128, 0) } });
+            var (kx, ky, kw, kh) = thick.Body;
+            int covered = 0; // 縁の内側にある、縁の色の画素（文字に被った縁）
+            for (int y = (int)ky + 13; y < ky + kh - 13; y++)
+                for (int x = (int)kx + 13; x < kx + kw - 13; x++)
+                    if (img[x, y] == Red) covered++;
+            check(kw == ow + 20 && kh == oh + 20 && covered == 0 && img[(int)kx + 6, (int)(ky + kh / 2)] == Red && img[(int)kx - 2, (int)(ky + kh / 2)] == Blue,
+                "文字: 縁を太くすると本体が外へ広がる（文字には被らない）");
+        }
+        // 本体の大きさは文字と別に決められる（文字が収まる大きさより小さくはならない）
+        var roomy = boxed with { BoxWidth = 150, BoxHeight = 60 };
+        check(roomy.Body is { Width: 150, Height: 60 } && (boxed with { BoxWidth = 5, BoxHeight = 5 }).Body == boxed.Body && roomy.MinBody == (ow, oh)
+            && roomy.Scale(0.5).Body is { Width: 75, Height: 30 }, "文字: 本体の大きさを文字と別に決められる（文字より小さくはならない）");
+        int InkIn(TextLineAlign align, double from, double to)
+        {
+            using var img = new Image<Rgba32>(200, 120, Blue);
+            Annotator.Draw(img, new[] { roomy with { Align = align, TextColor = new Rgba32(0, 128, 0) } });
+            int count = 0;
+            for (int y = (int)oy + 4; y < oy + 56; y++)
+                for (int x = (int)(ox + from); x < ox + to; x++)
+                    if (img[x, y] != White) count++;
+            return count;
+        }
+        check(InkIn(TextLineAlign.Left, 4, 50) > 0 && InkIn(TextLineAlign.Left, 75, 146) == 0 && InkIn(TextLineAlign.Right, 100, 146) > 0 && InkIn(TextLineAlign.Right, 4, 75) == 0
+            && InkIn(TextLineAlign.Center, 4, 40) == 0 && InkIn(TextLineAlign.Center, 110, 146) == 0 && InkIn(TextLineAlign.Center, 50, 100) > 0,
+            "文字: 本体が文字より広ければ、左 / 中央 / 右 に寄せる");
         var balloon = boxed with { Background = TextBackground.Balloon, X1 = ox + ow / 2, Y1 = oy + oh + 30 };
         using (var img = new Image<Rgba32>(200, 120, Blue))
         {
