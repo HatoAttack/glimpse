@@ -390,6 +390,23 @@ static class EditingTests
         }
         check((label with { FontName = "この名前の書体は無い" }).Body == label.Body && (label with { FontName = Annotator.DefaultFontName }).Body == label.Body
             && Annotator.FontNames().Contains(Annotator.DefaultFontName), "文字: 書体を選べる（無い書体・空の名前は初めの書体で描く）");
+        // 2 行目が短い文字: 左寄せなら 2 行目は本体の左側に、右寄せなら右側に描く（本体の大きさは同じ）
+        var lines = label with { Text = "ABCDEFGH\nI" };
+        var (lx, ly, lw, lh) = lines.Body;
+        int InkAt(TextLineAlign align, bool left)
+        {
+            using var img = new Image<Rgba32>(300, 120, Blue);
+            Annotator.Draw(img, new[] { lines with { Align = align } });
+            int count = 0;
+            for (int y = (int)(ly + lh / 2); y < ly + lh; y++)
+                for (int x = left ? (int)lx : (int)(lx + lw * 0.75); x < (left ? lx + lw * 0.25 : lx + lw); x++)
+                    if (img[x, y] != Blue) count++;
+            return count;
+        }
+        check(InkAt(TextLineAlign.Left, left: true) > 0 && InkAt(TextLineAlign.Left, left: false) == 0
+            && InkAt(TextLineAlign.Right, left: false) > 0 && InkAt(TextLineAlign.Right, left: true) == 0
+            && InkAt(TextLineAlign.Center, left: true) == 0 && InkAt(TextLineAlign.Center, left: false) == 0
+            && (lines with { Align = TextLineAlign.Left }).Body == lines.Body, "文字: 行を 左 / 中央 / 右 にそろえられる（本体の大きさは変わらない）");
         var balloon = boxed with { Background = TextBackground.Balloon, X1 = ox + ow / 2, Y1 = oy + oh + 30 };
         using (var img = new Image<Rgba32>(200, 120, Blue))
         {

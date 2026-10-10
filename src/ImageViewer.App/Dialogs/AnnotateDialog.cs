@@ -33,6 +33,7 @@ public sealed class AnnotateDialog : ThemedForm
     private static Color _lastFill = Color.White;
     private static Color _lastTextColor = Color.FromArgb(230, 30, 30);
     private static string _lastFont = "";
+    private static TextLineAlign _lastAlign = TextLineAlign.Center;
     private static bool _lastShadow = true;
     private static bool _lastToCustomFolder;
     private static string _lastFolder = "";
@@ -64,13 +65,17 @@ public sealed class AnnotateDialog : ThemedForm
     private readonly RadioButton _toolArrow = new() { Text = "矢印", AutoSize = true };
     private readonly RadioButton _toolText = new() { Text = "文字", AutoSize = true };
     private readonly RadioButton _toolNumber = new() { Text = "番号", AutoSize = true };
-    private readonly TextBox _text = new() { Multiline = true, AcceptsReturn = true, ScrollBars = ScrollBars.Vertical, Width = 186, Height = 44, MaxLength = 500 };
+    private readonly TextBox _text = new() { Multiline = true, AcceptsReturn = true, ScrollBars = ScrollBars.Vertical, Width = 186, Height = 40, MaxLength = 500 };
     private readonly Label _fontText = SliderLabel();
     private readonly TrackBar _font = Slider(MinFontSize, MaxFontSize);
     private readonly Label _backText = new() { Text = "背景:", AutoSize = true, Margin = new Padding(3, 6, 0, 3) };
     private readonly RadioButton _backNone = new() { Text = "なし", AutoSize = true };
     private readonly RadioButton _backBox = new() { Text = "帯", AutoSize = true };
     private readonly RadioButton _backBalloon = new() { Text = "吹き出し", AutoSize = true };
+    private readonly Label _alignText = new() { Text = "行:", AutoSize = true, Margin = new Padding(3, 6, 0, 3) };
+    private readonly RadioButton _alignLeft = new() { Text = "左", AutoSize = true };
+    private readonly RadioButton _alignCenter = new() { Text = "中央", AutoSize = true };
+    private readonly RadioButton _alignRight = new() { Text = "右", AutoSize = true };
     private readonly SwatchPanel _fillSwatch = new() { Width = 28, Height = 24, Margin = new Padding(8, 3, 2, 3), Cursor = Cursors.Hand };
     private readonly Button _pickFill = new() { Text = "中の色...", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
     private readonly SwatchPanel _textSwatch = new() { Width = 28, Height = 24, Margin = new Padding(3, 3, 2, 3), Cursor = Cursors.Hand };
@@ -123,7 +128,7 @@ public sealed class AnnotateDialog : ThemedForm
         _stepper = new ImageStepper(paths);
         _stepper.StepRequested += async delta => await StepAsync(delta);
         _saver = new EditSavePanel(this, paths.Count,
-            "「保存」は「元の名前_mark」で別に保存、「上書き保存」は元のファイルを置き換えます",
+            "「保存」は「元の名前_mark」で別に、「上書き保存」は元に上書きします",
             _lastFolder, _lastToCustomFolder, withSaveAll: false);
         _saver.SaveRequested += async (advance, overwrite) => await SaveCurrentAsync(advance, overwrite);
         _saver.BusyChanged += UpdateButtons;
@@ -138,6 +143,7 @@ public sealed class AnnotateDialog : ThemedForm
         _syncing = true;
         ToolButton(_lastKind).Checked = true;
         BackgroundButton(_lastBackground).Checked = true;
+        AlignButton(_lastAlign).Checked = true;
         _swatch.Swatch = _color;
         _fillSwatch.Swatch = _fill;
         _textSwatch.Swatch = _textColor;
@@ -151,7 +157,7 @@ public sealed class AnnotateDialog : ThemedForm
         _syncing = false;
         foreach (var rb in new[] { _toolFrame, _toolArrow, _toolText, _toolNumber })
             rb.CheckedChanged += (_, _) => { if (rb.Checked) UpdateStyleControls(); };
-        foreach (var rb in new[] { _backNone, _backBox, _backBalloon })
+        foreach (var rb in new[] { _backNone, _backBox, _backBalloon, _alignLeft, _alignCenter, _alignRight })
             rb.CheckedChanged += (_, _) => { if (rb.Checked) OnStyleChanged(); };
         foreach (var slider in new[] { _thickness, _radius, _head, _font })
             slider.ValueChanged += (_, _) => OnStyleChanged();
@@ -179,6 +185,7 @@ public sealed class AnnotateDialog : ThemedForm
             _lastTextColor = _textColor;
             _lastFont = _fontBox.SelectedItem as string ?? "";
             _lastBackground = CurrentBackground;
+            _lastAlign = CurrentAlign;
             if (_styleReady)
             {
                 _lastThickness = _thickness.Value;
@@ -209,6 +216,10 @@ public sealed class AnnotateDialog : ThemedForm
         _ => _toolFrame,
     };
 
+    private TextLineAlign CurrentAlign => _alignLeft.Checked ? TextLineAlign.Left : _alignRight.Checked ? TextLineAlign.Right : TextLineAlign.Center;
+
+    private RadioButton AlignButton(TextLineAlign align) => align == TextLineAlign.Left ? _alignLeft : align == TextLineAlign.Right ? _alignRight : _alignCenter;
+
     private RadioButton BackgroundButton(TextBackground background) =>
         background == TextBackground.Balloon ? _backBalloon : background == TextBackground.Box ? _backBox : _backNone;
 
@@ -230,8 +241,11 @@ public sealed class AnnotateDialog : ThemedForm
         _toolTip.SetToolTip(_toolText, "クリックした所に文字を置きます（中身は下の欄に打ちます）。\n吹き出しは、置く所から指したい所へドラッグします（離した所がしっぽの先）");
         _toolTip.SetToolTip(_toolNumber, "クリックした所に、丸で囲んだ番号を置きます（置くたびに 1 ずつ増えます）");
 
-        // 背景の 3 つは「描くもの」と別の入れ物に入れる（同じ入れ物のラジオボタンは 1 つしか選べないため）
-        side.Controls.Add(EditDialogShell.Group("文字", vertical: true, _text, Row(_fontText, _font), Row(_backText, _backNone, _backBox, _backBalloon)));
+        // 背景・行の寄せは、それぞれ別の入れ物に入れる（同じ入れ物のラジオボタンは 1 つしか選べないため）
+        side.Controls.Add(EditDialogShell.Group("文字", vertical: true, _text, Row(_fontText, _font), Row(_backText, _backNone, _backBox, _backBalloon),
+            Row(_alignText, _alignLeft, _alignCenter, _alignRight)));
+        foreach (var c in new Control[] { _alignText, _alignLeft, _alignCenter, _alignRight })
+            _toolTip.SetToolTip(c, "2 行以上の文字の、行のそろえ方（左 / 中央 / 右）。文字全体は本体の中央に置きます");
         _toolTip.SetToolTip(_text, "選んだ文字の中身。Enter で改行します");
         _toolTip.SetToolTip(_backBox, "文字の後ろに角の丸い四角を置きます");
         _toolTip.SetToolTip(_backBalloon, "四角に、指したい所へ向かうしっぽを付けます");
@@ -268,7 +282,7 @@ public sealed class AnnotateDialog : ThemedForm
     private Annotation Styled(Annotation a) => a with
     {
         Color = ToRgba(_color), Thickness = _thickness.Value, CornerRadius = _radius.Value, HeadSize = (double)_head.Value / HeadScale, Shadow = _shadow.Checked,
-        FontSize = _font.Value, Background = CurrentBackground, Fill = ToRgba(_fill), TextColor = ToRgba(_textColor), FontName = _fontBox.SelectedItem as string ?? "",
+        FontSize = _font.Value, Background = CurrentBackground, Fill = ToRgba(_fill), TextColor = ToRgba(_textColor), FontName = _fontBox.SelectedItem as string ?? "", Align = CurrentAlign,
         Text = a.Kind == AnnotationKind.Text ? _text.Text : a.Text,
     };
 
@@ -349,6 +363,7 @@ public sealed class AnnotateDialog : ThemedForm
         {
             _text.Text = a.Text.Replace("\r\n", "\n").Replace("\n", "\r\n");
             BackgroundButton(a.Background).Checked = true;
+            AlignButton(a.Align).Checked = true;
             SetSwatch(_textSwatch, ToColor(a.TextColor ?? a.Color));
             if (boxed) SetSwatch(_fillSwatch, ToColor(a.Fill));
         }
@@ -367,6 +382,7 @@ public sealed class AnnotateDialog : ThemedForm
         _head.Enabled = _headText.Enabled = kind == AnnotationKind.Arrow;
         _font.Enabled = _fontText.Enabled = kind is AnnotationKind.Text or AnnotationKind.Number;
         _text.Enabled = _backText.Enabled = _backNone.Enabled = _backBox.Enabled = _backBalloon.Enabled = text;
+        _alignText.Enabled = _alignLeft.Enabled = _alignCenter.Enabled = _alignRight.Enabled = text;
         _fillSwatch.Enabled = _pickFill.Enabled = boxed;
         _textSwatch.Enabled = _pickText.Enabled = text;
         _fontBox.Enabled = _font.Enabled;

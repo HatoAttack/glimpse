@@ -16,7 +16,7 @@ internal static class AnnotationText
 
     // GDI+ の部品は同時に使えないので、表示（UI）と保存（別のスレッド）が重ならないようにする
     private static readonly object Gate = new();
-    private static readonly Dictionary<(string Font, string Text), (double Width, double Height, double InkCenter)> Sizes = new();
+    private static readonly Dictionary<(string Font, TextLineAlign Align, string Text), (double Width, double Height, double InkCenter)> Sizes = new();
     private static readonly Dictionary<string, (FontFamily Family, FontStyle Style)> Fonts = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>書体を指定しないときに使う、説明用の画像で読みやすいゴシック体（無ければ次の候補）</summary>
@@ -66,26 +66,26 @@ internal static class AnnotationText
 
     private static string Normalize(string text) => text.Replace("\r\n", "\n").Replace('\r', '\n');
 
-    /// <summary>文字の輪郭。1 行目の上端が y = 0、各行は x = 0 を中心にそろえる</summary>
-    private static GraphicsPath BuildPath(string text, string font, float emSize)
+    /// <summary>文字の輪郭。1 行目の上端が y = 0、各行は x = 0 を基準に 左 / 中央 / 右 でそろえる</summary>
+    private static GraphicsPath BuildPath(string text, string font, TextLineAlign align, float emSize)
     {
         var path = new GraphicsPath(FillMode.Winding);
         using var format = (StringFormat)StringFormat.GenericTypographic.Clone();
-        format.Alignment = StringAlignment.Center;
+        format.Alignment = align == TextLineAlign.Left ? StringAlignment.Near : align == TextLineAlign.Right ? StringAlignment.Far : StringAlignment.Center;
         format.FormatFlags |= StringFormatFlags.NoWrap;
         var (family, style) = FontOf(font);
         path.AddString(text, family, (int)style, emSize, new PointF(0, 0), format);
         return path;
     }
 
-    private static (double Width, double Height, double InkCenter) Measure(string text, string font)
+    private static (double Width, double Height, double InkCenter) Measure(string text, string font, TextLineAlign align)
     {
-        if (Sizes.TryGetValue((font, text), out var size)) return size;
+        if (Sizes.TryGetValue((font, align, text), out var size)) return size;
         var (family, style) = FontOf(font);
         double lineHeight = (double)family.GetLineSpacing(style) / family.GetEmHeight(style);
         int lines = text.Count(ch => ch == '\n') + 1;
         double width = 1, center = 0; // 空（空白だけ）でも、つかめるように 1 文字分の幅を持たせる
-        using (var path = BuildPath(text, font, UnitEm))
+        using (var path = BuildPath(text, font, align, UnitEm))
         {
             if (path.PointCount > 0)
             {
@@ -95,21 +95,21 @@ internal static class AnnotationText
             }
         }
         if (Sizes.Count >= MaxCached) Sizes.Clear();
-        return Sizes[(font, text)] = (width, lines * lineHeight, center);
+        return Sizes[(font, align, text)] = (width, lines * lineHeight, center);
     }
 
     /// <summary>文字の大きさ 1px あたりの、文字全体の幅と高さ（幅は見えている形の幅、高さは行の高さ × 行数）</summary>
-    public static (double Width, double Height) UnitSize(string text, string font)
+    public static (double Width, double Height) UnitSize(string text, string font, TextLineAlign align)
     {
         lock (Gate)
         {
-            var (width, height, _) = Measure(Normalize(text), font);
+            var (width, height, _) = Measure(Normalize(text), font, align);
             return (width, height);
         }
     }
 
-    /// <summary>(centerX, centerY) を中心に文字を描く。shadow があれば、右下へずらしてぼかした影を先に落とす</summary>
-    public static void Render(SixLabors.ImageSharp.Image<Rgba32> image, string text, string font, double fontSize, double centerX, double centerY,
+    /// <summary>(centerX, centerY) を文字全体の中心にして描く（行は align でそろえる）。shadow があれば、右下へずらしてぼかした影を先に落とす</summary>
+    public static void Render(SixLabors.ImageSharp.Image<Rgba32> image, string text, string font, TextLineAlign align, double fontSize, double centerX, double centerY,
         Rgba32 color, (double Offset, double Blur)? shadow, double shadowAlpha)
     {
         text = Normalize(text);
@@ -120,8 +120,8 @@ internal static class AnnotationText
         byte[] mask;
         lock (Gate)
         {
-            var (_, unitHeight, inkCenter) = Measure(text, font);
-            using var path = BuildPath(text, font, (float)fontSize);
+            var (_, unitHeight, inkCenter) = Measure(text, font, align);
+            using var path = BuildPath(text, font, align, (float)fontSize);
             using (var move = new Matrix())
             {
                 move.Translate((float)(centerX - inkCenter * fontSize), (float)(centerY - unitHeight * fontSize / 2));

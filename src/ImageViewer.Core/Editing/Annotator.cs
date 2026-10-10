@@ -9,6 +9,9 @@ namespace ImageViewer.Core.Editing;
 
 public enum AnnotationKind { Frame, Arrow, Text, Number }
 
+/// <summary>複数行の文字の、行のそろえ方（文字全体は本体の中央に置く）</summary>
+public enum TextLineAlign { Center, Left, Right }
+
 /// <summary>文字の後ろ: 何も置かない / 角丸の四角（帯）/ 帯にしっぽを付けた吹き出し</summary>
 public enum TextBackground { None, Box, Balloon }
 
@@ -42,6 +45,9 @@ public sealed record Annotation(AnnotationKind Kind, double X0, double Y0, doubl
     /// <summary>書体の名前（空なら初めの書体。その PC に無い書体も初めの書体で描く）</summary>
     public string FontName { get; init; } = "";
 
+    /// <summary>複数行のときの行のそろえ方</summary>
+    public TextLineAlign Align { get; init; }
+
     public bool IsText => Kind is AnnotationKind.Text or AnnotationKind.Number;
 
     /// <summary>しっぽがあるか（先が本体の中にあるときは描かれない）</summary>
@@ -52,7 +58,7 @@ public sealed record Annotation(AnnotationKind Kind, double X0, double Y0, doubl
     {
         get
         {
-            var (w, h) = AnnotationText.UnitSize(Text, FontName);
+            var (w, h) = AnnotationText.UnitSize(Text, FontName, Align);
             double cw = w * FontSize, ch = h * FontSize;
             if (Kind == AnnotationKind.Number)
             {
@@ -300,7 +306,7 @@ public static class Annotator
             else FillShape(image, a, basis, a.Fill, null, 0);
         }
         // 帯や丸が無い文字は、文字の形そのものに影を落とす
-        AnnotationText.Render(image, a.Text, a.FontName, a.FontSize, x + w / 2, y + h / 2, number ? ContrastOf(a.Color) : a.TextColor ?? a.Color,
+        AnnotationText.Render(image, a.Text, a.FontName, a.Align, a.FontSize, x + w / 2, y + h / 2, number ? ContrastOf(a.Color) : a.TextColor ?? a.Color,
             bare && a.Shadow ? ShadowOf(a.FontSize / 8) : null, ShadowAlpha);
     }
 
