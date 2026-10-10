@@ -274,7 +274,9 @@ public sealed class AnnotateDialog : ThemedForm
     {
         UpdateStyleControls();
         if (_syncing || _saver.Busy || Selected is not { } a) return;
-        _items[_selected] = WithTail(KeepInside(Styled(a)));
+        var styled = KeepInside(Styled(a));
+        // しっぽを出し直すのは、背景を吹き出しに変えたときだけ（文字を足して本体が先を覆っても、指している所は変えない）
+        _items[_selected] = a.HasTail ? styled : WithTail(styled);
         RenderPreview();
     }
 
@@ -286,7 +288,7 @@ public sealed class AnnotateDialog : ThemedForm
         return a with { X0 = ClampInside(x, w, image.Width), Y0 = ClampInside(y, h, image.Height) };
     }
 
-    /// <summary>吹き出しのしっぽの先が本体の中にあれば（背景を吹き出しに変えた・クリックだけで置いた）、本体の下（下に出せなければ上）へ出す</summary>
+    /// <summary>吹き出しにした・クリックだけで置いたときに、しっぽの先が本体の中にあれば、本体の下（下に出せなければ上）へ出す</summary>
     private Annotation WithTail(Annotation a)
     {
         if (!a.HasTail || _stepper.Image is not { } image) return a;
@@ -660,7 +662,8 @@ public sealed class AnnotateDialog : ThemedForm
             _selected = -1;
         }
         _creating = false;
-        if (Selected is { } placed) _items[_selected] = WithTail(placed); // クリックだけで置いた吹き出しにも、しっぽを出す
+        // クリックだけで置いた吹き出しにも、しっぽを出す（置いた後のドラッグでは、指している所を変えない）
+        if (_focusText && Selected is { } placed) _items[_selected] = WithTail(placed);
         OnItemsChanged();
         if (_focusText && Selected is { Kind: AnnotationKind.Text }) FocusText();
         _focusText = false;
@@ -698,7 +701,11 @@ public sealed class AnnotateDialog : ThemedForm
         var (_, _, w, h) = a.Body;
         if (w <= 0 || h <= 0) return;
         double k = Math.Max(Math.Abs(mx - fx) / w, Math.Abs(my - fy) / h);
-        int size = Math.Clamp((int)Math.Round(a.FontSize * k), _font.Minimum, _font.Maximum);
+        // 動かない角から画像の端までに収まる大きさまで（縦横の比は変えられないので、片方が先に端に着く）
+        var image = _stepper.Image!;
+        double room = Math.Min((_fixedRight ? fx : image.Width - fx) / w, (_fixedBottom ? fy : image.Height - fy) / h);
+        int limit = Math.Clamp((int)Math.Floor(a.FontSize * room), _font.Minimum, _font.Maximum);
+        int size = Math.Clamp((int)Math.Round(a.FontSize * k), _font.Minimum, limit);
         var scaled = a with { FontSize = size };
         var (_, _, nw, nh) = scaled.Body;
         _items[_selected] = scaled with { X0 = _fixedRight ? fx - nw : fx, Y0 = _fixedBottom ? fy - nh : fy };
