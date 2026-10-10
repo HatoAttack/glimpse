@@ -274,8 +274,16 @@ public sealed class AnnotateDialog : ThemedForm
     {
         UpdateStyleControls();
         if (_syncing || _saver.Busy || Selected is not { } a) return;
-        _items[_selected] = WithTail(Styled(a));
+        _items[_selected] = WithTail(KeepInside(Styled(a)));
         RenderPreview();
+    }
+
+    /// <summary>文字・番号の本体が画像からはみ出していたら中へ戻す（文字を足した・大きくした・背景を付けたときに、端で切れないように）</summary>
+    private Annotation KeepInside(Annotation a)
+    {
+        if (!a.IsText || _stepper.Image is not { } image) return a;
+        var (x, y, w, h) = a.Body;
+        return a with { X0 = ClampInside(x, w, image.Width), Y0 = ClampInside(y, h, image.Height) };
     }
 
     /// <summary>吹き出しのしっぽの先が本体の中にあれば（背景を吹き出しに変えた・クリックだけで置いた）、本体の下（下に出せなければ上）へ出す</summary>
