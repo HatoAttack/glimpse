@@ -1858,8 +1858,20 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         if (items.Count == 0) return;
         // エクスプローラーと同じく、消した位置にある次の画像を選ぶ（Quick Look ならそのまま次を表示）
         int next = Math.Clamp(first, 0, items.Count - 1);
+        if (peeking && ViewItems.Count > 0)
+        {
+            // 1 枚表示は次の画像へ（間に画像以外のファイルがあれば飛ばす）。一覧の選択も、表示する画像に合わせる
+            int view = next;
+            if (ViewToGrid is { } map)
+            {
+                int at = Array.BinarySearch(map, first); // 消した位置かその後ろにある最初の画像（無ければ最後の画像）
+                view = Math.Min(at >= 0 ? at : ~at, map.Length - 1);
+            }
+            _grid.SelectImage(ToGridIndex(view));
+            _quickLook.Open(ViewItems, view, byKey: false);
+            return;
+        }
         _grid.SelectImage(next);
-        if (peeking && ToViewIndex(next) >= 0) _quickLook.Open(ViewItems, ToViewIndex(next), byKey: false);
     }
 
     private async Task UndoRenameAsync()
