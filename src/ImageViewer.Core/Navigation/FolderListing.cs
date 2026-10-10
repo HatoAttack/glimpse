@@ -1,13 +1,45 @@
 // フォルダの中のサブフォルダの一覧（グリッドのフォルダタイル・フォルダツリーで共通）
 using ImageViewer.Core.Archives;
+using ImageViewer.Core.Imaging;
 using ImageViewer.Core.Ordering;
 
 namespace ImageViewer.Core.Navigation;
 
 public static class FolderListing
 {
+    /// <summary>画像以外のファイルも一覧に出す（設定。既定は出さない）</summary>
+    public static bool ShowOtherFiles { get; set; }
+
     /// <summary>
-    /// 直下のサブフォルダを名前順（エクスプローラーと同じ比較）で。隠し・システムフォルダは除く。
+    /// 隠しフォルダと、画像以外の隠しファイルも出す（設定。既定は出さない）。システム属性のものはどちらでも出さない。
+    /// 画像はこの設定に関係なく、これまでどおり属性を見ずに出す（設定を切り替えても、出ていた画像が消えないように）
+    /// </summary>
+    public static bool ShowHidden { get; set; }
+
+    private static FileAttributes SkippedAttributes => ShowHidden ? FileAttributes.System : FileAttributes.Hidden | FileAttributes.System;
+
+    /// <summary>
+    /// 直下のファイルを名前順で。いつもは対応画像だけ。ShowOtherFiles なら画像以外のファイルも
+    /// （ZIP はフォルダのタイルとして出すので除く。隠しファイルは ShowHidden のときだけ）
+    /// </summary>
+    public static List<ImageFile> ListFiles(string folder, CancellationToken ct = default)
+    {
+        if (!ShowOtherFiles) return ImageFormats.ListImages(folder, ct);
+        var skip = SkippedAttributes;
+        var list = new List<ImageFile>();
+        foreach (var file in new DirectoryInfo(folder).EnumerateFiles())
+        {
+            ct.ThrowIfCancellationRequested();
+            // 画像は ListImages と同じく属性を見ない。属性は列挙時に読んであるので、ディスクは読まない
+            if (ImageFormats.IsSupported(file.Name) || (!ArchivePath.IsArchiveName(file.Name) && (file.Attributes & skip) == 0))
+                list.Add(ImageFile.From(file));
+        }
+        list.Sort((a, b) => FileSorting.NaturalNameComparer.Compare(a.Name, b.Name));
+        return list;
+    }
+
+    /// <summary>
+    /// 直下のサブフォルダを名前順（エクスプローラーと同じ比較）で。隠し（ShowHidden なら出す）・システムフォルダは除く。
     /// アクセスできないフォルダは空として扱う（例外にしない）
     /// </summary>
     public static List<DirectoryInfo> ListSubfolders(string folder, CancellationToken ct = default)
@@ -17,7 +49,7 @@ public static class FolderListing
         {
             var options = new EnumerationOptions
             {
-                AttributesToSkip = FileAttributes.Hidden | FileAttributes.System,
+                AttributesToSkip = SkippedAttributes,
                 IgnoreInaccessible = true,
             };
             foreach (var dir in new DirectoryInfo(folder).EnumerateDirectories("*", options))
@@ -35,7 +67,7 @@ public static class FolderListing
     }
 
     /// <summary>
-    /// 直下の ZIP（フォルダのタイルとしてサブフォルダの後ろに並べる）を名前順で。隠し・システムファイルは除く。
+    /// 直下の ZIP（フォルダのタイルとしてサブフォルダの後ろに並べる）を名前順で。隠し（ShowHidden なら出す）・システムファイルは除く。
     /// アクセスできなければ空
     /// </summary>
     public static List<DirectoryInfo> ListArchives(string folder, CancellationToken ct = default)
@@ -45,7 +77,7 @@ public static class FolderListing
         {
             var options = new EnumerationOptions
             {
-                AttributesToSkip = FileAttributes.Hidden | FileAttributes.System,
+                AttributesToSkip = SkippedAttributes,
                 IgnoreInaccessible = true,
             };
             foreach (var file in new DirectoryInfo(folder).EnumerateFiles("*", options))

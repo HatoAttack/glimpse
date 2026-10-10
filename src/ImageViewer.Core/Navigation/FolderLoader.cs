@@ -5,7 +5,7 @@ using ImageViewer.Core.Ordering;
 
 namespace ImageViewer.Core.Navigation;
 
-/// <summary>読み込んだフォルダの中身（Files は Mode の並び順に並べてある）</summary>
+/// <summary>読み込んだフォルダの中身（Files は Mode の並び順に並べてある。設定によっては画像以外のファイルも入る）</summary>
 public sealed record FolderContents(List<DirectoryInfo> Folders, List<ImageFile> Files, SortMode Mode, bool InArchive);
 
 public sealed class FolderLoader
@@ -76,7 +76,7 @@ public sealed class FolderLoader
         }
         else
         {
-            listed = ImageFormats.ListImages(folder, ct);
+            listed = FolderListing.ListFiles(folder, ct);
             // ZIP はフォルダのタイルとして、サブフォルダの後ろに並べる
             subfolders = FolderListing.ListSubfolders(folder, ct);
             subfolders.AddRange(FolderListing.ListArchives(folder, ct));

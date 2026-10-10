@@ -38,7 +38,7 @@ public sealed class DetailsPanel : Control
         Invalidate();
     }
 
-    /// <param name="header">大きさ・形式・撮影情報（読んでいる間・読めなければ null）</param>
+    /// <param name="header">大きさ・形式・撮影情報（読んでいる間・読めなければ・画像以外のファイルなら null）</param>
     public void ShowImage(ImageFile file, ImageHeader? header, bool loading)
     {
         var rows = new List<(string, string)>();
@@ -71,7 +71,7 @@ public sealed class DetailsPanel : Control
 
     public void ShowMultiple(IReadOnlyList<ImageFile> files)
     {
-        _title = $"{files.Count} 枚の画像";
+        _title = files.All(f => f.IsImage) ? $"{files.Count} 枚の画像" : $"{files.Count} 件のファイル";
         _rows = new[] { ("合計", FormatBytes(files.Sum(f => f.Length))) };
         _location = files.Select(f => f.DirectoryName).Distinct(StringComparer.OrdinalIgnoreCase).Count() == 1 ? files[0].DirectoryName : null;
         _message = "";

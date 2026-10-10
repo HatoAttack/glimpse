@@ -1,7 +1,10 @@
 // サムネイルグリッド
 // 見えているセル＋前後 1 画面分だけサムネイルを要求するので、メモリと処理量はファイル数ではなく画面の広さで決まる
 // 並びは「サブフォルダのタイル（先頭）＋画像」。セル番号 i < FolderCount がフォルダ、それ以降が画像（画像番号 = i - FolderCount）。
-// チェック・手動の並べ替え・コマンドの対象は画像だけ
+// チェック・手動の並べ替え・コマンドの対象は画像だけ。
+// 「画像以外のファイルも表示」の設定のときは、画像以外のファイルも画像と同じ並びに入る（ImageFile.IsImage が false。
+// サムネイルの代わりにエクスプローラーと同じサムネイル / アイコンを出す。開くのは本体が関連付けられたアプリで行う）。
+// チェック・並べ替え・選択は画像以外のファイルにも同じように効く（チェックで集めて移動・削除できるように）
 using System.Drawing.Drawing2D;
 using ImageViewer.App.Commands;
 using ImageViewer.App.Theming;
@@ -57,13 +60,13 @@ public sealed class ThumbnailGrid : Control
     /// <summary>エクスプローラー等へドラッグして、画像が移動された（元の場所から無くなった）</summary>
     public event EventHandler<IReadOnlyList<string>>? FilesMovedOut;
 
-    /// <summary>画像をダブルクリックまたは Enter（1 枚表示を開く用）。引数は画像番号</summary>
+    /// <summary>画像（画像以外のファイルも）をダブルクリックまたは Enter（1 枚表示を開く・ファイルを開く用）。引数は画像番号</summary>
     public event EventHandler<int>? ItemActivated;
 
     /// <summary>並び・中身が入れ替わった（フォルダ移動・再読み込み・並べ替え・リネーム）</summary>
     public event EventHandler? ContentsChanged;
 
-    /// <summary>画像の上で Space（Quick Look を開く）。引数は画像番号</summary>
+    /// <summary>画像（画像以外のファイルも）の上で Space（Quick Look を開く）。引数は画像番号</summary>
     public event EventHandler<int>? PeekRequested;
 
     /// <summary>チェックを付け外しするキー（その場に留まる）/ 付け外しして次へ進むキー</summary>
@@ -133,7 +136,7 @@ public sealed class ThumbnailGrid : Control
         Invalidate();
     }
 
-    /// <summary>画像（フォルダのタイルは含まない）</summary>
+    /// <summary>画像（フォルダのタイルは含まない。設定によっては画像以外のファイルも入る）</summary>
     public IReadOnlyList<ImageFile> Items => _items;
     public IReadOnlyList<DirectoryInfo> Folders => _folders;
 
@@ -446,13 +449,16 @@ public sealed class ThumbnailGrid : Control
         var order = new List<ThumbnailKey>(count + page * 2);
         void Add(int cell)
         {
-            if (!IsFolder(cell)) order.Add(_keys[cell - F]);
+            if (!IsFolder(cell) && HasThumbnail(_items[cell - F])) order.Add(_keys[cell - F]);
         }
         for (int i = first; i < first + count; i++) Add(i);
         for (int i = first + count; i < Math.Min(CellCount, first + count + page); i++) Add(i);
         for (int i = first - 1; i >= Math.Max(0, first - page); i--) Add(i);
         _thumbnails.Schedule(order);
     }
+
+    /// <summary>サムネイル（画像以外のファイルはアイコンも）を作れるか。ZIP の中の画像以外のファイルはシェルが扱えないので作らない</summary>
+    private bool HasThumbnail(ImageFile file) => file.IsImage || !ArchiveMode;
 
     private void OnThumbnailReady(ThumbnailKey key)
     {
@@ -567,7 +573,9 @@ public sealed class ThumbnailGrid : Control
             return;
         }
 
-        switch (_thumbnails.TryGet(_keys[index - F], out var bmp))
+        var file = _items[index - F];
+        Bitmap? bmp = null;
+        switch (HasThumbnail(file) ? _thumbnails.TryGet(_keys[index - F], out bmp) : ThumbnailState.Failed)
         {
             case ThumbnailState.Ready:
                 var dest = Fit(bmp!.Size, area);
@@ -577,7 +585,8 @@ public sealed class ThumbnailGrid : Control
                 break;
             case ThumbnailState.Failed:
                 using (var placeholder = new SolidBrush(p.Placeholder)) g.FillRectangle(placeholder, area);
-                TextRenderer.DrawText(g, _items[index - F].Extension.TrimStart('.').ToUpperInvariant() + "\n読めません",
+                // 画像以外のファイルでアイコンが取れなかったものは、拡張子だけを出す
+                TextRenderer.DrawText(g, file.Extension.TrimStart('.').ToUpperInvariant() + (file.IsImage ? "\n読めません" : ""),
                     Font, area, p.TextMuted,
                     TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.WordBreak);
                 break;

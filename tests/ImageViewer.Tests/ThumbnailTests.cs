@@ -269,9 +269,9 @@ static class ThumbnailTests
 
         string txt = Path.Combine(dir, "x.txt");
         File.WriteAllText(txt, "x");
-        bool threw = false;
-        try { ThumbnailGenerator.Generate(txt, 100).Dispose(); } catch (NotSupportedException) { threw = true; }
-        check(threw, "画像でないファイルは例外");
+        // 画像以外のファイル（「画像以外のファイルも表示」の設定のときに一覧に出る）は、エクスプローラーと同じアイコン
+        using (var icon = ThumbnailGenerator.Generate(txt, 100))
+            check(icon.Width is > 0 and <= 60 && icon.Height <= 60, $"画像でないファイルはアイコン（枠の 6 割まで。{icon.Width}x{icon.Height}）");
 
         using (var img = new Image<Rgba32>(4, 2, new Rgba32(200, 100, 50, 128)))
         using (var bmp = ThumbnailGenerator.ToPArgbBitmap(img))

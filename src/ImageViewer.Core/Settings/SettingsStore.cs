@@ -59,6 +59,12 @@ public sealed record AppSettings
     /// <summary>1 枚表示で詳細パネルを表示する（null は既定 = 表示しない。I キーで切り替え）</summary>
     public bool? QuickLookDetailsVisible { get; init; }
 
+    /// <summary>画像以外のファイルも一覧に出す（null は既定 = 出さない）</summary>
+    public bool? ShowOtherFiles { get; init; }
+
+    /// <summary>隠しファイル・隠しフォルダも一覧とフォルダツリーに出す（null は既定 = 出さない）</summary>
+    public bool? ShowHidden { get; init; }
+
     /// <summary>補正で最後に保存したときの値（「前回の補正」。1 枚表示とまとめて補正で共通。null ならまだ無い）</summary>
     public Editing.AdjustOptions? LastAdjust { get; init; }
 

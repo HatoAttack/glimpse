@@ -90,8 +90,8 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     /// <summary>操作の対象（選択中の画像 / チェックした画像）。選択が変わると「選択」に戻る</summary>
     private enum ActionTarget { Selection, Checked }
     private ActionTarget _target;
-    private readonly IconButton _targetSelection = new() { AccessibleName = "選択中の画像を対象にする" };
-    private readonly IconButton _targetChecked = new() { AccessibleName = "チェックした画像を対象にする" };
+    private readonly IconButton _targetSelection = new() { AccessibleName = "選択中の項目を対象にする" };
+    private readonly IconButton _targetChecked = new() { AccessibleName = "チェックした項目を対象にする" };
     private readonly List<(IconButton Button, IImageCommand Command)> _actionButtons = new();
     private readonly ContextMenuStrip _moveMenu = new(), _moreMenu = new(), _rotateMenu = new();
 
@@ -123,6 +123,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _settings = _settingsStore.Load();
         Theme.Initialize(Theme.ParseMode(_settings.Theme));
         ApplySaveQuality();
+        ApplyListingSettings();
         RegisterCommands();
         _addressBox = new AddressBox(_address);
         _jumper = new JumpController(this, _address, _addressBox, this, () => _folder, FindCommands);
@@ -291,14 +292,14 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _grid.MarkKey = _quickLook.MarkKey = markKey != Keys.None ? markKey : Keys.Oem5;
         _grid.MarkNextKey = _quickLook.MarkNextKey = markNextKey != Keys.None ? markNextKey : Keys.Oem7;
 
-        _quickLook.IsMarked = _grid.IsImageMarked;
+        _quickLook.IsMarked = i => _grid.IsImageMarked(ToGridIndex(i));
         _quickLook.MarkedCount = () => _grid.MarkedCount;
         _quickLook.PlaceholderProvider = f =>
             _thumbnails.TryGet(ThumbnailKey.From(f), out var bmp) == ThumbnailState.Ready ? bmp : null;
         // 開くときは一覧のサムネイルから広がり、閉じるときはそこへ戻る
         // 一覧の右の詳細パネルは 1 枚表示の間は隠れるので、後ろの画像に入れておく（開いた直後にその場所が空かないように）
         _quickLook.BackdropProvider = () => new Control[] { _grid, _inspector };
-        _quickLook.ThumbBoundsProvider = i => _grid.ImageThumbBounds(i) is Rectangle r ? _grid.RectangleToScreen(r) : null;
+        _quickLook.ThumbBoundsProvider = i => _grid.ImageThumbBounds(ToGridIndex(i)) is Rectangle r ? _grid.RectangleToScreen(r) : null;
         // 閉じる動きの行き先は、詳細パネルを戻して一覧が並び直した後の位置で決める
         _quickLook.Closing += (_, _) =>
         {
@@ -306,14 +307,21 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             PerformLayout();
         };
 
-        // 画像を 2 枚だけ選んで Space なら、並べて比べる
+        // 画像を 2 枚だけ選んで Space なら、並べて比べる（画像以外のファイルの上では何もしない）
         _grid.PeekRequested += (_, index) =>
         {
-            if (!TryOpenCompare(index)) _quickLook.Open(_grid.Items, index, byKey: true);
+            int view = ToViewIndex(index);
+            if (view >= 0 && !TryOpenCompare(view)) _quickLook.Open(ViewItems, view, byKey: true);
         };
-        _grid.ItemActivated += (_, index) => _quickLook.Open(_grid.Items, index, byKey: false);
-        _quickLook.CurrentChanged += (_, index) => _grid.SelectImage(index);
-        _quickLook.ToggleMarkRequested += (_, index) => _grid.ToggleImageMark(index);
+        // 画像は 1 枚表示、画像以外のファイルは関連付けられたアプリで開く（エクスプローラーと同じ）
+        _grid.ItemActivated += (_, index) =>
+        {
+            int view = ToViewIndex(index);
+            if (view >= 0) _quickLook.Open(ViewItems, view, byKey: false);
+            else if (index >= 0 && index < _grid.Items.Count) OpenWithShell(_grid.Items[index]);
+        };
+        _quickLook.CurrentChanged += (_, index) => _grid.SelectImage(ToGridIndex(index));
+        _quickLook.ToggleMarkRequested += (_, index) => _grid.ToggleImageMark(ToGridIndex(index));
         _quickLook.Closed += (_, _) => _grid.Focus();
         // フレーム保存で作った PNG を一覧に出す（1 枚表示は同じ画像を表示したまま）
         _quickLook.FrameSaved += async (_, path) => await FilesAddedAsync(Path.GetDirectoryName(path)!, Array.Empty<string>());
@@ -339,7 +347,88 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _grid.MarksChanged += (_, _) => _quickLook.Invalidate();
         _thumbnails.ThumbnailReady += _ => _quickLook.OnThumbnailReady(); // フィルムストリップに出ているサムネイル
         // 別のフォルダへ移った・表示中の画像が消えたら閉じる。並べ替え・リネームなら同じ画像を表示し続ける
-        _grid.ContentsChanged += (_, _) => _quickLook.ItemsChanged(_grid.Items);
+        _grid.ContentsChanged += (_, _) => _quickLook.ItemsChanged(ViewItems);
+    }
+
+    // ---- 1 枚表示・2 枚比較に渡す並び（画像だけ。画像以外のファイルは飛ばす） ----
+
+    // 一覧の中身が入れ替わったら、次に使うときに作り直す（一覧からの通知の順番に頼らない）
+    private IReadOnlyList<ImageFile>? _viewSource;
+    private IReadOnlyList<ImageFile> _viewItemsCache = Array.Empty<ImageFile>();
+    private int[]? _viewToGridCache;
+
+    private IReadOnlyList<ImageFile> ViewItems
+    {
+        get
+        {
+            RefreshViewItems();
+            return _viewItemsCache;
+        }
+    }
+
+    /// <summary>画像だけの並びでの番号 → 一覧（Items）での番号。null は画像だけで、番号が同じ</summary>
+    private int[]? ViewToGrid
+    {
+        get
+        {
+            RefreshViewItems();
+            return _viewToGridCache;
+        }
+    }
+
+    private void RefreshViewItems()
+    {
+        var items = _grid.Items;
+        if (ReferenceEquals(items, _viewSource)) return;
+        _viewSource = items;
+        if (items.All(f => f.IsImage))
+        {
+            _viewItemsCache = items;
+            _viewToGridCache = null;
+            return;
+        }
+        _viewToGridCache = Enumerable.Range(0, items.Count).Where(i => items[i].IsImage).ToArray();
+        _viewItemsCache = _viewToGridCache.Select(i => items[i]).ToList();
+    }
+
+    private int ToGridIndex(int view) =>
+        ViewToGrid is not { } map ? view : view >= 0 && view < map.Length ? map[view] : -1;
+
+    /// <summary>一覧での番号 → 画像だけの並びでの番号（画像以外のファイルなら -1）</summary>
+    private int ToViewIndex(int grid) =>
+        ViewToGrid is not { } map ? grid : Math.Max(-1, Array.BinarySearch(map, grid));
+
+    /// <summary>画像以外のファイルを、関連付けられたアプリで開く（エクスプローラーでダブルクリックしたときと同じ）</summary>
+    private void OpenWithShell(ImageFile file)
+    {
+        if (_inArchive)
+        {
+            Notify("ZIP の中のファイルは開けません（外へコピーすると開けます）");
+            return;
+        }
+        const int ErrorNoAssociation = 1155, ErrorCancelled = 1223;
+        var info = new System.Diagnostics.ProcessStartInfo(file.FullName) { UseShellExecute = true, WorkingDirectory = file.DirectoryName ?? "" };
+        try
+        {
+            try
+            {
+                System.Diagnostics.Process.Start(info)?.Dispose();
+            }
+            catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == ErrorNoAssociation)
+            {
+                // 関連付けが無い: 「プログラムから開く」を出す
+                info.Verb = "openas";
+                System.Diagnostics.Process.Start(info)?.Dispose();
+            }
+        }
+        catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == ErrorCancelled)
+        {
+            // 確認の画面（管理者として実行など）でやめた
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
+        {
+            Notify($"開けませんでした: {file.Name}（{ex.Message}）");
+        }
     }
 
     // ---- 2 枚並べて比べる（2 枚選んで Space） ----
@@ -348,24 +437,25 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     {
         _compare.MarkKey = _quickLook.MarkKey;
         _compare.MarkNextKey = _quickLook.MarkNextKey;
-        _compare.IsMarked = _grid.IsImageMarked;
+        _compare.IsMarked = i => _grid.IsImageMarked(ToGridIndex(i));
         _compare.MarkedCount = () => _grid.MarkedCount;
         _compare.PlaceholderProvider = _quickLook.PlaceholderProvider;
-        _compare.ToggleMarkRequested += (_, index) => _grid.ToggleImageMark(index);
+        _compare.ToggleMarkRequested += (_, index) => _grid.ToggleImageMark(ToGridIndex(index));
         // 並べている 2 枚を一覧でも選んでおく（閉じたときにどれを見ていたか分かるように。そのまま Space でまた開ける）
         _compare.ShownChanged += (_, _) => _grid.SelectPaths(_compare.ShownItems.Select(f => f.FullName));
         _compare.Closed += (_, _) => _grid.Focus();
         _grid.MarksChanged += (_, _) => _compare.Invalidate();
         _thumbnails.ThumbnailReady += _ => _compare.OnThumbnailReady();
-        _grid.ContentsChanged += (_, _) => _compare.ItemsChanged(_grid.Items);
+        _grid.ContentsChanged += (_, _) => _compare.ItemsChanged(ViewItems);
     }
 
     /// <summary>画像がちょうど 2 枚選ばれていて、Space を押した画像がそのどちらかなら、並べて比べる（左が並びの先のもの）</summary>
+    /// <param name="index">Space を押した画像の、画像だけの並びでの番号</param>
     private bool TryOpenCompare(int index)
     {
         var selected = _grid.SelectedImages;
-        if (selected.Count != 2 || _grid.SelectedFolders.Count > 0) return false;
-        var items = _grid.Items;
+        if (selected.Count != 2 || !selected.All(f => f.IsImage) || _grid.SelectedFolders.Count > 0) return false;
+        var items = ViewItems;
         var indices = selected.Select(f => items.ToList().FindIndex(i => string.Equals(i.FullName, f.FullName, StringComparison.OrdinalIgnoreCase)))
             .OrderBy(i => i).ToArray();
         if (indices[0] < 0 || !indices.Contains(index)) return false;
@@ -418,7 +508,8 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         }
         if (images.Count != 1)
         {
-            SetSelectionText(images.Count == 0 ? "" : $"{images.Count} 枚 ・ 合計 {DetailsPanel.FormatBytes(images.Sum(f => f.Length))}");
+            string unit = images.All(f => f.IsImage) ? "枚" : "件";
+            SetSelectionText(images.Count == 0 ? "" : $"{images.Count} {unit} ・ 合計 {DetailsPanel.FormatBytes(images.Sum(f => f.Length))}");
             foreach (var panel in panels)
             {
                 if (images.Count == 0) panel.ShowNothing();
@@ -429,6 +520,13 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
         var file = images[0];
         string rest = $"{DetailsPanel.FormatBytes(file.Length)} ・ {file.LastWriteTime:yyyy/MM/dd HH:mm}";
+        if (!file.IsImage)
+        {
+            // 画像以外のファイルは、大きさ・撮影情報を読まない
+            SetSelectionText(rest);
+            foreach (var panel in panels) panel.ShowImage(file, null, loading: false);
+            return;
+        }
         var key = ThumbnailKey.From(file);
         if (!_infoCache.TryGetValue(key, out var info))
         {
@@ -777,6 +875,23 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         ImageSaver.WebpQuality = _settings.WebpQuality ?? ImageSaver.DefaultQuality;
     }
 
+    /// <summary>設定の「画像以外のファイルも表示」「隠しファイル・フォルダーも表示」を一覧の読み込みに入れる</summary>
+    private void ApplyListingSettings()
+    {
+        FolderListing.ShowOtherFiles = _settings.ShowOtherFiles == true;
+        FolderListing.ShowHidden = _settings.ShowHidden == true;
+    }
+
+    /// <summary>表示の設定を変えた: 開いているフォルダとフォルダツリーを読み直す</summary>
+    private async Task ApplyListingSettingsAsync()
+    {
+        ApplyListingSettings();
+        _tree.ResetChildren();
+        if (_folder == null) return;
+        _ = _tree.RevealAsync(_folder);
+        await LoadFolderAsync(_folder, NavKind.Reload);
+    }
+
     private void ShowSaveQuality()
     {
         using var dlg = new SaveQualityDialog(ImageSaver.JpegQuality, ImageSaver.WebpQuality);
@@ -922,8 +1037,8 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _targetChecked.Icon = Icons.Dot(Theme.Current.Check);
         _targetSelection.Click += (_, _) => SetTarget(ActionTarget.Selection);
         _targetChecked.Click += (_, _) => SetTarget(ActionTarget.Checked);
-        _toolTip.SetToolTip(_targetSelection, "選択中の画像に対して実行");
-        _toolTip.SetToolTip(_targetChecked, "チェックした画像に対して実行（選択し直さなくてよい）");
+        _toolTip.SetToolTip(_targetSelection, "選択中の項目に対して実行");
+        _toolTip.SetToolTip(_targetChecked, "チェックした項目に対して実行（選択し直さなくてよい）");
         bar.AddTargets(_targetSelection, _targetChecked);
 
         IconButton Action(string id, string text, IconPainter icon, bool danger = false)
@@ -1374,6 +1489,21 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             themeMenu.DropDownItems.Add(item);
         }
         viewMenu.DropDownItems.Add(themeMenu);
+        viewMenu.DropDownItems.Add(new ToolStripSeparator());
+        var otherFiles = new ToolStripMenuItem("画像以外のファイルも表示(&F)") { CheckOnClick = true, Checked = _settings.ShowOtherFiles == true };
+        otherFiles.CheckedChanged += async (_, _) =>
+        {
+            ((ISettingsAccess)this).UpdateSettings(s => s with { ShowOtherFiles = otherFiles.Checked ? true : null });
+            await ApplyListingSettingsAsync();
+        };
+        var hidden = new ToolStripMenuItem("隠しファイル・フォルダーも表示(&H)") { CheckOnClick = true, Checked = _settings.ShowHidden == true };
+        hidden.CheckedChanged += async (_, _) =>
+        {
+            ((ISettingsAccess)this).UpdateSettings(s => s with { ShowHidden = hidden.Checked ? true : null });
+            await ApplyListingSettingsAsync();
+        };
+        viewMenu.DropDownItems.Add(otherFiles);
+        viewMenu.DropDownItems.Add(hidden);
         return viewMenu;
     }
 
@@ -1418,14 +1548,14 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         {
             new ToolStripMenuItem("チェックを付ける / 外す（複数選択ならまとめて）(&T)", null, (_, _) => _grid.ToggleMarks())
                 { ShortcutKeyDisplayString = "¥" },
-            new ToolStripMenuItem("選択中の画像にチェック(&M)", null, (_, _) => _grid.SetMarkOnSelected(true))
+            new ToolStripMenuItem("選択中の項目にチェック(&M)", null, (_, _) => _grid.SetMarkOnSelected(true))
                 { ShortcutKeyDisplayString = "Shift+¥" },
-            new ToolStripMenuItem("選択中の画像のチェックを外す(&U)", null, (_, _) => _grid.SetMarkOnSelected(false)),
+            new ToolStripMenuItem("選択中の項目のチェックを外す(&U)", null, (_, _) => _grid.SetMarkOnSelected(false)),
             new ToolStripSeparator(),
-            new ToolStripMenuItem("チェックした画像を選択(&S)", null, (_, _) => _grid.SelectMarked())
+            new ToolStripMenuItem("チェックした項目を選択(&S)", null, (_, _) => _grid.SelectMarked())
                 { ShortcutKeys = Keys.Control | Keys.Oem5, ShortcutKeyDisplayString = "Ctrl+¥" },
             new ToolStripSeparator(),
-            new ToolStripMenuItem("すべての画像にチェック(&A)", null, (_, _) => _grid.MarkAll()),
+            new ToolStripMenuItem("すべてにチェック(&A)", null, (_, _) => _grid.MarkAll()),
             new ToolStripMenuItem("チェックを反転(&I)", null, (_, _) => _grid.InvertMarks()),
             new ToolStripMenuItem("チェックをすべて外す(&C)", null, (_, _) => _grid.ClearMarks())
                 { ShortcutKeys = Keys.Control | Keys.Shift | Keys.Oem5, ShortcutKeyDisplayString = "Ctrl+Shift+¥" },
@@ -1464,7 +1594,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         checkMenu.DropDownItems.Add(new ToolStripMenuItem("チェックを付ける", null, (_, _) => _grid.SetMarkOnSelected(true))
             { ShortcutKeyDisplayString = "Shift+¥" });
         checkMenu.DropDownItems.Add(new ToolStripMenuItem("チェックを外す", null, (_, _) => _grid.SetMarkOnSelected(false)));
-        checkMenu.DropDownItems.Add(new ToolStripMenuItem("チェックした画像を選択", null, (_, _) => _grid.SelectMarked())
+        checkMenu.DropDownItems.Add(new ToolStripMenuItem("チェックした項目を選択", null, (_, _) => _grid.SelectMarked())
             { ShortcutKeyDisplayString = "Ctrl+¥" });
         _contextMenu.Items.Add(checkMenu);
 
@@ -1514,7 +1644,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
     // ---- コマンド実行 ----
 
-    /// <summary>コマンドの対象（選択中の画像。フォルダのタイルは含まない）</summary>
+    /// <summary>コマンドの対象（選択中の画像。画像以外のファイルも入る。フォルダのタイルは含まない）</summary>
     private IReadOnlyList<string> SelectedPaths() => _grid.SelectedImages.Select(f => f.FullName).ToList();
 
     /// <summary>コマンドを実行する対象（フッターで「チェック」を選んでいればチェックした画像、それ以外は選択中の画像）</summary>
@@ -1530,8 +1660,9 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         // 場所はアドレスバーとタイトルに出ているので、ここは件数だけ（選択中の枚数は右側の情報に出る）
         if (!_noticeActive)
             _footer.Status = _folder == null ? "フォルダを開いてください（Ctrl+O / フォルダをドロップ）"
-            : _grid.Folders.Count > 0 ? $"画像 {_grid.Items.Count} · フォルダ {_grid.Folders.Count}"
-            : $"画像 {_grid.Items.Count}";
+            : $"画像 {ViewItems.Count}"
+              + (ViewToGrid != null ? $" · ファイル {_grid.Items.Count - ViewItems.Count}" : "")
+              + (_grid.Folders.Count > 0 ? $" · フォルダ {_grid.Folders.Count}" : "");
         _footer.CheckCount = _grid.MarkedCount;
     }
 
@@ -1559,13 +1690,26 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
     /// <summary>
     /// コマンドに渡すパス。フォルダも扱うコマンド（コピーなど）には、選択中のフォルダのタイルも画像の前に加える
-    /// （チェックした画像が対象のときと、ZIP の中のフォルダ（本当のフォルダではない）は加えない）
+    /// （チェックした画像が対象のときと、ZIP の中のフォルダ（本当のフォルダではない）は加えない）。
+    /// 画像として読むコマンド（リサイズ・切り抜きなど）には、画像以外のファイルを除いて渡す
     /// </summary>
     private IReadOnlyList<string> PathsFor(IImageCommand cmd, IReadOnlyList<string> paths)
     {
+        if (cmd is not IWorksOnAnyFile && ViewToGrid != null) paths = ImagesOnly(paths);
         if (cmd is not IWorksOnFolders || _target != ActionTarget.Selection || _inArchive) return paths;
         var folders = _grid.SelectedFolders;
         return folders.Count == 0 ? paths : folders.Select(d => d.FullName).Concat(paths).ToList();
+    }
+
+    // 選択が変わるたびにコマンドの数だけ呼ばれるので、同じ一覧に対する結果は使い回す
+    private (IReadOnlyList<string> Source, IReadOnlyList<string> Images)? _imagesOnly;
+
+    private IReadOnlyList<string> ImagesOnly(IReadOnlyList<string> paths)
+    {
+        if (_imagesOnly is { } cached && ReferenceEquals(cached.Source, paths)) return cached.Images;
+        var images = paths.Where(ImageFormats.IsSupported).ToList();
+        _imagesOnly = (paths, images);
+        return images;
     }
 
     private async Task ExecuteAsync(IImageCommand cmd)
@@ -1714,8 +1858,20 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         if (items.Count == 0) return;
         // エクスプローラーと同じく、消した位置にある次の画像を選ぶ（Quick Look ならそのまま次を表示）
         int next = Math.Clamp(first, 0, items.Count - 1);
+        if (peeking && ViewItems.Count > 0)
+        {
+            // 1 枚表示は次の画像へ（間に画像以外のファイルがあれば飛ばす）。一覧の選択も、表示する画像に合わせる
+            int view = next;
+            if (ViewToGrid is { } map)
+            {
+                int at = Array.BinarySearch(map, first); // 消した位置かその後ろにある最初の画像（無ければ最後の画像）
+                view = Math.Min(at >= 0 ? at : ~at, map.Length - 1);
+            }
+            _grid.SelectImage(ToGridIndex(view));
+            _quickLook.Open(ViewItems, view, byKey: false);
+            return;
+        }
         _grid.SelectImage(next);
-        if (peeking) _quickLook.Open(_grid.Items, next, byKey: false);
     }
 
     private async Task UndoRenameAsync()

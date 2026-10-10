@@ -5,14 +5,14 @@ using ImageViewer.Core.Commands;
 
 namespace ImageViewer.App.Commands;
 
-public abstract class TransferToFolderCommand(Form owner, ISettingsAccess settings, FolderSearch search, bool move) : ImageCommandBase
+public abstract class TransferToFolderCommand(Form owner, ISettingsAccess settings, FolderSearch search, bool move) : ImageCommandBase, IWorksOnAnyFile
 {
     public override string Category => "ファイル";
 
     public override async Task ExecuteAsync(CommandContext context)
     {
         string verb = move ? "移動" : "コピー";
-        string what = context.Paths.Count == 1 ? $"「{Path.GetFileName(context.Paths[0])}」" : $"{context.Paths.Count} 枚の画像";
+        string what = context.Paths.Count == 1 ? $"「{Path.GetFileName(context.Paths[0])}」" : FileWording.CountWithNoun(context.Paths);
         string folder;
         using (var dialog = new FolderPickDialog($"フォルダーへ{verb}", $"{what}の{verb}先（フォルダー名の一部かパスを入力、↑↓ で選んで Enter）",
                    settings.Settings.RecentDestinations ?? Array.Empty<string>(), search))

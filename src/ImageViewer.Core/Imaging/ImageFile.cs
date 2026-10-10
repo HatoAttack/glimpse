@@ -1,4 +1,5 @@
-// 一覧に並ぶ画像 1 枚（パス・大きさ・更新日時）。普通のファイルのほか、ZIP の中の画像も表す
+// 一覧に並ぶ画像 1 枚（パス・大きさ・更新日時）。普通のファイルのほか、ZIP の中の画像も表す。
+// 「画像以外のファイルも表示」の設定のときは、画像以外のファイルもこれで表す（IsImage が false）
 // （ZIP の中は「C:\…\book.zip\sub\001.jpg」のように ZIP をフォルダと見なしたパス。FileInfo は実在するファイルしか扱えない）
 namespace ImageViewer.Core.Imaging;
 
@@ -11,6 +12,9 @@ public sealed record ImageFile(string FullName, long Length, DateTime LastWriteT
     /// 名前・大きさ・日時が同じでも中身が変わったことを、これで見分ける
     /// </summary>
     public long Version { get; init; }
+
+    /// <summary>対応している画像か（false は画像以外のファイル。1 枚表示・画像の編集の対象にしない）</summary>
+    public bool IsImage { get; } = ImageFormats.IsSupported(FullName);
 
     public string Extension => Path.GetExtension(FullName);
 

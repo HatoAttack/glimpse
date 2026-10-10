@@ -57,6 +57,17 @@ static class WatcherTests
                 Directory.CreateDirectory(Path.Combine(dir, "trip.2026"));
                 Pump(900);
                 check(events.Count == 1, "見張り: 名前に . があるフォルダの追加も知らせる");
+                // フォルダの隠し属性の付け外しも知らせる（一覧に出る / 出ないが変わる）。画像でないファイルの属性では知らせない
+                events.Clear();
+                File.SetAttributes(Path.Combine(dir, "trip.2026"), FileAttributes.Directory | FileAttributes.Hidden);
+                Pump(900);
+                check(events.Count == 1, $"見張り: フォルダの隠し属性の変化を知らせる（{events.Count} 回）");
+                events.Clear();
+                File.SetAttributes(Path.Combine(dir, "memo.txt"), FileAttributes.Hidden);
+                Pump(900);
+                check(events.Count == 0, $"見張り: 画像でないファイルの属性の変化では知らせない（{events.Count} 回）");
+                File.SetAttributes(Path.Combine(dir, "trip.2026"), FileAttributes.Directory);
+                Pump(900);
                 events.Clear();
                 Directory.Delete(Path.Combine(dir, "trip.2026"));
                 Pump(900);

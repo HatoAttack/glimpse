@@ -9,7 +9,7 @@ using ImageViewer.Core.Imaging;
 
 namespace ImageViewer.Core.Archives;
 
-/// <summary>ZIP の中のあるフォルダの中身（サブフォルダと画像。どちらもフルパス）</summary>
+/// <summary>ZIP の中のあるフォルダの中身（サブフォルダと画像。どちらもフルパス）。設定によっては画像以外のファイルも Images に入る</summary>
 public sealed record ArchiveListing(IReadOnlyList<string> Folders, IReadOnlyList<ImageFile> Images);
 
 public static class ZipStore
@@ -181,7 +181,8 @@ public static class ZipStore
         foreach (var entry in zip.Files.Values)
         {
             ct.ThrowIfCancellationRequested();
-            if (!string.Equals(ParentOf(entry.FullName), inner, StringComparison.OrdinalIgnoreCase) || !ImageFormats.IsSupported(entry.FullName)) continue;
+            if (!string.Equals(ParentOf(entry.FullName), inner, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!Navigation.FolderListing.ShowOtherFiles && !ImageFormats.IsSupported(entry.FullName)) continue;
             images.Add(new ImageFile(ArchivePath.Combine(archive, entry.FullName), entry.Length, entry.LastWriteTimeUtc) { Version = entry.Crc });
         }
         return new ArchiveListing(folders, images);

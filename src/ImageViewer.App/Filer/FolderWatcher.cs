@@ -39,17 +39,20 @@ public sealed class FolderWatcher : IDisposable
         if (folder == null) return;
         try
         {
-            // ファイル: 画像の追加・削除・名前の変更・書き換え（名前で絞る）
-            var files = _files = Create(folder, NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size);
+            // ファイル: 画像の追加・削除・名前の変更・書き換え（名前で絞る）。
+            // 属性も見る（画像以外のファイルは、隠し属性を付け外しすると一覧に出る / 出ないが変わる）
+            var files = _files = Create(folder, NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.Attributes);
             files.Created += (_, e) => OnEvent(e.Name);
             files.Deleted += (_, e) => OnEvent(e.Name);
             files.Changed += (_, e) => OnEvent(e.Name);
             files.Renamed += (_, e) => { if (Relevant(e.OldName) || Relevant(e.Name)) Mark(); };
-            // フォルダ: 一覧に出る中のフォルダの追加・削除・名前の変更（名前に . があっても拡張子で絞らない）
-            var folders = _folders = Create(folder, NotifyFilters.DirectoryName);
+            // フォルダ: 一覧に出る中のフォルダの追加・削除・名前の変更（名前に . があっても拡張子で絞らない）。
+            // 属性の変化も見る（隠し属性を付け外しすると一覧に出る / 出ないが変わる。属性の変化はファイルの分も届くので、フォルダだけを拾う）
+            var folders = _folders = Create(folder, NotifyFilters.DirectoryName | NotifyFilters.Attributes);
             folders.Created += (_, _) => Mark();
             folders.Deleted += (_, _) => Mark();
             folders.Renamed += (_, _) => Mark();
+            folders.Changed += (_, e) => { if (Directory.Exists(e.FullPath)) Mark(); };
             files.EnableRaisingEvents = true;
             folders.EnableRaisingEvents = true;
             Folder = folder;
@@ -80,10 +83,24 @@ public sealed class FolderWatcher : IDisposable
 
     /// <summary>
     /// 一覧に関わるファイルの名前か（画像と、フォルダのタイルとして出す ZIP）。保存のときの一時ファイル（.tmp）や、画像でないファイルでは読み直さない。
-    /// フォルダの変化は別の見張りで受けるので、ここでは見ない
+    /// フォルダの変化は別の見張りで受けるので、ここでは見ない。
+    /// 「画像以外のファイルも表示」の設定のときは、このアプリが作る一時ファイル以外のどのファイルでも読み直す
+    /// （ほかの .tmp は一覧に出るので読み直す）
     /// </summary>
     public static bool Relevant(string? name) =>
-        string.IsNullOrEmpty(name) || ImageFormats.IsSupported(name) || Core.Archives.ArchivePath.IsArchiveName(name);
+        string.IsNullOrEmpty(name) || ImageFormats.IsSupported(name) || Core.Archives.ArchivePath.IsArchiveName(name)
+        || (Core.Navigation.FolderListing.ShowOtherFiles && !IsOwnTempFile(name));
+
+    /// <summary>
+    /// このアプリが保存・名前の変更の途中だけ置く一時ファイルか（ImageSaver の「元の名前.32 桁の英数字.tmp」と、
+    /// RenameExecutor の「~ivren_….tmp」）。すぐに消えるので、これで読み直さない
+    /// </summary>
+    private static bool IsOwnTempFile(string name) =>
+        name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)
+        && (name.StartsWith("~ivren_", StringComparison.OrdinalIgnoreCase) || OwnTempSuffix.IsMatch(name));
+
+    private static readonly System.Text.RegularExpressions.Regex OwnTempSuffix =
+        new(@"\.[0-9a-f]{32}\.tmp$", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     private void Mark()
     {
