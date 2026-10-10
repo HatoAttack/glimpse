@@ -22,6 +22,7 @@ static class DialogTests
                 SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext());
                 MaskScenario(check, dir);
                 AnnotateScenario(check, dir);
+                AnnotateTextScenario(check, dir);
                 CropScenario(check, dir);
             }
             catch (Exception ex)
@@ -106,6 +107,23 @@ static class DialogTests
         check(ui.Form.IsDisposed && File.Exists(Path.Combine(dir, "a2_mark.png")) && dialog.SavedCount == 3, "枠・矢印: 最後の 1 枚を保存して次へ → 閉じる");
     }
 
+    static void AnnotateTextScenario(Action<bool, string> check, string dir)
+    {
+        string a = Noise(dir, "t1.png");
+        using var ui = new Driver(new AnnotateDialog(new[] { a }));
+        var dialog = (AnnotateDialog)ui.Form;
+        ui.Radio("文字").Checked = true;
+        ui.Radio("吹き出し").Checked = true;
+        ui.Drag();
+        check(ui.Button("保存").Enabled && ui.HasLabel("描いたもの 1 個（選んだ文字"), "文字: 置く所から指したい所へドラッグで吹き出しを置ける");
+        ui.Radio("番号").Checked = true;
+        ui.Drag(dy: 150);
+        ui.Drag(dx: 300, dy: 150);
+        check(ui.HasLabel("描いたもの 3 個（選んだ番号: 2）"), "番号: 置くたびに 1 ずつ増える");
+        ui.Click("保存");
+        check(File.Exists(Path.Combine(dir, "t1_mark.png")) && dialog.SavedCount == 1, "文字: 描いたものを保存できる");
+    }
+
     static void CropScenario(Action<bool, string> check, string dir)
     {
         string a = Noise(dir, "c1.png"), b = Noise(dir, "c2.png");
@@ -173,11 +191,11 @@ static class DialogTests
             WaitIdle();
         }
 
-        /// <summary>キャンバスの中央あたり（画像の中）を斜めにドラッグする</summary>
-        public void Drag()
+        /// <summary>キャンバスの中央あたり（画像の中）を斜めにドラッグする（dx, dy でドラッグする所をずらす）</summary>
+        public void Drag(int dx = 0, int dy = 0)
         {
             var canvas = Canvas;
-            int cx = canvas.ClientSize.Width / 2, cy = canvas.ClientSize.Height / 2;
+            int cx = canvas.ClientSize.Width / 2 + dx, cy = canvas.ClientSize.Height / 2 + dy;
             Mouse("OnMouseDown", cx - 100, cy - 60);
             Mouse("OnMouseMove", cx, cy);
             Mouse("OnMouseMove", cx + 100, cy + 60);

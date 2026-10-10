@@ -12,7 +12,7 @@ internal static class EditDialogShell
         form.ShowInTaskbar = false;
         form.KeyPreview = true;
         var screen = Screen.FromPoint(Cursor.Position).WorkingArea;
-        form.Size = new Size(Math.Min(1200, screen.Width * 9 / 10), Math.Min(860, screen.Height * 9 / 10));
+        form.Size = new Size(Math.Min(1200, screen.Width * 9 / 10), Math.Min(960, screen.Height * 9 / 10));
         form.MinimumSize = minimumSize;
 
         form.Controls.Add(canvas);

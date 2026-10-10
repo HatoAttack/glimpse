@@ -1,7 +1,10 @@
-// 枠・矢印ダイアログ（モザイク・ぼかしダイアログと同じ作り）
+// 枠・矢印・文字ダイアログ（モザイク・ぼかしダイアログと同じ作り）
 // - 画像の上をドラッグで四角の枠か矢印を描く（いくつでも）。矢印は離した所が先端。Shift を押しながらで 45° ごとの向きにそろえる
-// - 線の上をクリックで選ぶ。選んだものはドラッグで移動、枠は四隅・矢印は両端で形を変える。Delete か右クリックで消す
-// - 色・太さ・角の丸み（枠）・先端の大きさ（矢印）・影は、選んだものがあればそれを変え、無ければ次に描くものの見た目になる
+// - 文字と番号はクリックした所に置く。文字は右の欄に打つ（背景は なし / 帯 / 吹き出し）。番号は置くたびに 1 ずつ増える。
+//   吹き出しは、置く所から指したい所へドラッグする（矢印と同じく、離した所がしっぽの先）
+// - 線の上（文字・番号は本体）をクリックで選ぶ。選んだものはドラッグで移動、枠は四隅・矢印は両端で形を変える。
+//   文字・番号は四隅で大きさを変え、吹き出しはしっぽの先も動かせる（本体を動かしても、しっぽの先は指している所に残る）。Delete か右クリックで消す
+// - 色・太さ・角の丸み・先端の大きさ・影・文字の大きさなどは、選んだものがあればそれを変え、無ければ次に描くものの見た目になる
 // - 選択した画像を ◀ ▶（PageUp / PageDown）で切り替え。Enter で保存して次へ。描いたものは画像ごとに覚える
 // - 「保存」は元の画像を残して別の名前で、「上書き保存」は元の画像を置き換える（確かめない。アニメ・書き出せない形式などは上書きしない）
 // - 表示は描いた後の見た目（縮小した画像に同じ処理で描く）
@@ -17,12 +20,17 @@ public sealed class AnnotateDialog : ThemedForm
 {
     private const int MinSizePx = 4; // 枠の辺・矢印の長さの最小（画像の px）。これより小さくドラッグしたものは作らない
     private const int HeadScale = 10; // 先端の大きさのスライダーは 0.1 倍刻み
+    private const int MinFontSize = 8, MaxFontSize = 400; // 文字の大きさ（画像の px）
+    private const string DefaultText = "テキスト";       // 何も打たずに文字を置いたときの中身（置いたらすぐ打ち直せる）
 
     /// <summary>このアプリを起動している間は前回の設定を引き継ぐ（太さが 0 のうちは、初めの画像の大きさから決める）</summary>
     private static AnnotationKind _lastKind = AnnotationKind.Frame;
     private static Color _lastColor = Color.FromArgb(230, 30, 30);
     private static int _lastThickness, _lastRadius;
     private static int _lastHead = (int)(Annotator.DefaultHeadSize * HeadScale);
+    private static int _lastFontSize;
+    private static TextBackground _lastBackground = TextBackground.None;
+    private static Color _lastFill = Color.White;
     private static bool _lastShadow = true;
     private static bool _lastToCustomFolder;
     private static string _lastFolder = "";
@@ -37,29 +45,44 @@ public sealed class AnnotateDialog : ThemedForm
     private List<Annotation> _items => _edits.Current;
     private int _selected = -1;
     private readonly PendingEdits<Annotation> _edits = new();
-    private enum DragMode { None, Move, Resize }
+    private enum DragMode { None, Move, Resize, Scale, Tail } // Scale: 文字・番号の大きさ、Tail: 吹き出しのしっぽの先
     private DragMode _mode;
     private bool _creating;                // 新しく描いている途中（小さすぎれば離したときに消す）
-    private (double X, double Y) _fixed;   // 形を変えるときに動かない点（枠は対角、矢印は反対の端）
+    private (double X, double Y) _fixed;   // 形を変えるときに動かない点（枠・文字は対角、矢印は反対の端）
+    private bool _fixedRight, _fixedBottom; // 文字・番号: 動かない角が本体の右 / 下か
     private bool _dragTip;                 // 矢印: 動かしているのが先端か
+    private bool _focusText;               // マウスを離したら、文字の欄へ移って打てるようにする
     private (double X, double Y) _moveLast;
     private Color _color = _lastColor;
+    private Color _fill = _lastFill;
     private bool _syncing;                 // 選んだものの見た目を部品へ写している途中（変更として扱わない）
 
-    private readonly RadioButton _toolFrame = new() { Text = "四角の枠", AutoSize = true };
+    private readonly RadioButton _toolFrame = new() { Text = "枠", AutoSize = true };
     private readonly RadioButton _toolArrow = new() { Text = "矢印", AutoSize = true };
-    private readonly SwatchPanel _swatch = new() { Width = 40, Height = 24, Margin = new Padding(3, 3, 6, 3), Cursor = Cursors.Hand };
-    private readonly Button _pickColor = new() { Text = "色を選ぶ...", AutoSize = true };
-    private readonly Label _thicknessText = new() { AutoSize = true };
+    private readonly RadioButton _toolText = new() { Text = "文字", AutoSize = true };
+    private readonly RadioButton _toolNumber = new() { Text = "番号", AutoSize = true };
+    private readonly TextBox _text = new() { Multiline = true, AcceptsReturn = true, ScrollBars = ScrollBars.Vertical, Width = 186, Height = 44, MaxLength = 500 };
+    private readonly Label _fontText = SliderLabel();
+    private readonly TrackBar _font = Slider(MinFontSize, MaxFontSize);
+    private readonly Label _backText = new() { Text = "背景:", AutoSize = true, Margin = new Padding(3, 6, 0, 3) };
+    private readonly RadioButton _backNone = new() { Text = "なし", AutoSize = true };
+    private readonly RadioButton _backBox = new() { Text = "帯", AutoSize = true };
+    private readonly RadioButton _backBalloon = new() { Text = "吹き出し", AutoSize = true };
+    private readonly SwatchPanel _fillSwatch = new() { Width = 28, Height = 24, Margin = new Padding(8, 3, 2, 3), Cursor = Cursors.Hand };
+    private readonly Button _pickFill = new() { Text = "中の色...", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
+    private readonly SwatchPanel _swatch = new() { Width = 28, Height = 24, Margin = new Padding(3, 3, 2, 3), Cursor = Cursors.Hand };
+    private readonly Button _pickColor = new() { Text = "色...", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
+    private readonly Label _thicknessText = SliderLabel();
     private readonly TrackBar _thickness = Slider(1, 100);
-    private readonly Label _radiusText = new() { AutoSize = true };
+    private readonly Label _radiusText = SliderLabel();
     private readonly TrackBar _radius = Slider(0, 200);
-    private readonly Label _headText = new() { AutoSize = true };
+    private readonly Label _headText = SliderLabel();
     private readonly TrackBar _head = Slider((int)(Annotator.MinHeadSize * HeadScale), (int)(Annotator.MaxHeadSize * HeadScale));
     private readonly CheckBox _shadow = new() { Text = "影を付ける", AutoSize = true };
-    private readonly Button _removeSelected = new() { Text = "選んだものを消す (Del)", Width = 200, Height = 26 };
-    private readonly Button _removeAll = new() { Text = "すべて消す", Width = 200, Height = 26 };
-    private readonly Label _selectionInfo = new() { AutoSize = true, MaximumSize = new Size(210, 0), Margin = new Padding(3, 8, 3, 3) };
+    private readonly Button _removeSelected = new() { Text = "選んだものを消す", Width = 112, Height = 26 };
+    private readonly Button _removeAll = new() { Text = "すべて消す", Width = 82, Height = 26 };
+    // 2 行分の高さに固定する（文の長さで下のボタンが上下しないように）
+    private readonly Label _selectionInfo = new() { AutoSize = false, Size = new Size(210, 34), Margin = new Padding(3, 6, 3, 1) };
     private readonly ToolTip _toolTip = new();
 
     /// <summary>保存したファイルの数（一覧の読み直しの判断用）</summary>
@@ -83,16 +106,18 @@ public sealed class AnnotateDialog : ThemedForm
 
     private static TrackBar Slider(int min, int max) => new()
     {
-        Minimum = min, Maximum = max, TickStyle = TickStyle.None, LargeChange = Math.Max(1, (max - min) / 10), Width = 180, AutoSize = false, Height = 26,
+        Minimum = min, Maximum = max, TickStyle = TickStyle.None, LargeChange = Math.Max(1, (max - min) / 10), Width = 108, AutoSize = false, Height = 26,
     };
+
+    /// <summary>スライダーの左に置く、項目の名前と今の値（縦に場所を取らないよう、スライダーと同じ行に並べる）</summary>
+    private static Label SliderLabel() => new() { AutoSize = false, Width = 84, Height = 26, TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding(3, 3, 0, 3) };
 
     public AnnotateDialog(IReadOnlyList<string> paths, int startIndex = 0)
     {
         _stepper = new ImageStepper(paths);
         _stepper.StepRequested += async delta => await StepAsync(delta);
         _saver = new EditSavePanel(this, paths.Count,
-            "「保存」は「元の名前_mark」で保存します（同名があれば (2) などを付けます）。" +
-            "「上書き保存」は元のファイルを置き換えます（元には戻せません。HEIC・RAW など書き出せない形式やアニメーションは上書きしません）",
+            "「保存」は「元の名前_mark」で別に保存、「上書き保存」は元のファイルを置き換えます",
             _lastFolder, _lastToCustomFolder, withSaveAll: false);
         _saver.SaveRequested += async (advance, overwrite) => await SaveCurrentAsync(advance, overwrite);
         _saver.BusyChanged += UpdateButtons;
@@ -102,23 +127,31 @@ public sealed class AnnotateDialog : ThemedForm
         _canvas.MouseMove += Canvas_MouseMove;
         _canvas.MouseUp += Canvas_MouseUp;
         _canvas.Settled += (_, _) => RebuildDisplay();
-        EditDialogShell.Setup(this, "枠・矢印", _stepper, _canvas, BuildSidePanel(), new Size(700, 560));
+        EditDialogShell.Setup(this, "枠・矢印・文字", _stepper, _canvas, BuildSidePanel(), new Size(700, 560));
 
         _syncing = true;
-        (_lastKind == AnnotationKind.Arrow ? _toolArrow : _toolFrame).Checked = true;
+        ToolButton(_lastKind).Checked = true;
+        BackgroundButton(_lastBackground).Checked = true;
         _swatch.Swatch = _color;
+        _fillSwatch.Swatch = _fill;
+        _font.Value = Math.Clamp(Math.Max(MinFontSize, _lastFontSize), _font.Minimum, _font.Maximum);
         _thickness.Value = Math.Clamp(Math.Max(1, _lastThickness), _thickness.Minimum, _thickness.Maximum);
         _radius.Value = Math.Clamp(_lastRadius, _radius.Minimum, _radius.Maximum);
         _head.Value = Math.Clamp(_lastHead, _head.Minimum, _head.Maximum);
         _shadow.Checked = _lastShadow;
         _syncing = false;
-        foreach (var rb in new[] { _toolFrame, _toolArrow })
+        foreach (var rb in new[] { _toolFrame, _toolArrow, _toolText, _toolNumber })
             rb.CheckedChanged += (_, _) => { if (rb.Checked) UpdateStyleControls(); };
-        foreach (var slider in new[] { _thickness, _radius, _head })
+        foreach (var rb in new[] { _backNone, _backBox, _backBalloon })
+            rb.CheckedChanged += (_, _) => { if (rb.Checked) OnStyleChanged(); };
+        foreach (var slider in new[] { _thickness, _radius, _head, _font })
             slider.ValueChanged += (_, _) => OnStyleChanged();
         _shadow.CheckedChanged += (_, _) => OnStyleChanged();
-        _swatch.Click += (_, _) => PickColor();
-        _pickColor.Click += (_, _) => PickColor();
+        _text.TextChanged += (_, _) => OnStyleChanged();
+        _swatch.Click += (_, _) => PickColor(fill: false);
+        _pickColor.Click += (_, _) => PickColor(fill: false);
+        _fillSwatch.Click += (_, _) => PickColor(fill: true);
+        _pickFill.Click += (_, _) => PickColor(fill: true);
         UpdateStyleControls();
         UpdateButtons();
 
@@ -131,10 +164,13 @@ public sealed class AnnotateDialog : ThemedForm
             _toolTip.Dispose();
             _lastKind = CurrentTool;
             _lastColor = _color;
+            _lastFill = _fill;
+            _lastBackground = CurrentBackground;
             if (_styleReady)
             {
                 _lastThickness = _thickness.Value;
                 _lastRadius = _radius.Value;
+                _lastFontSize = _font.Value;
             }
             _lastHead = _head.Value;
             _lastShadow = _shadow.Checked;
@@ -143,48 +179,93 @@ public sealed class AnnotateDialog : ThemedForm
         };
     }
 
-    // 太さ・角の丸みの初めの値を決めたか（前回の設定が無ければ、初めの画像を読んでから大きさに合わせて決める）
+    // 太さ・角の丸み・文字の大きさの初めの値を決めたか（前回の設定が無ければ、初めの画像を読んでから大きさに合わせて決める）
     private bool _styleReady = _lastThickness > 0;
 
     /// <summary>これから描くもの（描いたものの種類は変えない）</summary>
-    private AnnotationKind CurrentTool => _toolArrow.Checked ? AnnotationKind.Arrow : AnnotationKind.Frame;
+    private AnnotationKind CurrentTool =>
+        _toolArrow.Checked ? AnnotationKind.Arrow : _toolText.Checked ? AnnotationKind.Text : _toolNumber.Checked ? AnnotationKind.Number : AnnotationKind.Frame;
+
+    private TextBackground CurrentBackground => _backBalloon.Checked ? TextBackground.Balloon : _backBox.Checked ? TextBackground.Box : TextBackground.None;
+
+    private RadioButton ToolButton(AnnotationKind kind) => kind switch
+    {
+        AnnotationKind.Arrow => _toolArrow,
+        AnnotationKind.Text => _toolText,
+        AnnotationKind.Number => _toolNumber,
+        _ => _toolFrame,
+    };
+
+    private RadioButton BackgroundButton(TextBackground background) =>
+        background == TextBackground.Balloon ? _backBalloon : background == TextBackground.Box ? _backBox : _backNone;
+
+    private Annotation? Selected => _selected >= 0 && _selected < _items.Count ? _items[_selected] : null;
+
+    /// <summary>部品を横に並べる</summary>
+    private static FlowLayoutPanel Row(params Control[] controls)
+    {
+        var row = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
+        row.Controls.AddRange(controls);
+        return row;
+    }
 
     private Control BuildSidePanel()
     {
         var side = EditDialogShell.SidePanel(250); // 縦のスクロールバーが出ても横にはみ出さない幅
-        side.Controls.Add(EditDialogShell.Group("描くもの", vertical: false, _toolFrame, _toolArrow));
+        side.Controls.Add(EditDialogShell.Group("描くもの", vertical: false, _toolFrame, _toolArrow, _toolText, _toolNumber));
         _toolTip.SetToolTip(_toolArrow, "指したい所へ向かってドラッグします（離した所が先端）。\nShift を押しながらドラッグすると、向きを 45° ごとにそろえます");
+        _toolTip.SetToolTip(_toolText, "クリックした所に文字を置きます（中身は下の欄に打ちます）。\n吹き出しは、置く所から指したい所へドラッグします（離した所がしっぽの先）");
+        _toolTip.SetToolTip(_toolNumber, "クリックした所に、丸で囲んだ番号を置きます（置くたびに 1 ずつ増えます）");
 
-        var colorRow = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
-        colorRow.Controls.AddRange(new Control[] { _swatch, _pickColor });
-        side.Controls.Add(EditDialogShell.Group("見た目", vertical: true, colorRow, _thicknessText, _thickness, _radiusText, _radius, _headText, _head, _shadow));
-        _toolTip.SetToolTip(_radius, "四角の枠の角の丸み。枠の短い辺の半分より大きくはなりません");
-        _toolTip.SetToolTip(_head, "矢印の先端の大きさ（線の太さの何倍か）");
+        // 背景の 3 つは「描くもの」と別の入れ物に入れる（同じ入れ物のラジオボタンは 1 つしか選べないため）
+        side.Controls.Add(EditDialogShell.Group("文字", vertical: true, _text, Row(_fontText, _font), Row(_backText, _backNone, _backBox, _backBalloon)));
+        _toolTip.SetToolTip(_text, "選んだ文字の中身。Enter で改行します");
+        _toolTip.SetToolTip(_backBox, "文字の後ろに角の丸い四角を置きます");
+        _toolTip.SetToolTip(_backBalloon, "四角に、指したい所へ向かうしっぽを付けます");
+
+        side.Controls.Add(EditDialogShell.Group("見た目", vertical: true, Row(_swatch, _pickColor, _fillSwatch, _pickFill), Row(_thicknessText, _thickness), Row(_radiusText, _radius), Row(_headText, _head), _shadow));
+        foreach (var c in new Control[] { _thicknessText, _thickness }) _toolTip.SetToolTip(c, "線の太さ（枠・矢印と、帯・吹き出しの縁）");
+        foreach (var c in new Control[] { _radiusText, _radius }) _toolTip.SetToolTip(c, "枠・帯・吹き出しの角の丸み。短い辺の半分より大きくはなりません");
+        foreach (var c in new Control[] { _headText, _head }) _toolTip.SetToolTip(c, "矢印の先端の大きさ（線の太さの何倍か）");
+        foreach (var c in new Control[] { _fontText, _font }) _toolTip.SetToolTip(c, "文字・番号の大きさ。選んだ文字・番号の四隅をドラッグしても変えられます");
 
         _removeSelected.Click += (_, _) => RemoveSelected();
         _removeAll.Click += (_, _) => RemoveAll();
-        side.Controls.AddRange(new Control[] { _selectionInfo, _removeSelected, _removeAll });
+        _toolTip.SetToolTip(_removeSelected, "選んだものを消します (Del)。右クリックでも消せます");
+        _toolTip.SetToolTip(_pickFill, "帯・吹き出しの中の色");
+        side.Controls.AddRange(new Control[] { _selectionInfo, Row(_removeSelected, _removeAll) });
 
         side.Controls.Add(_saver.FolderBox);
         side.Controls.AddRange(_saver.Buttons);
         return side;
     }
 
-    // ---- 見た目（色・太さ・角の丸み・先端の大きさ・影） ----
+    // ---- 見た目（色・太さ・角の丸み・先端の大きさ・影・文字） ----
 
     private static Rgba32 ToRgba(Color c) => new(c.R, c.G, c.B, c.A);
 
     /// <summary>部品の今の値で、枠か矢印を作る</summary>
     private Annotation NewItem(AnnotationKind kind, double x0, double y0, double x1, double y1) =>
-        new(kind, x0, y0, x1, y1, ToRgba(_color), _thickness.Value, _radius.Value, (double)_head.Value / HeadScale, _shadow.Checked);
+        Styled(new Annotation(kind, x0, y0, x1, y1, default, 0, 0, 0, false));
 
-    private void PickColor()
+    /// <summary>部品の今の値を見た目に入れる（位置と種類はそのまま。番号の数字も変えない）</summary>
+    private Annotation Styled(Annotation a) => a with
     {
-        using var dlg = new ColorDialog { Color = _color, FullOpen = true };
+        Color = ToRgba(_color), Thickness = _thickness.Value, CornerRadius = _radius.Value, HeadSize = (double)_head.Value / HeadScale, Shadow = _shadow.Checked,
+        FontSize = _font.Value, Background = CurrentBackground, Fill = ToRgba(_fill),
+        Text = a.Kind == AnnotationKind.Text ? _text.Text : a.Text,
+    };
+
+    private void PickColor(bool fill)
+    {
+        using var dlg = new ColorDialog { Color = fill ? _fill : _color, FullOpen = true };
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
-        _color = Color.FromArgb(255, dlg.Color);
-        _swatch.Swatch = _color;
-        _swatch.Invalidate();
+        var picked = Color.FromArgb(255, dlg.Color);
+        if (fill) _fill = picked;
+        else _color = picked;
+        var swatch = fill ? _fillSwatch : _swatch;
+        swatch.Swatch = picked;
+        swatch.Invalidate();
         OnStyleChanged();
     }
 
@@ -192,10 +273,30 @@ public sealed class AnnotateDialog : ThemedForm
     private void OnStyleChanged()
     {
         UpdateStyleControls();
-        if (_syncing || _saver.Busy || _selected < 0 || _selected >= _items.Count) return;
-        var a = _items[_selected];
-        _items[_selected] = NewItem(a.Kind, a.X0, a.Y0, a.X1, a.Y1);
+        if (_syncing || _saver.Busy || Selected is not { } a) return;
+        var styled = KeepInside(Styled(a));
+        // しっぽを出し直すのは、背景を吹き出しに変えたときだけ（文字を足して本体が先を覆っても、指している所は変えない）
+        _items[_selected] = a.HasTail ? styled : WithTail(styled);
         RenderPreview();
+    }
+
+    /// <summary>文字・番号の本体が画像からはみ出していたら中へ戻す（文字を足した・大きくした・背景を付けたときに、端で切れないように）</summary>
+    private Annotation KeepInside(Annotation a)
+    {
+        if (!a.IsText || _stepper.Image is not { } image) return a;
+        var (x, y, w, h) = a.Body;
+        return a with { X0 = ClampInside(x, w, image.Width), Y0 = ClampInside(y, h, image.Height) };
+    }
+
+    /// <summary>吹き出しにした・クリックだけで置いたときに、しっぽの先が本体の中にあれば、本体の下（下に出せなければ上）へ出す</summary>
+    private Annotation WithTail(Annotation a)
+    {
+        if (!a.HasTail || _stepper.Image is not { } image) return a;
+        var (x, y, w, h) = a.Body;
+        if (a.X1 < x || a.X1 > x + w || a.Y1 < y || a.Y1 > y + h) return a;
+        double gap = a.FontSize * 1.2;
+        var tip = _canvas.ClampToImage((x + w * 0.3, y + h + gap <= image.Height ? y + h + gap : y - gap));
+        return a with { X1 = tip.X, Y1 = tip.Y };
     }
 
     /// <summary>選んだものの見た目を部品へ写す（続けて調整できるように）</summary>
@@ -205,10 +306,23 @@ public sealed class AnnotateDialog : ThemedForm
         _color = Color.FromArgb(a.Color.A, a.Color.R, a.Color.G, a.Color.B);
         _swatch.Swatch = _color;
         _swatch.Invalidate();
-        _thickness.Value = Math.Clamp((int)Math.Round(a.Thickness), _thickness.Minimum, _thickness.Maximum);
-        // 使わない値（枠の先端の大きさ・矢印の角の丸み）は、次に描くもののために今の部品の値を残す
-        if (a.Kind == AnnotationKind.Frame) _radius.Value = Math.Clamp((int)Math.Round(a.CornerRadius), _radius.Minimum, _radius.Maximum);
-        else _head.Value = Math.Clamp((int)Math.Round(a.HeadSize * HeadScale), _head.Minimum, _head.Maximum);
+        // 使わない値（枠の先端の大きさ・矢印の角の丸み・番号の太さ など）は、次に描くもののために今の部品の値を残す
+        bool boxed = a.Kind == AnnotationKind.Text && a.Background != TextBackground.None;
+        if (!a.IsText || boxed) _thickness.Value = Math.Clamp((int)Math.Round(a.Thickness), _thickness.Minimum, _thickness.Maximum);
+        if (a.Kind == AnnotationKind.Frame || boxed) _radius.Value = Math.Clamp((int)Math.Round(a.CornerRadius), _radius.Minimum, _radius.Maximum);
+        if (a.Kind == AnnotationKind.Arrow) _head.Value = Math.Clamp((int)Math.Round(a.HeadSize * HeadScale), _head.Minimum, _head.Maximum);
+        if (a.IsText) _font.Value = Math.Clamp((int)Math.Round(a.FontSize), _font.Minimum, _font.Maximum);
+        if (a.Kind == AnnotationKind.Text)
+        {
+            _text.Text = a.Text.Replace("\r\n", "\n").Replace("\n", "\r\n");
+            BackgroundButton(a.Background).Checked = true;
+            if (boxed)
+            {
+                _fill = Color.FromArgb(a.Fill.A, a.Fill.R, a.Fill.G, a.Fill.B);
+                _fillSwatch.Swatch = _fill;
+                _fillSwatch.Invalidate();
+            }
+        }
         _shadow.Checked = a.Shadow;
         _syncing = false;
         UpdateStyleControls();
@@ -216,13 +330,19 @@ public sealed class AnnotateDialog : ThemedForm
 
     private void UpdateStyleControls()
     {
-        // 選んだものがあればその種類、無ければこれから描くものの種類で使う部品を決める
-        var kind = _selected >= 0 && _selected < _items.Count ? _items[_selected].Kind : CurrentTool;
-        _radius.Enabled = _radiusText.Enabled = kind == AnnotationKind.Frame;
+        // 選んだものがあればその種類、無ければこれから描くものの種類で使う部品を決める（背景の部品は、選んだ文字に合わせてある）
+        var kind = Selected?.Kind ?? CurrentTool;
+        bool text = kind == AnnotationKind.Text, boxed = text && CurrentBackground != TextBackground.None;
+        _thickness.Enabled = _thicknessText.Enabled = kind is AnnotationKind.Frame or AnnotationKind.Arrow || boxed;
+        _radius.Enabled = _radiusText.Enabled = kind == AnnotationKind.Frame || boxed;
         _head.Enabled = _headText.Enabled = kind == AnnotationKind.Arrow;
-        _thicknessText.Text = $"太さ: {_thickness.Value} px";
-        _radiusText.Text = _radius.Value == 0 ? "角の丸み: なし" : $"角の丸み: {_radius.Value} px";
-        _headText.Text = $"先端の大きさ: 太さの {(double)_head.Value / HeadScale:0.0} 倍";
+        _font.Enabled = _fontText.Enabled = kind is AnnotationKind.Text or AnnotationKind.Number;
+        _text.Enabled = _backText.Enabled = _backNone.Enabled = _backBox.Enabled = _backBalloon.Enabled = text;
+        _fillSwatch.Enabled = _pickFill.Enabled = boxed;
+        _fontText.Text = $"大きさ {_font.Value} px";
+        _thicknessText.Text = $"太さ {_thickness.Value} px";
+        _radiusText.Text = _radius.Value == 0 ? "丸み なし" : $"丸み {_radius.Value} px";
+        _headText.Text = $"先端 {(double)_head.Value / HeadScale:0.0} 倍";
     }
 
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
@@ -243,6 +363,9 @@ public sealed class AnnotateDialog : ThemedForm
                 return true;
             case Keys.PageUp:
                 _ = StepAsync(-1);
+                return true;
+            case Keys.Escape when ActiveControl == _text:
+                _canvas.Focus(); // 文字を打ち終えた（ダイアログは閉じない）
                 return true;
             case Keys.Escape:
                 Close();
@@ -285,6 +408,7 @@ public sealed class AnnotateDialog : ThemedForm
             int thickness = Math.Clamp(Annotator.DefaultThickness(image.Width, image.Height), _thickness.Minimum, _thickness.Maximum);
             _thickness.Value = thickness;
             _radius.Value = Math.Clamp(thickness * 2, _radius.Minimum, _radius.Maximum);
+            _font.Value = Math.Clamp(Annotator.DefaultFontSize(image.Width, image.Height), _font.Minimum, _font.Maximum);
             _syncing = false;
         }
         UpdateStyleControls();
@@ -299,11 +423,15 @@ public sealed class AnnotateDialog : ThemedForm
         _removeAll.Enabled = !_saver.Busy && _items.Count > 0;
         _stepper.StepEnabled = !_saver.Busy;
         _selectionInfo.Text = _stepper.Image == null ? ""
-            : _items.Count == 0 ? "画像の上をドラッグして、枠や矢印を描いてください（いくつでも描けます）"
-            : _selected < 0 ? $"枠・矢印 {_items.Count} 個（線の上をクリックすると選べます）"
-            : _items[_selected] is { Kind: AnnotationKind.Frame } f
-                ? $"枠・矢印 {_items.Count} 個（選んだ枠: {Math.Round(f.Width)} × {Math.Round(f.Height)} px）"
-                : $"枠・矢印 {_items.Count} 個（選んだ矢印: 長さ {Math.Round(_items[_selected].Length)} px）";
+            : _items.Count == 0 ? "ドラッグで枠・矢印を描き、クリックで文字・番号を置きます（いくつでも）"
+            : Selected is not { } a ? $"描いたもの {_items.Count} 個（クリックすると選べます）"
+            : a.Kind switch
+            {
+                AnnotationKind.Frame => $"描いたもの {_items.Count} 個（選んだ枠: {Math.Round(a.Width)} × {Math.Round(a.Height)} px）",
+                AnnotationKind.Arrow => $"描いたもの {_items.Count} 個（選んだ矢印: 長さ {Math.Round(a.Length)} px）",
+                AnnotationKind.Number => $"描いたもの {_items.Count} 個（選んだ番号: {a.Text}）",
+                _ => $"描いたもの {_items.Count} 個（選んだ文字: ダブルクリックで打ち直し）",
+            };
     }
 
     /// <summary>描いたものを変えた後: 表示とボタンを合わせる</summary>
@@ -367,10 +495,30 @@ public sealed class AnnotateDialog : ThemedForm
         _canvas.Invalidate();
     }
 
-    /// <summary>選んだものの、つかんで形を変える点（枠は四隅、矢印は始点と先端）</summary>
-    private static (double X, double Y)[] HandlesOf(Annotation a) => a.Kind == AnnotationKind.Frame
-        ? new[] { (a.X0, a.Y0), (a.X1, a.Y0), (a.X1, a.Y1), (a.X0, a.Y1) }
-        : new[] { (a.X0, a.Y0), (a.X1, a.Y1) };
+    /// <summary>選んだものの、つかんで形を変える点（枠は四隅、矢印は始点と先端、文字・番号は本体の四隅と、吹き出しならしっぽの先）</summary>
+    private static (double X, double Y)[] HandlesOf(Annotation a)
+    {
+        if (a.Kind == AnnotationKind.Arrow) return new[] { (a.X0, a.Y0), (a.X1, a.Y1) };
+        if (a.Kind == AnnotationKind.Frame) return new[] { (a.X0, a.Y0), (a.X1, a.Y0), (a.X1, a.Y1), (a.X0, a.Y1) };
+        var (x, y, w, h) = a.Body;
+        var corners = new[] { (x, y), (x + w, y), (x + w, y + h), (x, y + h) };
+        return a.HasTail ? corners.Append((a.X1, a.Y1)).ToArray() : corners;
+    }
+
+    /// <summary>長さ size のものを 0〜limit に収めたときの始まりの位置（収まらない大きさなら中央に置く）</summary>
+    private static double ClampInside(double start, double size, double limit) =>
+        size >= limit ? (limit - size) / 2 : Math.Clamp(start, 0, limit - size);
+
+    /// <summary>次に置く番号（今ある番号のいちばん大きいもの + 1）</summary>
+    private string NextNumber() =>
+        (_items.Where(i => i.Kind == AnnotationKind.Number).Select(i => int.TryParse(i.Text, out int n) ? n : 0).DefaultIfEmpty(0).Max() + 1).ToString();
+
+    /// <summary>文字の欄へ移って、すぐ打ち直せるようにする</summary>
+    private void FocusText()
+    {
+        _text.Focus();
+        _text.SelectAll();
+    }
 
     private void Canvas_Paint(object? sender, PaintEventArgs e)
     {
@@ -395,6 +543,7 @@ public sealed class AnnotateDialog : ThemedForm
     private void Canvas_MouseDown(object? sender, MouseEventArgs e)
     {
         if (_stepper.Image == null || _saver.Busy || _stepper.Loading) return;
+        bool typing = ActiveControl == _text; // 文字を打っている途中だったか
         _canvas.Focus();
         var (ix, iy) = _canvas.CanvasToImage(e.X, e.Y);
 
@@ -410,17 +559,23 @@ public sealed class AnnotateDialog : ThemedForm
         }
         if (e.Button != MouseButtons.Left) return;
 
-        // 選んだもののつかむ点なら形を変える
-        if (_selected >= 0)
+        // 選んだもののつかむ点なら形を変える（しっぽの先が角に重なっていたら、しっぽの先を優先する）
+        if (Selected is { } a)
         {
-            var a = _items[_selected];
             var handles = HandlesOf(a);
-            for (int i = 0; i < handles.Length; i++)
+            for (int i = handles.Length - 1; i >= 0; i--)
             {
                 if (!_canvas.HitsHandle(e.X, e.Y, handles[i])) continue;
-                _mode = DragMode.Resize;
                 _creating = false;
-                _fixed = handles[(i + handles.Length / 2) % handles.Length]; // 枠は対角、矢印は反対の端を固定
+                if (a.IsText && i == 4)
+                {
+                    _mode = DragMode.Tail;
+                    return;
+                }
+                _mode = a.IsText ? DragMode.Scale : DragMode.Resize;
+                _fixed = handles[a.IsText ? (i + 2) % 4 : (i + handles.Length / 2) % handles.Length]; // 枠・文字は対角、矢印は反対の端を固定
+                _fixedRight = i is 0 or 3;
+                _fixedBottom = i is 0 or 1;
                 _dragTip = i == 1;
                 return;
             }
@@ -431,9 +586,42 @@ public sealed class AnnotateDialog : ThemedForm
         if (target >= 0)
         {
             _selected = target;
+            LoadStyleFrom(_items[target]);
+            if (e.Clicks > 1 && _items[target].Kind == AnnotationKind.Text)
+            {
+                // 文字をダブルクリック: 打ち直す
+                OnItemsChanged();
+                FocusText();
+                return;
+            }
             _mode = DragMode.Move;
             _moveLast = (ix, iy);
-            LoadStyleFrom(_items[target]);
+        }
+        else if (typing && Selected != null && CurrentTool == AnnotationKind.Text)
+        {
+            // 文字を打ち終えて何も無い所をクリックした: 選択を外すだけ（続けて新しい文字を置いてしまわないように）
+            _selected = -1;
+        }
+        else if (CurrentTool is AnnotationKind.Text or AnnotationKind.Number)
+        {
+            // 文字・番号: クリックした所を本体の中心にして置く。そのままドラッグすると、吹き出しはしっぽの先を、ほかは位置を決められる
+            bool text = CurrentTool == AnnotationKind.Text;
+            if (text && string.IsNullOrWhiteSpace(_text.Text))
+            {
+                _syncing = true;
+                _text.Text = DefaultText;
+                _syncing = false;
+            }
+            var item = NewItem(CurrentTool, 0, 0, ix, iy);
+            if (!text) item = item with { Text = NextNumber() };
+            var (_, _, w, h) = item.Body;
+            var image = _stepper.Image;
+            item = item with { X0 = ClampInside(ix - w / 2, w, image.Width), Y0 = ClampInside(iy - h / 2, h, image.Height) };
+            _items.Add(item);
+            _selected = _items.Count - 1;
+            _mode = item.HasTail ? DragMode.Tail : DragMode.Move;
+            _moveLast = (ix, iy);
+            _focusText = text;
         }
         else
         {
@@ -453,6 +641,8 @@ public sealed class AnnotateDialog : ThemedForm
     {
         if (_mode == DragMode.None || _stepper.Image == null || _selected < 0) return;
         if (_mode == DragMode.Move) DoMove(e);
+        else if (_mode == DragMode.Scale) DoScale(e);
+        else if (_mode == DragMode.Tail) DoTail(e);
         else DoResize(e);
         RenderPreview();
         UpdateButtons();
@@ -472,21 +662,64 @@ public sealed class AnnotateDialog : ThemedForm
             _selected = -1;
         }
         _creating = false;
+        // クリックだけで置いた吹き出しにも、しっぽを出す（置いた後のドラッグでは、指している所を変えない）
+        if (_focusText && Selected is { } placed) _items[_selected] = WithTail(placed);
         OnItemsChanged();
+        if (_focusText && Selected is { Kind: AnnotationKind.Text }) FocusText();
+        _focusText = false;
     }
 
     private static bool TooSmall(Annotation a) =>
-        a.Kind == AnnotationKind.Frame ? a.Width < MinSizePx || a.Height < MinSizePx : a.Length < MinSizePx;
+        !a.IsText && (a.Kind == AnnotationKind.Frame ? a.Width < MinSizePx || a.Height < MinSizePx : a.Length < MinSizePx);
 
     private void DoMove(MouseEventArgs e)
     {
         var (ix, iy) = _canvas.CanvasToImage(e.X, e.Y);
         var a = _items[_selected];
+        if (a.IsText)
+        {
+            // 本体が画像の外へ出ない範囲で動かす（しっぽの先は動かさない）
+            var (x, y, w, h) = a.Body;
+            double mx = ClampInside(x + ix - _moveLast.X, w, _stepper.Image!.Width) - x, my = ClampInside(y + iy - _moveLast.Y, h, _stepper.Image.Height) - y;
+            _items[_selected] = a.MoveBody(mx, my);
+            _moveLast = (_moveLast.X + mx, _moveLast.Y + my);
+            return;
+        }
         // 画像の外へ出ない範囲で動かす
         double dx = Math.Clamp(ix - _moveLast.X, -Math.Min(a.X0, a.X1), _stepper.Image!.Width - Math.Max(a.X0, a.X1));
         double dy = Math.Clamp(iy - _moveLast.Y, -Math.Min(a.Y0, a.Y1), _stepper.Image.Height - Math.Max(a.Y0, a.Y1));
         _items[_selected] = a.Offset(dx, dy);
         _moveLast = (_moveLast.X + dx, _moveLast.Y + dy);
+    }
+
+    /// <summary>文字・番号: 対角の角を動かさずに、マウスの位置まで本体が届くように文字の大きさを変える</summary>
+    private void DoScale(MouseEventArgs e)
+    {
+        var (fx, fy) = _fixed;
+        var a = _items[_selected];
+        var (mx, my) = _canvas.ClampToImage(_canvas.CanvasToImage(e.X, e.Y));
+        var (_, _, w, h) = a.Body;
+        if (w <= 0 || h <= 0) return;
+        double k = Math.Max(Math.Abs(mx - fx) / w, Math.Abs(my - fy) / h);
+        // 動かない角から画像の端までに収まる大きさまで（縦横の比は変えられないので、片方が先に端に着く）
+        var image = _stepper.Image!;
+        double room = Math.Min((_fixedRight ? fx : image.Width - fx) / w, (_fixedBottom ? fy : image.Height - fy) / h);
+        int limit = Math.Clamp((int)Math.Floor(a.FontSize * room), _font.Minimum, _font.Maximum);
+        int size = Math.Clamp((int)Math.Round(a.FontSize * k), _font.Minimum, limit);
+        var scaled = a with { FontSize = size };
+        var (_, _, nw, nh) = scaled.Body;
+        _items[_selected] = scaled with { X0 = _fixedRight ? fx - nw : fx, Y0 = _fixedBottom ? fy - nh : fy };
+        _syncing = true;
+        _font.Value = size;
+        _syncing = false;
+        UpdateStyleControls();
+    }
+
+    /// <summary>吹き出し: しっぽの先を動かす</summary>
+    private void DoTail(MouseEventArgs e)
+    {
+        var (mx, my) = _canvas.ClampToImage(_canvas.CanvasToImage(e.X, e.Y));
+        _items[_selected] = _items[_selected] with { X1 = mx, Y1 = my };
     }
 
     private void DoResize(MouseEventArgs e)
@@ -525,7 +758,7 @@ public sealed class AnnotateDialog : ThemedForm
         var items = _items.ToList();
         if (items.Count == 0)
         {
-            _saver.ShowNotice("枠か矢印を描いてから保存してください");
+            _saver.ShowNotice("枠・矢印・文字のどれかを描いてから保存してください");
             return;
         }
         if (_saver.FolderFor(src, overwrite) is not string folder) return;

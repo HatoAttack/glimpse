@@ -1071,7 +1071,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         var more = new IconButton { Icon = Icons.More, AccessibleName = "その他の操作" };
         _toolTip.SetToolTip(more, "その他の操作");
         more.Click += (_, _) => ShowFooterMenu(more, _moreMenu, null);
-        bar.AddActions(Action("image.resize", "リサイズ", Icons.Resize), resizeMore, Action("image.crop", "切り抜き", Icons.Crop), Action("image.mask", "モザイク", Icons.Mosaic), Action("image.annotate", "枠・矢印", Icons.Annotate), rotate,
+        bar.AddActions(Action("image.resize", "リサイズ", Icons.Resize), resizeMore, Action("image.crop", "切り抜き", Icons.Crop), Action("image.mask", "モザイク", Icons.Mosaic), Action("image.annotate", "枠・文字", Icons.Annotate), rotate,
             Action("image.adjust", "補正", Icons.Adjust), Action("image.combine", "連結", Icons.Combine), Action("file.rename", "名前", Icons.Rename), move, more);
 
         var clear = new IconButton { Icon = Icons.Close, AccessibleName = "選択を解除" };

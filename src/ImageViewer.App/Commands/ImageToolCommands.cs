@@ -112,11 +112,11 @@ public sealed class MaskCommand(Form owner) : ImageCommandBase
     }
 }
 
-/// <summary>画像の特定の所を指し示すために、四角の枠や矢印を描く</summary>
+/// <summary>画像の特定の所を指し示すために、四角の枠・矢印・文字（吹き出し）・番号を描く</summary>
 public sealed class AnnotateCommand(Form owner) : ImageCommandBase
 {
     public override string Id => "image.annotate";
-    public override string Name => "枠・矢印...";
+    public override string Name => "枠・矢印・文字...";
     public override string? DefaultShortcut => "Ctrl+D";
 
     public override Task ExecuteAsync(CommandContext context)
@@ -126,7 +126,7 @@ public sealed class AnnotateCommand(Form owner) : ImageCommandBase
         if (dialog.SavedCount > 0)
         {
             context.Host.RequestRefresh();
-            context.Host.Notify($"{dialog.SavedCount} 枚に枠・矢印を描いて保存しました");
+            context.Host.Notify($"{dialog.SavedCount} 枚に枠・矢印・文字を描いて保存しました");
         }
         return Task.CompletedTask;
     }

@@ -349,6 +349,69 @@ static class EditingTests
             Annotator.Draw(img, new[] { arrow with { HeadSize = 8 }, arrow with { X0 = 50, Y0 = 70, X1 = 50, Y1 = 70 } });
             check(img[60, 50] == Red && img[50, 70] == Blue, "矢印: 先端の大きさを変えると三角が大きくなる（長さ 0 の矢印は描かない）");
         }
+        // ---- 文字・番号・吹き出し（書体は PC によって違うので、文字の形そのものでなく位置と色で確かめる） ----
+        var White = new Rgba32(255, 255, 255);
+        var label = new Annotation(AnnotationKind.Text, 20, 20, 0, 0, Red, 2, 4, 4, false) { Text = "AB", FontSize = 20 };
+        using (var img = new Image<Rgba32>(200, 120, Blue))
+        {
+            Annotator.Draw(img, new[] { label });
+            var (bx, by, bw, bh) = label.Body;
+            int inside = 0, outside = 0;
+            for (int y = 0; y < img.Height; y++)
+                for (int x = 0; x < img.Width; x++)
+                {
+                    if (img[x, y] == Blue) continue;
+                    if (x >= bx - 1 && x <= bx + bw && y >= by - 1 && y <= by + bh) inside++;
+                    else outside++;
+                }
+            check(inside > 20 && outside == 0 && bx == 20 && by == 20 && bw > 10 && bh >= 20, "文字: (X0, Y0) を左上にした本体の中にだけ描く");
+        }
+        var boxed = label with { Background = TextBackground.Box, Fill = White };
+        var (ox, oy, ow, oh) = boxed.Body;
+        using (var img = new Image<Rgba32>(200, 120, Blue))
+        {
+            Annotator.Draw(img, new[] { boxed });
+            int midY = (int)(oy + oh / 2);
+            check(ow > label.Body.Width && img[(int)ox, midY] == Red && img[(int)ox + 4, midY] == White && img[(int)ox - 3, midY] == Blue,
+                "文字: 帯は余白を足した角丸の四角（線は色、中は中の色）");
+        }
+        var balloon = boxed with { Background = TextBackground.Balloon, X1 = ox + ow / 2, Y1 = oy + oh + 30 };
+        using (var img = new Image<Rgba32>(200, 120, Blue))
+        {
+            Annotator.Draw(img, new[] { balloon });
+            int tipX = (int)(ox + ow / 2), bottom = (int)(oy + oh);
+            check(img[tipX, bottom + 10] == White && img[tipX, bottom + 34] == Blue && img[tipX + 20, bottom + 10] == Blue,
+                "吹き出し: 本体から (X1, Y1) へ向かうしっぽを付ける");
+        }
+        using (var img = new Image<Rgba32>(200, 120, Blue))
+        {
+            Annotator.Draw(img, new[] { boxed with { Background = TextBackground.Balloon, X1 = ox + 5, Y1 = oy + 5 } });
+            check(img[(int)(ox + ow / 2), (int)(oy + oh) + 6] == Blue, "吹き出し: しっぽの先が本体の中なら、しっぽは描かない");
+        }
+        var movedBalloon = balloon.MoveBody(5, 7);
+        check(movedBalloon is { X0: 25, Y0: 27 } && movedBalloon.X1 == balloon.X1 && movedBalloon.Y1 == balloon.Y1 && movedBalloon.Bounds.Bottom == balloon.Y1,
+            "吹き出し: 本体を動かしても、しっぽの先は指している所に残る");
+        check(balloon.Distance(ox + ow / 2, oy + oh + 10) < 0 && balloon.Distance(ox + ow / 2, oy + oh / 2) < 0 && balloon.Distance(ox - 20, oy) > 10,
+            "吹き出し: 本体としっぽの上は距離が負（クリックで選ぶ判定用）");
+        var number = new Annotation(AnnotationKind.Number, 100, 20, 0, 0, Red, 2, 0, 4, false) { Text = "3", FontSize = 20 };
+        using (var img = new Image<Rgba32>(200, 120, Blue))
+        {
+            Annotator.Draw(img, new[] { number });
+            var (nx, ny, nw, nh) = number.Body;
+            int digit = 0; // 丸の中の、丸の色でない画素（数字）
+            for (int y = (int)ny + 4; y < ny + nh - 4; y++)
+                for (int x = (int)nx + 4; x < nx + nw - 4; x++)
+                    if (img[x, y] != Red) digit++;
+            check(nw == nh && img[(int)(nx + nw / 2), (int)ny + 2] == Red && img[(int)nx + 1, (int)ny + 1] == Blue && digit > 10,
+                "番号: 色で塗った丸の中に数字を描く");
+            check((number with { Text = "123" }).Body.Width > nw, "番号: 桁が増えたら丸を大きくする");
+        }
+        var halfLabel = boxed.Scale(0.5);
+        check(halfLabel.FontSize == 10 && Math.Abs(halfLabel.Body.Width - ow / 2) < 0.001 && Math.Abs(halfLabel.Body.Height - oh / 2) < 0.001,
+            "文字: 縮小した画像には文字の大きさも本体も同じ倍率で描く");
+        check((label with { Text = "AB\nCD" }).Body.Height > label.Body.Height * 1.9 && Annotator.DefaultFontSize(4000, 3000) == 100 && Annotator.DefaultFontSize(200, 100) == 14,
+            "文字: 改行で行が増える。大きさの初めの値は長い辺に対する割合（最小 14px）");
+
         var halfFrame = frame.Scale(0.5);
         check(halfFrame is { X0: 10, Y0: 10, X1: 40, Y1: 30, Thickness: 2 }, "枠・矢印: 縮小した画像には位置も太さも同じ倍率で描く");
         check(frame.Distance(20, 40) < 0 && frame.Distance(50, 40) > 10 && arrow.Distance(50, 40) < 0 && arrow.Distance(50, 60) > 10,
