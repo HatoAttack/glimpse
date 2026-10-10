@@ -14,9 +14,10 @@ internal static class FileWording
     public static string Count(IReadOnlyList<string> paths) =>
         paths.All(p => ImageFormats.IsSupported(p) && !Directory.Exists(p)) ? $"{paths.Count} 枚" : $"{paths.Count} 件";
 
-    /// <summary>「3 枚の画像」/「3 件のファイル」</summary>
+    /// <summary>「3 枚の画像」/「3 件のファイル」/ フォルダが混ざっていれば「3 件の項目」</summary>
     public static string CountWithNoun(IReadOnlyList<string> paths) =>
-        paths.All(ImageFormats.IsSupported) ? $"{paths.Count} 枚の画像" : $"{paths.Count} 件のファイル";
+        paths.Any(Directory.Exists) ? $"{paths.Count} 件の項目"
+        : paths.All(ImageFormats.IsSupported) ? $"{paths.Count} 枚の画像" : $"{paths.Count} 件のファイル";
 }
 
 internal static class FileClipboard
@@ -81,7 +82,8 @@ public sealed class CopyFilesCommand : ImageCommandBase, IWorksInArchive, IWorks
     }
 }
 
-public sealed class CutFilesCommand : ImageCommandBase, IWorksOnAnyFile
+/// <summary>選択中のフォルダ（ZIP のタイルも）もフォルダごと切り取る</summary>
+public sealed class CutFilesCommand : ImageCommandBase, IWorksOnAnyFile, IWorksOnFolders
 {
     public override string Id => "edit.cut";
     public override string Name => "切り取り";

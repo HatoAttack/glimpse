@@ -1,11 +1,11 @@
-// フォルダーへ移動 / フォルダーへコピー。移動先はフォルダジャンプと同じ検索で選ぶ
+// フォルダーへ移動 / フォルダーへコピー。移動先はフォルダジャンプと同じ検索で選ぶ。選択中のフォルダ（ZIP のタイルも）もフォルダごと対象にする
 using ImageViewer.App.Dialogs;
 using ImageViewer.Core.Archives;
 using ImageViewer.Core.Commands;
 
 namespace ImageViewer.App.Commands;
 
-public abstract class TransferToFolderCommand(Form owner, ISettingsAccess settings, FolderSearch search, bool move) : ImageCommandBase, IWorksOnAnyFile
+public abstract class TransferToFolderCommand(Form owner, ISettingsAccess settings, FolderSearch search, bool move) : ImageCommandBase, IWorksOnAnyFile, IWorksOnFolders
 {
     public override string Category => "ファイル";
 

@@ -48,6 +48,24 @@ public sealed class NavigationHistory
                 stack[i] = FolderListing.Retarget(stack[i], oldPath, newPath) ?? stack[i];
     }
 
+    /// <summary>
+    /// フォルダーを消した・別の場所へ移した。そのフォルダ（とその中）を戻る / 進む の履歴から外す（今の場所はそのまま）。
+    /// ファイルのパスが混ざっていてもよい（履歴には無いので何も起きない）
+    /// </summary>
+    public void Remove(IEnumerable<string> paths)
+    {
+        var gone = new HashSet<string>(paths.Select(Path.TrimEndingDirectorySeparator), StringComparer.OrdinalIgnoreCase);
+        if (gone.Count == 0) return;
+        // 履歴の側から、自分か上のフォルダが消えたものに入っているかを見る（消えたものが多くても速い）
+        bool Gone(string path)
+        {
+            for (string? p = Path.TrimEndingDirectorySeparator(path); !string.IsNullOrEmpty(p); p = Path.GetDirectoryName(p))
+                if (gone.Contains(p)) return true;
+            return false;
+        }
+        foreach (var stack in new[] { _back, _forward }) stack.RemoveAll(Gone);
+    }
+
     private void Push(List<string> stack, string path)
     {
         stack.Add(path);

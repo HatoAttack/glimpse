@@ -30,6 +30,12 @@ static class NavigationTests
         hr.GoForward();
         check(hr.GoForward() == @"C:\写真2" && hr.GoForward() == @"C:\画像\家族", "進むの履歴も付け替える（似た名前の「写真2」は変えない）");
 
+        var hd = new NavigationHistory();
+        foreach (var p in new[] { @"C:\写真", @"C:\写真\旅行", @"C:\写真\旅行\1日目", @"C:\写真\旅行2", @"C:\写真" }) hd.Navigate(p);
+        hd.Remove(new[] { @"C:\写真\旅行\", @"C:\写真\a.jpg" });
+        check(hd.Current == @"C:\写真" && hd.GoBack() == @"C:\写真\旅行2" && hd.GoBack() == @"C:\写真" && !hd.CanGoBack,
+            "フォルダーを消したら、そのフォルダとその中を戻るの履歴から外す（似た名前の「旅行2」は残す）");
+
         // ---- フォルダの読み込み: 続けて別のフォルダを開いたら、最後に頼んだ読み込みの結果だけを返す ----
         using var started = new SemaphoreSlim(0);
         using var release = new ManualResetEventSlim();
@@ -105,6 +111,13 @@ static class NavigationTests
             FolderListing.ShowOtherFiles = FolderListing.ShowHidden = false;
             ImageViewer.Core.Archives.ZipStore.CloseAll();
         }
+
+        // ---- 削除の確認（フォルダは中身ごと消えるので 1 つでも聞く） ----
+        string Confirm(params string[] names) => ImageViewer.App.Commands.DeleteCommand.ConfirmMessage(names.Select(n => Path.Combine(dir, n)).ToList()) ?? "";
+        check(Confirm("file.jpg") == "" && Confirm("book.zip") == "", "削除: 画像 1 枚・ZIP 1 つは聞かずにごみ箱へ");
+        check(Confirm("file.jpg", "memo.txt").Contains("2 件のファイル"), $"削除: 複数なら聞く（{Confirm("file.jpg", "memo.txt")}）");
+        check(Confirm("img2").Contains("フォルダー「img2」を中身ごと"), $"削除: フォルダーは 1 つでも聞く（{Confirm("img2")}）");
+        check(Confirm("img2", "Album", "file.jpg").Contains("3 件（フォルダー 2 個を含む）"), $"削除: フォルダーを含む複数（{Confirm("img2", "Album", "file.jpg")}）");
 
         check(FolderListing.Parent(Path.Combine(dir, "img2")) == Path.GetFullPath(dir).TrimEnd('\\'), "上のフォルダ");
         check(FolderListing.Parent(@"C:\") == null, "ドライブのルートの上は無い");

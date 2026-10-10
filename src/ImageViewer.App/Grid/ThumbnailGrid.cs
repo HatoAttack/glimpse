@@ -57,7 +57,7 @@ public sealed class ThumbnailGrid : Control
     /// <summary>フォルダのタイルに画像・ファイルがドロップされた（移動 / コピーは本体が行う）</summary>
     public event EventHandler<FileDrop>? FilesDroppedOnFolder;
 
-    /// <summary>エクスプローラー等へドラッグして、画像が移動された（元の場所から無くなった）</summary>
+    /// <summary>エクスプローラー等へドラッグして、画像・フォルダが移動された（元の場所から無くなった）</summary>
     public event EventHandler<IReadOnlyList<string>>? FilesMovedOut;
 
     /// <summary>画像（画像以外のファイルも）をダブルクリックまたは Enter（1 枚表示を開く・ファイルを開く用）。引数は画像番号</summary>
@@ -830,17 +830,21 @@ public sealed class ThumbnailGrid : Control
     private bool _dragOverSelf;
     private int _dropFolder = -1;   // ドロップ先として強調しているフォルダのタイル
     private bool _droppedInside;    // 自分から出たドラッグをこのグリッドに落とした
+    private bool _dragHasImages;    // 自分から出たドラッグに画像が入っている（フォルダだけなら並べ替えの位置は出さない）
 
     private void StartDrag()
     {
         _dragCandidate = false;
         _pendingClick = -1;
         _nameEditCandidate = -1;
-        var paths = SelectedImages.Select(f => f.FullName).ToArray();
-        if (paths.Length == 0) return; // フォルダだけを掴んだときは何もしない
+        // フォルダのタイル（ZIP も）もフォルダごと渡す。ZIP の中のフォルダは本当のフォルダではないので渡さない
+        bool archive = ArchiveMode;
+        var images = SelectedImages.Select(f => f.FullName);
+        var paths = (archive ? images : SelectedFolders.Select(d => d.FullName).Concat(images)).ToArray();
+        if (paths.Length == 0) return;
+        _dragHasImages = SelectedImageIndices.Any();
 
         // ZIP の中の画像は、一時フォルダへ書き出したものをコピーで渡す（移動はできない）
-        bool archive = ArchiveMode;
         var data = archive ? new ArchiveDragData(paths) : new DataObject();
         if (!archive) data.SetData(DataFormats.FileDrop, paths);
         data.SetData(ReorderFormat, _dragToken);
@@ -860,7 +864,7 @@ public sealed class ThumbnailGrid : Control
         // このグリッドのフォルダ・ツリーへ落とした分は、ドロップを終えてから本体が移動して反映する
         if (!_droppedInside && !archive)
         {
-            var gone = paths.Where(p => !File.Exists(p)).ToList();
+            var gone = paths.Where(p => !File.Exists(p) && !Directory.Exists(p)).ToList();
             if (gone.Count > 0) FilesMovedOut?.Invoke(this, gone);
         }
     }
@@ -927,7 +931,7 @@ public sealed class ThumbnailGrid : Control
 
         var (index, marker) = CurrentLayout.InsertionAt(client.X, client.Y + ScrollY, Math.Max(2, LogicalToDeviceUnits(3)));
         // フォルダのタイルの間には入れられない（並べ替えは画像どうしだけ）
-        if (index < F || (index == F && F > 0 && IsBeforeFirstImageRowStart(marker))) SetDropIndex(-1, Rectangle.Empty);
+        if (!_dragHasImages || index < F || (index == F && F > 0 && IsBeforeFirstImageRowStart(marker))) SetDropIndex(-1, Rectangle.Empty);
         else SetDropIndex(index, marker);
     }
 
