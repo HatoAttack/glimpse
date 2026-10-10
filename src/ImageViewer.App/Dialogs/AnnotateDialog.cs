@@ -395,12 +395,14 @@ public sealed class AnnotateDialog : ThemedForm
 
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
     {
+        // 書体の一覧を開いている間は、キーを一覧に渡す（Enter で決める・Esc で閉じる・PageUp / PageDown で送る）
+        if (ActiveControl is ComboBox { DroppedDown: true }) return base.ProcessCmdKey(ref msg, keyData);
         switch (keyData)
         {
-            case Keys.Enter when !_saver.Busy && !(ActiveControl is TextBox or NumericUpDown):
+            case Keys.Enter when !_saver.Busy && !(ActiveControl is TextBox or NumericUpDown or ComboBox):
                 _ = SaveCurrentAsync(advance: true, overwrite: false);
                 return true;
-            case Keys.Shift | Keys.Enter when !_saver.Busy && !(ActiveControl is TextBox or NumericUpDown):
+            case Keys.Shift | Keys.Enter when !_saver.Busy && !(ActiveControl is TextBox or NumericUpDown or ComboBox):
                 _ = SaveCurrentAsync(advance: true, overwrite: true);
                 return true;
             case Keys.Delete or Keys.Back when !(ActiveControl is TextBox):
