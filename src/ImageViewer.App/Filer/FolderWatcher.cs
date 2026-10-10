@@ -39,8 +39,9 @@ public sealed class FolderWatcher : IDisposable
         if (folder == null) return;
         try
         {
-            // ファイル: 画像の追加・削除・名前の変更・書き換え（名前で絞る）
-            var files = _files = Create(folder, NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size);
+            // ファイル: 画像の追加・削除・名前の変更・書き換え（名前で絞る）。
+            // 属性も見る（画像以外のファイルは、隠し属性を付け外しすると一覧に出る / 出ないが変わる）
+            var files = _files = Create(folder, NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.Attributes);
             files.Created += (_, e) => OnEvent(e.Name);
             files.Deleted += (_, e) => OnEvent(e.Name);
             files.Changed += (_, e) => OnEvent(e.Name);

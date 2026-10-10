@@ -886,7 +886,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     private async Task ApplyListingSettingsAsync()
     {
         ApplyListingSettings();
-        _tree.SetHome(HomeFolder);
+        _tree.ResetChildren();
         if (_folder == null) return;
         _ = _tree.RevealAsync(_folder);
         await LoadFolderAsync(_folder, NavKind.Reload);

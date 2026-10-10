@@ -123,8 +123,30 @@ public sealed class FolderTree : TreeView
     {
         var node = new TreeNode(text) { Tag = path };
         // 子があるかは開くまで調べない（調べるだけで各フォルダの中身を読むことになるため）
-        node.Nodes.Add(new TreeNode("読み込み中…") { Tag = LoadingTag, ForeColor = SystemColors.GrayText });
+        node.Nodes.Add(LoadingNode());
         return node;
+    }
+
+    private static TreeNode LoadingNode() => new("読み込み中…") { Tag = LoadingTag, ForeColor = SystemColors.GrayText };
+
+    private int _childrenVersion; // 読み込み済みの子を捨てるたびに増やす（その前に読み始めた分は入れない）
+
+    /// <summary>
+    /// 読み込み済みの子をすべて捨てて、開くときに読み直させる（隠しフォルダーの表示を切り替えたとき）。
+    /// 今のフォルダは、この後 RevealAsync で選び直す
+    /// </summary>
+    public void ResetChildren()
+    {
+        _childrenVersion++;
+        _revealVersion++; // 途中まで進めていた選択はやめる
+        BeginUpdate();
+        foreach (TreeNode root in Nodes)
+        {
+            root.Collapse();
+            root.Nodes.Clear();
+            root.Nodes.Add(LoadingNode());
+        }
+        EndUpdate();
     }
 
     private static bool IsUnloaded(TreeNode node) => node.Nodes.Count == 1 && node.Nodes[0].Tag == LoadingTag;
@@ -139,8 +161,9 @@ public sealed class FolderTree : TreeView
     {
         if (!IsUnloaded(node) || node.Tag is not string path) return;
         node.Nodes[0].Tag = null; // 二重に読みに行かないよう、読み込み中の印を外しておく
+        int version = _childrenVersion;
         var dirs = await Task.Run(() => FolderListing.ListSubfolders(path));
-        if (node.TreeView == null) return;
+        if (node.TreeView == null || version != _childrenVersion) return;
         BeginUpdate();
         node.Nodes.Clear();
         foreach (var d in dirs) node.Nodes.Add(MakeNode(d.Name, d.FullName));
