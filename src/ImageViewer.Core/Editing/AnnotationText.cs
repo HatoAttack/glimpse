@@ -16,55 +16,76 @@ internal static class AnnotationText
 
     // GDI+ の部品は同時に使えないので、表示（UI）と保存（別のスレッド）が重ならないようにする
     private static readonly object Gate = new();
-    private static readonly Dictionary<string, (double Width, double Height, double InkCenter)> Sizes = new();
-    private static FontFamily? _family;
-    private static FontStyle _style;
+    private static readonly Dictionary<(string Font, string Text), (double Width, double Height, double InkCenter)> Sizes = new();
+    private static readonly Dictionary<string, (FontFamily Family, FontStyle Style)> Fonts = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>説明用の画像で読みやすい、太めのゴシック体（無ければ、ある物で）</summary>
-    private static FontFamily Family
+    /// <summary>書体を指定しないときに使う、説明用の画像で読みやすいゴシック体（無ければ次の候補）</summary>
+    private static readonly string[] DefaultFonts = { "Yu Gothic UI", "Meiryo UI", "Meiryo", "Segoe UI" };
+
+    /// <summary>書体を指定しないときに使われる書体の名前</summary>
+    public static string DefaultFontName
     {
         get
         {
-            if (_family != null) return _family;
-            foreach (string name in new[] { "Yu Gothic UI", "Meiryo UI", "Meiryo", "Segoe UI" })
-            {
-                try
-                {
-                    _family = new FontFamily(name);
-                    break;
-                }
-                catch (ArgumentException)
-                {
-                    // その PC に無い書体
-                }
-            }
-            _family ??= FontFamily.GenericSansSerif;
-            _style = _family.IsStyleAvailable(FontStyle.Bold) ? FontStyle.Bold : FontStyle.Regular;
-            return _family;
+            lock (Gate) return FontOf("").Family.Name;
         }
+    }
+
+    /// <summary>その PC にある書体の名前（名前順）</summary>
+    public static IReadOnlyList<string> FontNames()
+    {
+        lock (Gate)
+        {
+            using var installed = new System.Drawing.Text.InstalledFontCollection();
+            return installed.Families.Select(f => f.Name).Where(n => n.Length > 0).Distinct().OrderBy(n => n, StringComparer.CurrentCulture).ToList();
+        }
+    }
+
+    /// <summary>名前の書体と、その太さ（太字があれば太字。説明用の画像で読みやすいように）。無い書体・空の名前なら、初めの書体</summary>
+    private static (FontFamily Family, FontStyle Style) FontOf(string name)
+    {
+        if (Fonts.TryGetValue(name, out var font)) return font;
+        FontFamily? family = null;
+        foreach (string candidate in name.Length > 0 ? DefaultFonts.Prepend(name) : DefaultFonts)
+        {
+            try
+            {
+                family = new FontFamily(candidate);
+                break;
+            }
+            catch (ArgumentException)
+            {
+                // その PC に無い書体
+            }
+        }
+        family ??= FontFamily.GenericSansSerif;
+        // 太字や標準が無い書体もあるので、ある物から選ぶ（無い太さを指定すると輪郭を作れない）
+        var style = new[] { FontStyle.Bold, FontStyle.Regular, FontStyle.Italic, FontStyle.Bold | FontStyle.Italic }.FirstOrDefault(family.IsStyleAvailable, FontStyle.Regular);
+        return Fonts[name] = (family, style);
     }
 
     private static string Normalize(string text) => text.Replace("\r\n", "\n").Replace('\r', '\n');
 
     /// <summary>文字の輪郭。1 行目の上端が y = 0、各行は x = 0 を中心にそろえる</summary>
-    private static GraphicsPath BuildPath(string text, float emSize)
+    private static GraphicsPath BuildPath(string text, string font, float emSize)
     {
         var path = new GraphicsPath(FillMode.Winding);
         using var format = (StringFormat)StringFormat.GenericTypographic.Clone();
         format.Alignment = StringAlignment.Center;
         format.FormatFlags |= StringFormatFlags.NoWrap;
-        path.AddString(text, Family, (int)_style, emSize, new PointF(0, 0), format);
+        var (family, style) = FontOf(font);
+        path.AddString(text, family, (int)style, emSize, new PointF(0, 0), format);
         return path;
     }
 
-    private static (double Width, double Height, double InkCenter) Measure(string text)
+    private static (double Width, double Height, double InkCenter) Measure(string text, string font)
     {
-        if (Sizes.TryGetValue(text, out var size)) return size;
-        var family = Family;
-        double lineHeight = (double)family.GetLineSpacing(_style) / family.GetEmHeight(_style);
+        if (Sizes.TryGetValue((font, text), out var size)) return size;
+        var (family, style) = FontOf(font);
+        double lineHeight = (double)family.GetLineSpacing(style) / family.GetEmHeight(style);
         int lines = text.Count(ch => ch == '\n') + 1;
         double width = 1, center = 0; // 空（空白だけ）でも、つかめるように 1 文字分の幅を持たせる
-        using (var path = BuildPath(text, UnitEm))
+        using (var path = BuildPath(text, font, UnitEm))
         {
             if (path.PointCount > 0)
             {
@@ -74,21 +95,21 @@ internal static class AnnotationText
             }
         }
         if (Sizes.Count >= MaxCached) Sizes.Clear();
-        return Sizes[text] = (width, lines * lineHeight, center);
+        return Sizes[(font, text)] = (width, lines * lineHeight, center);
     }
 
     /// <summary>文字の大きさ 1px あたりの、文字全体の幅と高さ（幅は見えている形の幅、高さは行の高さ × 行数）</summary>
-    public static (double Width, double Height) UnitSize(string text)
+    public static (double Width, double Height) UnitSize(string text, string font)
     {
         lock (Gate)
         {
-            var (width, height, _) = Measure(Normalize(text));
+            var (width, height, _) = Measure(Normalize(text), font);
             return (width, height);
         }
     }
 
     /// <summary>(centerX, centerY) を中心に文字を描く。shadow があれば、右下へずらしてぼかした影を先に落とす</summary>
-    public static void Render(SixLabors.ImageSharp.Image<Rgba32> image, string text, double fontSize, double centerX, double centerY,
+    public static void Render(SixLabors.ImageSharp.Image<Rgba32> image, string text, string font, double fontSize, double centerX, double centerY,
         Rgba32 color, (double Offset, double Blur)? shadow, double shadowAlpha)
     {
         text = Normalize(text);
@@ -99,8 +120,8 @@ internal static class AnnotationText
         byte[] mask;
         lock (Gate)
         {
-            var (_, unitHeight, inkCenter) = Measure(text);
-            using var path = BuildPath(text, (float)fontSize);
+            var (_, unitHeight, inkCenter) = Measure(text, font);
+            using var path = BuildPath(text, font, (float)fontSize);
             using (var move = new Matrix())
             {
                 move.Translate((float)(centerX - inkCenter * fontSize), (float)(centerY - unitHeight * fontSize / 2));

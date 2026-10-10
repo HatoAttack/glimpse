@@ -31,6 +31,8 @@ public sealed class AnnotateDialog : ThemedForm
     private static int _lastFontSize;
     private static TextBackground _lastBackground = TextBackground.None;
     private static Color _lastFill = Color.White;
+    private static Color _lastTextColor = Color.FromArgb(230, 30, 30);
+    private static string _lastFont = "";
     private static bool _lastShadow = true;
     private static bool _lastToCustomFolder;
     private static string _lastFolder = "";
@@ -55,6 +57,7 @@ public sealed class AnnotateDialog : ThemedForm
     private (double X, double Y) _moveLast;
     private Color _color = _lastColor;
     private Color _fill = _lastFill;
+    private Color _textColor = _lastTextColor;
     private bool _syncing;                 // 選んだものの見た目を部品へ写している途中（変更として扱わない）
 
     private readonly RadioButton _toolFrame = new() { Text = "枠", AutoSize = true };
@@ -70,6 +73,9 @@ public sealed class AnnotateDialog : ThemedForm
     private readonly RadioButton _backBalloon = new() { Text = "吹き出し", AutoSize = true };
     private readonly SwatchPanel _fillSwatch = new() { Width = 28, Height = 24, Margin = new Padding(8, 3, 2, 3), Cursor = Cursors.Hand };
     private readonly Button _pickFill = new() { Text = "中の色...", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
+    private readonly SwatchPanel _textSwatch = new() { Width = 28, Height = 24, Margin = new Padding(3, 3, 2, 3), Cursor = Cursors.Hand };
+    private readonly Button _pickText = new() { Text = "文字...", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
+    private readonly ComboBox _fontBox = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 112, DropDownWidth = 240, MaxDropDownItems = 20, Margin = new Padding(8, 4, 3, 3) };
     private readonly SwatchPanel _swatch = new() { Width = 28, Height = 24, Margin = new Padding(3, 3, 2, 3), Cursor = Cursors.Hand };
     private readonly Button _pickColor = new() { Text = "色...", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
     private readonly Label _thicknessText = SliderLabel();
@@ -134,6 +140,9 @@ public sealed class AnnotateDialog : ThemedForm
         BackgroundButton(_lastBackground).Checked = true;
         _swatch.Swatch = _color;
         _fillSwatch.Swatch = _fill;
+        _textSwatch.Swatch = _textColor;
+        _fontBox.Items.AddRange(Annotator.FontNames().ToArray<object>());
+        SelectFont(_lastFont);
         _font.Value = Math.Clamp(Math.Max(MinFontSize, _lastFontSize), _font.Minimum, _font.Maximum);
         _thickness.Value = Math.Clamp(Math.Max(1, _lastThickness), _thickness.Minimum, _thickness.Maximum);
         _radius.Value = Math.Clamp(_lastRadius, _radius.Minimum, _radius.Maximum);
@@ -148,10 +157,12 @@ public sealed class AnnotateDialog : ThemedForm
             slider.ValueChanged += (_, _) => OnStyleChanged();
         _shadow.CheckedChanged += (_, _) => OnStyleChanged();
         _text.TextChanged += (_, _) => OnStyleChanged();
-        _swatch.Click += (_, _) => PickColor(fill: false);
-        _pickColor.Click += (_, _) => PickColor(fill: false);
-        _fillSwatch.Click += (_, _) => PickColor(fill: true);
-        _pickFill.Click += (_, _) => PickColor(fill: true);
+        _fontBox.SelectedIndexChanged += (_, _) => OnStyleChanged();
+        foreach (var (swatch, button) in new[] { (_swatch, _pickColor), (_fillSwatch, _pickFill), (_textSwatch, _pickText) })
+        {
+            swatch.Click += (_, _) => PickColor(swatch);
+            button.Click += (_, _) => PickColor(swatch);
+        }
         UpdateStyleControls();
         UpdateButtons();
 
@@ -165,6 +176,8 @@ public sealed class AnnotateDialog : ThemedForm
             _lastKind = CurrentTool;
             _lastColor = _color;
             _lastFill = _fill;
+            _lastTextColor = _textColor;
+            _lastFont = _fontBox.SelectedItem as string ?? "";
             _lastBackground = CurrentBackground;
             if (_styleReady)
             {
@@ -223,7 +236,7 @@ public sealed class AnnotateDialog : ThemedForm
         _toolTip.SetToolTip(_backBox, "文字の後ろに角の丸い四角を置きます");
         _toolTip.SetToolTip(_backBalloon, "四角に、指したい所へ向かうしっぽを付けます");
 
-        side.Controls.Add(EditDialogShell.Group("見た目", vertical: true, Row(_swatch, _pickColor, _fillSwatch, _pickFill), Row(_thicknessText, _thickness), Row(_radiusText, _radius), Row(_headText, _head), _shadow));
+        side.Controls.Add(EditDialogShell.Group("見た目", vertical: true, Row(_swatch, _pickColor, _fillSwatch, _pickFill), Row(_textSwatch, _pickText, _fontBox), Row(_thicknessText, _thickness), Row(_radiusText, _radius), Row(_headText, _head), _shadow));
         foreach (var c in new Control[] { _thicknessText, _thickness }) _toolTip.SetToolTip(c, "線の太さ（枠・矢印と、帯・吹き出しの縁）");
         foreach (var c in new Control[] { _radiusText, _radius }) _toolTip.SetToolTip(c, "枠・帯・吹き出しの角の丸み。短い辺の半分より大きくはなりません");
         foreach (var c in new Control[] { _headText, _head }) _toolTip.SetToolTip(c, "矢印の先端の大きさ（線の太さの何倍か）");
@@ -232,7 +245,10 @@ public sealed class AnnotateDialog : ThemedForm
         _removeSelected.Click += (_, _) => RemoveSelected();
         _removeAll.Click += (_, _) => RemoveAll();
         _toolTip.SetToolTip(_removeSelected, "選んだものを消します (Del)。右クリックでも消せます");
+        _toolTip.SetToolTip(_pickColor, "枠・矢印・番号の丸と、帯・吹き出しの縁の色");
         _toolTip.SetToolTip(_pickFill, "帯・吹き出しの中の色");
+        _toolTip.SetToolTip(_pickText, "文字の色（番号の数字は、丸の色に合わせて白か黒になります）");
+        _toolTip.SetToolTip(_fontBox, "文字・番号の書体（太字がある書体は太字で描きます）");
         side.Controls.AddRange(new Control[] { _selectionInfo, Row(_removeSelected, _removeAll) });
 
         side.Controls.Add(_saver.FolderBox);
@@ -252,21 +268,36 @@ public sealed class AnnotateDialog : ThemedForm
     private Annotation Styled(Annotation a) => a with
     {
         Color = ToRgba(_color), Thickness = _thickness.Value, CornerRadius = _radius.Value, HeadSize = (double)_head.Value / HeadScale, Shadow = _shadow.Checked,
-        FontSize = _font.Value, Background = CurrentBackground, Fill = ToRgba(_fill),
+        FontSize = _font.Value, Background = CurrentBackground, Fill = ToRgba(_fill), TextColor = ToRgba(_textColor), FontName = _fontBox.SelectedItem as string ?? "",
         Text = a.Kind == AnnotationKind.Text ? _text.Text : a.Text,
     };
 
-    private void PickColor(bool fill)
+    /// <summary>見本（色・中の色・文字の色）の色を選び直す</summary>
+    private void PickColor(SwatchPanel swatch)
     {
-        using var dlg = new ColorDialog { Color = fill ? _fill : _color, FullOpen = true };
+        using var dlg = new ColorDialog { Color = swatch.Swatch, FullOpen = true };
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
-        var picked = Color.FromArgb(255, dlg.Color);
-        if (fill) _fill = picked;
-        else _color = picked;
-        var swatch = fill ? _fillSwatch : _swatch;
-        swatch.Swatch = picked;
-        swatch.Invalidate();
+        SetSwatch(swatch, Color.FromArgb(255, dlg.Color));
         OnStyleChanged();
+    }
+
+    private void SetSwatch(SwatchPanel swatch, Color color)
+    {
+        if (swatch == _fillSwatch) _fill = color;
+        else if (swatch == _textSwatch) _textColor = color;
+        else _color = color;
+        swatch.Swatch = color;
+        swatch.Invalidate();
+    }
+
+    private static Color ToColor(Rgba32 c) => Color.FromArgb(c.A, c.R, c.G, c.B);
+
+    /// <summary>書体の一覧で name を選ぶ（一覧に無い・空なら、初めの書体）</summary>
+    private void SelectFont(string name)
+    {
+        int index = _fontBox.FindStringExact(name.Length > 0 ? name : Annotator.DefaultFontName);
+        if (index < 0) index = _fontBox.FindStringExact(Annotator.DefaultFontName);
+        if (index >= 0) _fontBox.SelectedIndex = index;
     }
 
     /// <summary>見た目の部品を変えた: 選んだものがあればそれに反映する（無ければ次に描くものから使う）</summary>
@@ -303,25 +334,23 @@ public sealed class AnnotateDialog : ThemedForm
     private void LoadStyleFrom(Annotation a)
     {
         _syncing = true;
-        _color = Color.FromArgb(a.Color.A, a.Color.R, a.Color.G, a.Color.B);
-        _swatch.Swatch = _color;
-        _swatch.Invalidate();
+        SetSwatch(_swatch, ToColor(a.Color));
         // 使わない値（枠の先端の大きさ・矢印の角の丸み・番号の太さ など）は、次に描くもののために今の部品の値を残す
         bool boxed = a.Kind == AnnotationKind.Text && a.Background != TextBackground.None;
         if (!a.IsText || boxed) _thickness.Value = Math.Clamp((int)Math.Round(a.Thickness), _thickness.Minimum, _thickness.Maximum);
         if (a.Kind == AnnotationKind.Frame || boxed) _radius.Value = Math.Clamp((int)Math.Round(a.CornerRadius), _radius.Minimum, _radius.Maximum);
         if (a.Kind == AnnotationKind.Arrow) _head.Value = Math.Clamp((int)Math.Round(a.HeadSize * HeadScale), _head.Minimum, _head.Maximum);
-        if (a.IsText) _font.Value = Math.Clamp((int)Math.Round(a.FontSize), _font.Minimum, _font.Maximum);
+        if (a.IsText)
+        {
+            _font.Value = Math.Clamp((int)Math.Round(a.FontSize), _font.Minimum, _font.Maximum);
+            SelectFont(a.FontName);
+        }
         if (a.Kind == AnnotationKind.Text)
         {
             _text.Text = a.Text.Replace("\r\n", "\n").Replace("\n", "\r\n");
             BackgroundButton(a.Background).Checked = true;
-            if (boxed)
-            {
-                _fill = Color.FromArgb(a.Fill.A, a.Fill.R, a.Fill.G, a.Fill.B);
-                _fillSwatch.Swatch = _fill;
-                _fillSwatch.Invalidate();
-            }
+            SetSwatch(_textSwatch, ToColor(a.TextColor ?? a.Color));
+            if (boxed) SetSwatch(_fillSwatch, ToColor(a.Fill));
         }
         _shadow.Checked = a.Shadow;
         _syncing = false;
@@ -339,6 +368,8 @@ public sealed class AnnotateDialog : ThemedForm
         _font.Enabled = _fontText.Enabled = kind is AnnotationKind.Text or AnnotationKind.Number;
         _text.Enabled = _backText.Enabled = _backNone.Enabled = _backBox.Enabled = _backBalloon.Enabled = text;
         _fillSwatch.Enabled = _pickFill.Enabled = boxed;
+        _textSwatch.Enabled = _pickText.Enabled = text;
+        _fontBox.Enabled = _font.Enabled;
         _fontText.Text = $"大きさ {_font.Value} px";
         _thicknessText.Text = $"太さ {_thickness.Value} px";
         _radiusText.Text = _radius.Value == 0 ? "丸み なし" : $"丸み {_radius.Value} px";

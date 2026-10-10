@@ -16,7 +16,7 @@ public enum TextBackground { None, Box, Balloon }
 /// 枠か矢印 1 つ（画像座標）。枠は (X0, Y0)〜(X1, Y1) が線の中心を通る四角、矢印は (X0, Y0) から (X1, Y1) へ向かう（先端が X1, Y1）。
 /// Thickness は線の太さ（px）、CornerRadius は枠の角の丸み（px。短い辺の半分まで）、HeadSize は矢印の先端の大きさ（太さの何倍か）。
 /// 文字と番号は (X0, Y0) が本体（文字を囲む四角・番号の丸）の左上で、大きさは文字と FontSize から決まる。
-/// 吹き出しは (X1, Y1) がしっぽの先。帯と吹き出しは Color が線と文字、Fill が中の色。番号は Color が丸の色
+/// 吹き出しは (X1, Y1) がしっぽの先。帯と吹き出しは Color が線、Fill が中の色、TextColor が文字の色。番号は Color が丸の色
 /// </summary>
 public sealed record Annotation(AnnotationKind Kind, double X0, double Y0, double X1, double Y1,
     Rgba32 Color, double Thickness, double CornerRadius, double HeadSize, bool Shadow)
@@ -36,6 +36,12 @@ public sealed record Annotation(AnnotationKind Kind, double X0, double Y0, doubl
     /// <summary>帯・吹き出しの中の色</summary>
     public Rgba32 Fill { get; init; } = new(255, 255, 255);
 
+    /// <summary>文字の色（指定しなければ Color と同じ）。番号の数字には使わない（丸の色に合わせて白か黒）</summary>
+    public Rgba32? TextColor { get; init; }
+
+    /// <summary>書体の名前（空なら初めの書体。その PC に無い書体も初めの書体で描く）</summary>
+    public string FontName { get; init; } = "";
+
     public bool IsText => Kind is AnnotationKind.Text or AnnotationKind.Number;
 
     /// <summary>しっぽがあるか（先が本体の中にあるときは描かれない）</summary>
@@ -46,7 +52,7 @@ public sealed record Annotation(AnnotationKind Kind, double X0, double Y0, doubl
     {
         get
         {
-            var (w, h) = AnnotationText.UnitSize(Text);
+            var (w, h) = AnnotationText.UnitSize(Text, FontName);
             double cw = w * FontSize, ch = h * FontSize;
             if (Kind == AnnotationKind.Number)
             {
@@ -247,6 +253,12 @@ public static class Annotator
     /// <summary>太さの初めの値（px）。画像の長い辺に対する割合で、大きい画像でも細すぎないように</summary>
     public static int DefaultThickness(int width, int height) => Math.Max(2, (int)Math.Round(Math.Max(width, height) / 200.0));
 
+    /// <summary>その PC にある書体の名前（文字・番号の書体を選ぶ一覧用）</summary>
+    public static IReadOnlyList<string> FontNames() => AnnotationText.FontNames();
+
+    /// <summary>書体を指定しないときに使われる書体の名前</summary>
+    public static string DefaultFontName => AnnotationText.DefaultFontName;
+
     /// <summary>文字の大きさの初めの値（px）。画像の長い辺に対する割合で、大きい画像でも小さすぎないように</summary>
     public static int DefaultFontSize(int width, int height) => Math.Max(14, (int)Math.Round(Math.Max(width, height) / 40.0));
 
@@ -288,7 +300,7 @@ public static class Annotator
             else FillShape(image, a, basis, a.Fill, null, 0);
         }
         // 帯や丸が無い文字は、文字の形そのものに影を落とす
-        AnnotationText.Render(image, a.Text, a.FontSize, x + w / 2, y + h / 2, number ? ContrastOf(a.Color) : a.Color,
+        AnnotationText.Render(image, a.Text, a.FontName, a.FontSize, x + w / 2, y + h / 2, number ? ContrastOf(a.Color) : a.TextColor ?? a.Color,
             bare && a.Shadow ? ShadowOf(a.FontSize / 8) : null, ShadowAlpha);
     }
 

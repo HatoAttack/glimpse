@@ -375,6 +375,21 @@ static class EditingTests
             check(ow > label.Body.Width && img[(int)ox, midY] == Red && img[(int)ox + 4, midY] == White && img[(int)ox - 3, midY] == Blue,
                 "文字: 帯は余白を足した角丸の四角（線は色、中は中の色）");
         }
+        using (var img = new Image<Rgba32>(200, 120, Blue))
+        {
+            var Green = new Rgba32(0, 128, 0);
+            Annotator.Draw(img, new[] { boxed with { TextColor = Green } });
+            int green = 0, red = 0; // 縁から離れた中の画素（文字）の色
+            for (int y = (int)oy + 4; y < oy + oh - 4; y++)
+                for (int x = (int)ox + 4; x < ox + ow - 4; x++)
+                {
+                    if (img[x, y] == Green) green++;
+                    else if (img[x, y] == Red) red++;
+                }
+            check(green > 10 && red == 0 && img[(int)ox, (int)(oy + oh / 2)] == Red, "文字: 文字の色は縁の色と別に決められる（決めなければ縁と同じ色）");
+        }
+        check((label with { FontName = "この名前の書体は無い" }).Body == label.Body && (label with { FontName = Annotator.DefaultFontName }).Body == label.Body
+            && Annotator.FontNames().Contains(Annotator.DefaultFontName), "文字: 書体を選べる（無い書体・空の名前は初めの書体で描く）");
         var balloon = boxed with { Background = TextBackground.Balloon, X1 = ox + ow / 2, Y1 = oy + oh + 30 };
         using (var img = new Image<Rgba32>(200, 120, Blue))
         {
