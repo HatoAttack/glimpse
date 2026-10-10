@@ -324,6 +324,8 @@ public sealed class AnnotateDialog : ThemedForm
         // しっぽを出し直すのは、背景を吹き出しに変えたときだけ（文字を足して本体が先を覆っても、指している所は変えない）
         _items[_selected] = a.HasTail ? styled : WithTail(styled);
         RenderPreview();
+        // スライダーを動かしている間はマウスの移動が先に処理されて、描き直しが後回しになる。ここで描き直しまで済ませる（カクカクしないように）
+        _canvas.Update();
     }
 
     /// <summary>文字・番号の本体が画像からはみ出していたら中へ戻す（文字を足した・大きくした・背景を付けたときに、端で切れないように）</summary>
