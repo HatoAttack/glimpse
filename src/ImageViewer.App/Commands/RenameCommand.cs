@@ -5,7 +5,7 @@ using ImageViewer.Core.Rename;
 
 namespace ImageViewer.App.Commands;
 
-public sealed class RenameCommand(Form owner) : ImageCommandBase
+public sealed class RenameCommand(Form owner) : ImageCommandBase, IWorksOnAnyFile
 {
     public override string Id => "file.rename";
     public override string Name => "名前の変更（連番など）...";

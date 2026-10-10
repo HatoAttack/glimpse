@@ -1,4 +1,5 @@
 // サムネイル 1 枚の生成: シェルのサムネイル → 取れなければ ImageLoader で縮小読み込み
+// 画像以外のファイルは、シェルのサムネイル（PDF・動画など）→ 取れなければエクスプローラーと同じアイコン
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
@@ -15,6 +16,13 @@ public static class ThumbnailGenerator
     /// <summary>長辺 size 以下のサムネイル（描画が速い 32bppPArgb）。読めなければ例外</summary>
     public static Bitmap Generate(string path, int size)
     {
+        if (!ImageFormats.IsSupported(path))
+        {
+            // アイコンはフォルダのタイルと同じく、枠の 6 割の大きさで
+            return ShellThumbnail.TryGet(path, size) ?? ShellThumbnail.TryGetIcon(path, size * 6 / 10)
+                ?? throw new NotSupportedException("サムネイルもアイコンも取れませんでした");
+        }
+
         // ZIP の中の画像はシェルが扱えないので、いつも自前で読む
         if (!Archives.ArchivePath.IsInside(path) && ShellThumbnail.TryGet(path, size) is Bitmap shell) return shell;
 

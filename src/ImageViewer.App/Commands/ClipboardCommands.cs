@@ -3,8 +3,21 @@
 using System.Collections.Specialized;
 using ImageViewer.Core.Archives;
 using ImageViewer.Core.Commands;
+using ImageViewer.Core.Imaging;
 
 namespace ImageViewer.App.Commands;
+
+/// <summary>お知らせ・確認に出す数え方</summary>
+internal static class FileWording
+{
+    /// <summary>画像だけなら「3 枚」、画像以外のファイル・フォルダ（ZIP のタイルも）が混ざっていれば「3 件」</summary>
+    public static string Count(IReadOnlyList<string> paths) =>
+        paths.All(p => ImageFormats.IsSupported(p) && !Directory.Exists(p)) ? $"{paths.Count} 枚" : $"{paths.Count} 件";
+
+    /// <summary>「3 枚の画像」/「3 件のファイル」</summary>
+    public static string CountWithNoun(IReadOnlyList<string> paths) =>
+        paths.All(ImageFormats.IsSupported) ? $"{paths.Count} 枚の画像" : $"{paths.Count} 件のファイル";
+}
 
 internal static class FileClipboard
 {
@@ -52,7 +65,7 @@ internal static class FileClipboard
 /// 選択中のフォルダもフォルダごとコピーする（エクスプローラーや FTP ソフトへ貼り付けられる）。
 /// ZIP の中の画像は、一時フォルダへ書き出したものをクリップボードに載せる
 /// </summary>
-public sealed class CopyFilesCommand : ImageCommandBase, IWorksInArchive, IWorksOnFolders
+public sealed class CopyFilesCommand : ImageCommandBase, IWorksInArchive, IWorksOnFolders, IWorksOnAnyFile
 {
     public override string Id => "edit.copy";
     public override string Name => "コピー";
@@ -63,14 +76,12 @@ public sealed class CopyFilesCommand : ImageCommandBase, IWorksInArchive, IWorks
     {
         var paths = await Task.Run(() => ArchiveExport.ToFiles(context.Paths));
         FileClipboard.Set(paths, cut: false);
-        // フォルダ（ZIP のタイルも）を含むときは枚数ではなく件数で
-        bool withFolders = context.Paths.Any(p => Directory.Exists(p) || ArchivePath.IsArchiveName(p));
-        string what = withFolders ? $"{context.Paths.Count} 件" : $"{context.Paths.Count} 枚";
-        context.Host.Notify($"{what}をコピーしました（貼り付けは Ctrl+V。エクスプローラーにも貼り付けられます）");
+        // フォルダ（ZIP のタイルも）・画像以外のファイルを含むときは枚数ではなく件数で
+        context.Host.Notify($"{FileWording.Count(context.Paths)}をコピーしました（貼り付けは Ctrl+V。エクスプローラーにも貼り付けられます）");
     }
 }
 
-public sealed class CutFilesCommand : ImageCommandBase
+public sealed class CutFilesCommand : ImageCommandBase, IWorksOnAnyFile
 {
     public override string Id => "edit.cut";
     public override string Name => "切り取り";
@@ -80,7 +91,7 @@ public sealed class CutFilesCommand : ImageCommandBase
     public override Task ExecuteAsync(CommandContext context)
     {
         FileClipboard.Set(context.Paths, cut: true);
-        context.Host.Notify($"{context.Paths.Count} 枚を切り取りました（移動先のフォルダで Ctrl+V）");
+        context.Host.Notify($"{FileWording.Count(context.Paths)}を切り取りました（移動先のフォルダで Ctrl+V）");
         return Task.CompletedTask;
     }
 }

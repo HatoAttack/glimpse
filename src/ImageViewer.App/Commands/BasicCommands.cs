@@ -6,7 +6,7 @@ using ImageViewer.Core.Commands;
 namespace ImageViewer.App.Commands;
 
 /// <summary>選択した画像のフルパスをクリップボードへ（複数可、改行区切り）</summary>
-public sealed class CopyPathsCommand : ImageCommandBase
+public sealed class CopyPathsCommand : ImageCommandBase, IWorksOnAnyFile
 {
     public override string Id => "file.copyPaths";
     public override string Name => "パスをコピー";
@@ -22,7 +22,7 @@ public sealed class CopyPathsCommand : ImageCommandBase
 }
 
 /// <summary>選択した画像をエクスプローラーで表示（1枚のみ）。ZIP の中の画像なら、その ZIP を表示する</summary>
-public sealed class RevealInExplorerCommand : ImageCommandBase, IWorksInArchive
+public sealed class RevealInExplorerCommand : ImageCommandBase, IWorksInArchive, IWorksOnAnyFile
 {
     public override string Id => "file.revealInExplorer";
     public override string Name => "エクスプローラーで表示";

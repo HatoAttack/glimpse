@@ -80,10 +80,12 @@ public sealed class FolderWatcher : IDisposable
 
     /// <summary>
     /// 一覧に関わるファイルの名前か（画像と、フォルダのタイルとして出す ZIP）。保存のときの一時ファイル（.tmp）や、画像でないファイルでは読み直さない。
-    /// フォルダの変化は別の見張りで受けるので、ここでは見ない
+    /// フォルダの変化は別の見張りで受けるので、ここでは見ない。
+    /// 「画像以外のファイルも表示」の設定のときは、一時ファイル以外のどのファイルでも読み直す
     /// </summary>
     public static bool Relevant(string? name) =>
-        string.IsNullOrEmpty(name) || ImageFormats.IsSupported(name) || Core.Archives.ArchivePath.IsArchiveName(name);
+        string.IsNullOrEmpty(name) || ImageFormats.IsSupported(name) || Core.Archives.ArchivePath.IsArchiveName(name)
+        || (Core.Navigation.FolderListing.ShowOtherFiles && !name.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase));
 
     private void Mark()
     {

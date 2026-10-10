@@ -69,6 +69,41 @@ static class NavigationTests
         check(subs.SequenceEqual(new[] { "Album", "img2", "img10" }), $"サブフォルダは名前順・隠しフォルダとファイルは除く ({string.Join(",", subs)})");
         check(FolderListing.ListSubfolders(Path.Combine(dir, "nothing")).Count == 0, "存在しないフォルダは空（例外にしない）");
 
+        // ---- 画像以外のファイル・隠しファイルの表示（設定） ----
+        File.WriteAllText(Path.Combine(dir, "memo.txt"), "x");
+        File.WriteAllText(Path.Combine(dir, "secret.txt"), "x");
+        File.SetAttributes(Path.Combine(dir, "secret.txt"), FileAttributes.Hidden);
+        File.WriteAllText(Path.Combine(dir, "desktop.ini"), "x");
+        File.SetAttributes(Path.Combine(dir, "desktop.ini"), FileAttributes.Hidden | FileAttributes.System);
+        using (var zip = System.IO.Compression.ZipFile.Open(Path.Combine(dir, "book.zip"), System.IO.Compression.ZipArchiveMode.Create))
+        {
+            zip.CreateEntry("001.jpg");
+            zip.CreateEntry("readme.txt");
+        }
+        string[] Files() => FolderListing.ListFiles(dir).Select(f => f.Name).ToArray();
+        string[] InZip() => ImageViewer.Core.Archives.ZipStore.List(Path.Combine(dir, "book.zip"), "").Images.Select(f => f.Name).ToArray();
+        try
+        {
+            check(Files().SequenceEqual(new[] { "file.jpg" }) && InZip().SequenceEqual(new[] { "001.jpg" }), "一覧: いつもは画像だけ（ZIP の中も）");
+            FolderListing.ShowOtherFiles = true;
+            var all = FolderListing.ListFiles(dir);
+            check(all.Select(f => f.Name).SequenceEqual(new[] { "file.jpg", "memo.txt" }) && all[0].IsImage && !all[1].IsImage,
+                $"一覧: 画像以外のファイルも出す設定（隠しファイル・ZIP は出さない。画像かどうかを見分ける） ({string.Join(",", Files())})");
+            check(InZip().OrderBy(n => n).SequenceEqual(new[] { "001.jpg", "readme.txt" }), "一覧: ZIP の中も画像以外のファイルを出す");
+            check(ImageViewer.App.Filer.FolderWatcher.Relevant("memo.txt") && !ImageViewer.App.Filer.FolderWatcher.Relevant("a.jpg.0123abcd.tmp"),
+                "見張り: 画像以外のファイルも出す設定なら、その変化でも読み直す（一時ファイルは除く）");
+            FolderListing.ShowHidden = true;
+            check(Files().SequenceEqual(new[] { "file.jpg", "memo.txt", "secret.txt" }), $"一覧: 隠しファイルも出す設定（システムファイルは出さない） ({string.Join(",", Files())})");
+            check(FolderListing.ListSubfolders(dir).Any(d => d.Name == ".cache"), "一覧: 隠しフォルダも出す設定");
+            FolderListing.ShowOtherFiles = false;
+            check(Files().SequenceEqual(new[] { "file.jpg" }), "一覧: 隠しファイルの設定だけでは、画像以外のファイルは出さない");
+        }
+        finally
+        {
+            FolderListing.ShowOtherFiles = FolderListing.ShowHidden = false;
+            ImageViewer.Core.Archives.ZipStore.CloseAll();
+        }
+
         check(FolderListing.Parent(Path.Combine(dir, "img2")) == Path.GetFullPath(dir).TrimEnd('\\'), "上のフォルダ");
         check(FolderListing.Parent(@"C:\") == null, "ドライブのルートの上は無い");
 

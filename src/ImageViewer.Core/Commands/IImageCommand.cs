@@ -61,6 +61,12 @@ public interface IWorksInArchive { }
 /// </summary>
 public interface IWorksOnFolders { }
 
+/// <summary>
+/// 画像以外のファイルも対象にするコマンドの印（コピー・移動・削除・名前の変更など、中身を画像として読まないもの）。
+/// 印の無いコマンドには、選択中のうち画像だけを渡す
+/// </summary>
+public interface IWorksOnAnyFile { }
+
 /// <summary>選択枚数の条件だけで実行可否が決まるコマンドの基底クラス</summary>
 public abstract class ImageCommandBase : IImageCommand
 {
