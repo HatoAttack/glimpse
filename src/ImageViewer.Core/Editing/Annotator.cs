@@ -20,6 +20,7 @@ public enum TextBackground { None, Box, Balloon }
 /// Thickness は線の太さ（px）、CornerRadius は枠の角の丸み（px。短い辺の半分まで）、HeadSize は矢印の先端の大きさ（太さの何倍か）。
 /// 文字と番号は (X0, Y0) が本体（文字を囲む四角・番号の丸）の左上。番号の大きさは数字と FontSize から決まる。
 /// 文字の本体は BoxWidth × BoxHeight（文字が収まる大きさより小さくはならない。0 なら文字にぴったり）。
+/// 帯・吹き出しの縁は本体の外側の端から内へ Thickness の太さで、文字はその内側に置く（縁を太くしても文字に被らない）。
 /// 吹き出しは (X1, Y1) がしっぽの先。帯と吹き出しは Color が線、Fill が中の色、TextColor が文字の色。番号は Color が丸の色
 /// </summary>
 public sealed record Annotation(AnnotationKind Kind, double X0, double Y0, double X1, double Y1,
@@ -56,6 +57,9 @@ public sealed record Annotation(AnnotationKind Kind, double X0, double Y0, doubl
     /// <summary>帯・吹き出しの縁から文字までの余白（左右）。文字の大きさに比例させる</summary>
     public double PaddingX => Kind == AnnotationKind.Text && Background != TextBackground.None ? FontSize * 0.5 : 0;
 
+    /// <summary>帯・吹き出しの縁の太さ（縁が無いものは 0）</summary>
+    public double BorderWidth => Kind == AnnotationKind.Text && Background != TextBackground.None ? Math.Max(0, Thickness) : 0;
+
     /// <summary>文字だけの大きさ（余白を含めない）</summary>
     public (double Width, double Height) TextSize
     {
@@ -72,7 +76,8 @@ public sealed record Annotation(AnnotationKind Kind, double X0, double Y0, doubl
         get
         {
             var (cw, ch) = TextSize;
-            return (cw + PaddingX * 2, ch + (PaddingX > 0 ? FontSize * 0.3 : 0));
+            // 縁の分も足す（縁を太くすると、文字に被らずに本体が広がる）
+            return (cw + (PaddingX + BorderWidth) * 2, ch + (PaddingX > 0 ? FontSize * 0.3 : 0) + BorderWidth * 2);
         }
     }
 
@@ -81,7 +86,7 @@ public sealed record Annotation(AnnotationKind Kind, double X0, double Y0, doubl
     /// <summary>しっぽがあるか（先が本体の中にあるときは描かれない）</summary>
     public bool HasTail => Kind == AnnotationKind.Text && Background == TextBackground.Balloon;
 
-    /// <summary>文字・番号の本体（線の中心が通る四角。番号は丸を囲む正方形）</summary>
+    /// <summary>文字・番号の本体（縁も含めた外側の四角。番号は丸を囲む正方形）</summary>
     public (double X, double Y, double Width, double Height) Body
     {
         get
@@ -134,8 +139,8 @@ internal readonly struct AnnotationShape
     // 矢印: 始点・向き（単位ベクトル）・軸（始点からの長さ）・軸の太さの半分・先端の三角（根元の位置と幅の半分）
     private readonly double _sx, _sy, _ux, _uy, _length, _shaftEnd, _half, _headBase, _headHalf;
     private readonly bool _shaft;
-    // 文字・番号: 本体は枠の外側（_cx 〜 _or）を使う。吹き出しはしっぽの三角（根元の 2 点と先）を足す。_grow は線の太さの半分
-    private readonly double _ax, _ay, _bx, _by, _tx, _ty, _grow;
+    // 文字・番号: 本体は枠の外側（_cx 〜 _or）を使う。吹き出しはしっぽの三角（根元の 2 点と先）を足す
+    private readonly double _ax, _ay, _bx, _by, _tx, _ty;
     private readonly bool _tail;
 
     /// <summary>形の外枠からはみ出す長さ（線の太さ・先端の幅）</summary>
@@ -156,11 +161,10 @@ internal readonly struct AnnotationShape
             _ohy = hy;
             bool boxed = a.Kind == AnnotationKind.Text && a.Background != TextBackground.None;
             _or = a.Kind == AnnotationKind.Number ? hx : boxed ? Math.Clamp(a.CornerRadius, 0, Math.Min(hx, hy)) : 0;
-            _grow = boxed ? t / 2 : 0;
-            Reach = _grow;
             if (!a.HasTail || RoundedBox(a.X1 - _cx, a.Y1 - _cy, hx, hy, _or) <= 0) return;
             // しっぽ: 本体の中の「先にいちばん近い所」から先へ向かう三角。根元は本体に隠れるよう、縁から内側へ入れる
-            double half = Math.Min(a.FontSize * 0.35, Math.Min(hx, hy) * 0.6), inset = half + _or * 0.3;
+            // 太さは縁の分を足す（縁が太くても、しっぽの中の色が残るように）
+            double half = Math.Min(a.FontSize * 0.35 + a.BorderWidth, Math.Min(hx, hy) * 0.6), inset = half + _or * 0.3;
             double rx = Math.Max(0, hx - inset), ry = Math.Max(0, hy - inset);
             double px = _cx + Math.Clamp(a.X1 - _cx, -rx, rx), py = _cy + Math.Clamp(a.Y1 - _cy, -ry, ry);
             double length = Math.Sqrt((a.X1 - px) * (a.X1 - px) + (a.Y1 - py) * (a.Y1 - py));
@@ -210,7 +214,7 @@ internal readonly struct AnnotationShape
         if (_kind is AnnotationKind.Text or AnnotationKind.Number)
         {
             double body = RoundedBox(x - _cx, y - _cy, _ohx, _ohy, _or);
-            return (_tail ? Math.Min(body, Tail(x, y)) : body) - _grow;
+            return _tail ? Math.Min(body, Tail(x, y)) : body;
         }
         if (_kind == AnnotationKind.Frame)
         {
@@ -335,8 +339,9 @@ public static class Annotator
         // 帯や丸が無い文字は、文字の形そのものに影を落とす
         // 本体が文字より広ければ、左・右に寄せる（余白は空ける）
         double half = a.TextSize.Width / 2;
+        double pad = a.PaddingX + a.BorderWidth;
         double centerX = number || a.Align == TextLineAlign.Center ? x + w / 2
-            : a.Align == TextLineAlign.Left ? x + a.PaddingX + half : x + w - a.PaddingX - half;
+            : a.Align == TextLineAlign.Left ? x + pad + half : x + w - pad - half;
         AnnotationText.Render(image, a.Text, a.FontName, a.Align, a.FontSize, centerX, y + h / 2, number ? ContrastOf(a.Color) : a.TextColor ?? a.Color,
             bare && a.Shadow ? ShadowOf(a.FontSize / 8) : null, ShadowAlpha);
     }

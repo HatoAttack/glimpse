@@ -407,6 +407,18 @@ static class EditingTests
             && InkAt(TextLineAlign.Right, left: false) > 0 && InkAt(TextLineAlign.Right, left: true) == 0
             && InkAt(TextLineAlign.Center, left: true) == 0 && InkAt(TextLineAlign.Center, left: false) == 0
             && (lines with { Align = TextLineAlign.Left }).Body == lines.Body, "文字: 行を 左 / 中央 / 右 にそろえられる（本体の大きさは変わらない）");
+        var thick = boxed with { Thickness = 12 };
+        using (var img = new Image<Rgba32>(200, 120, Blue))
+        {
+            Annotator.Draw(img, new[] { thick with { TextColor = new Rgba32(0, 128, 0) } });
+            var (kx, ky, kw, kh) = thick.Body;
+            int covered = 0; // 縁の内側にある、縁の色の画素（文字に被った縁）
+            for (int y = (int)ky + 13; y < ky + kh - 13; y++)
+                for (int x = (int)kx + 13; x < kx + kw - 13; x++)
+                    if (img[x, y] == Red) covered++;
+            check(kw == ow + 20 && kh == oh + 20 && covered == 0 && img[(int)kx + 6, (int)(ky + kh / 2)] == Red && img[(int)kx - 2, (int)(ky + kh / 2)] == Blue,
+                "文字: 縁を太くすると本体が外へ広がる（文字には被らない）");
+        }
         // 本体の大きさは文字と別に決められる（文字が収まる大きさより小さくはならない）
         var roomy = boxed with { BoxWidth = 150, BoxHeight = 60 };
         check(roomy.Body is { Width: 150, Height: 60 } && (boxed with { BoxWidth = 5, BoxHeight = 5 }).Body == boxed.Body && roomy.MinBody == (ow, oh)
