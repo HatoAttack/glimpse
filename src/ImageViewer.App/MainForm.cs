@@ -1847,18 +1847,14 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     {
         if (_folder == null || paths.Count == 0) return;
         var gone = new HashSet<string>(paths, StringComparer.OrdinalIgnoreCase);
-        // フォルダのタイル（ZIP も）: 一覧から外し、古いパスを覚えているもの（ツリー・戻る / 進む）からも外す
+        // 消えた・移ったフォルダは、古いパスを覚えているもの（ツリー・戻る / 進む）から外す。
+        // 今の一覧に無いものも（フォルダを切り取ってから、別のフォルダで貼り付けたとき）
+        _tree.FoldersRemoved(gone);
+        _history.Remove(gone);
+        UpdateNavigationState();
+        // フォルダのタイル（ZIP も）を一覧から外す
         int firstFolder = _grid.Folders.ToList().FindIndex(d => gone.Contains(d.FullName));
         var folders = firstFolder < 0 ? _grid.Folders : _grid.Folders.Where(d => !gone.Contains(d.FullName)).ToList();
-        if (firstFolder >= 0)
-        {
-            foreach (var d in _grid.Folders.Where(d => gone.Contains(d.FullName)))
-            {
-                _tree.FolderRemoved(d.FullName);
-                _history.Remove(d.FullName);
-            }
-            UpdateNavigationState();
-        }
         int first = _grid.Items.ToList().FindIndex(f => gone.Contains(f.FullName));
         if (first < 0)
         {

@@ -32,7 +32,7 @@ static class NavigationTests
 
         var hd = new NavigationHistory();
         foreach (var p in new[] { @"C:\写真", @"C:\写真\旅行", @"C:\写真\旅行\1日目", @"C:\写真\旅行2", @"C:\写真" }) hd.Navigate(p);
-        hd.Remove(@"C:\写真\旅行");
+        hd.Remove(new[] { @"C:\写真\旅行\", @"C:\写真\a.jpg" });
         check(hd.Current == @"C:\写真" && hd.GoBack() == @"C:\写真\旅行2" && hd.GoBack() == @"C:\写真" && !hd.CanGoBack,
             "フォルダーを消したら、そのフォルダとその中を戻るの履歴から外す（似た名前の「旅行2」は残す）");
 

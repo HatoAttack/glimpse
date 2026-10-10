@@ -284,17 +284,20 @@ public sealed class FolderTree : TreeView
         EndUpdate();
     }
 
-    /// <summary>フォルダーを消した・別の場所へ移した。読み込み済みのそのノードを外す（よく使うフォルダ・ドライブ・ホームの見出しはそのまま）</summary>
-    public void FolderRemoved(string path)
+    /// <summary>
+    /// フォルダーを消した・別の場所へ移した。読み込み済みのそのノードを外す（よく使うフォルダ・ドライブ・ホームの見出しはそのまま）。
+    /// ファイルのパスが混ざっていてもよい（ツリーには無いので何も起きない）
+    /// </summary>
+    public void FoldersRemoved(IEnumerable<string> paths)
     {
-        string gone = Path.TrimEndingDirectorySeparator(path);
+        var gone = new HashSet<string>(paths.Select(Path.TrimEndingDirectorySeparator), StringComparer.OrdinalIgnoreCase);
+        if (gone.Count == 0) return;
         void Walk(TreeNodeCollection nodes)
         {
             for (int i = nodes.Count - 1; i >= 0; i--)
             {
                 var node = nodes[i];
-                if (node.Parent != null && node.Tag is string p
-                    && string.Equals(Path.TrimEndingDirectorySeparator(p), gone, StringComparison.OrdinalIgnoreCase))
+                if (node.Parent != null && node.Tag is string p && gone.Contains(Path.TrimEndingDirectorySeparator(p)))
                     nodes.RemoveAt(i);
                 else
                     Walk(node.Nodes);
