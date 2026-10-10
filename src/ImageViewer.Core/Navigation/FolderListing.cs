@@ -10,7 +10,10 @@ public static class FolderListing
     /// <summary>画像以外のファイルも一覧に出す（設定。既定は出さない）</summary>
     public static bool ShowOtherFiles { get; set; }
 
-    /// <summary>隠しファイル・隠しフォルダも出す（設定。既定は出さない）。システムファイルはどちらでも出さない</summary>
+    /// <summary>
+    /// 隠しフォルダと、画像以外の隠しファイルも出す（設定。既定は出さない）。システム属性のものはどちらでも出さない。
+    /// 画像はこの設定に関係なく、これまでどおり属性を見ずに出す（設定を切り替えても、出ていた画像が消えないように）
+    /// </summary>
     public static bool ShowHidden { get; set; }
 
     private static FileAttributes SkippedAttributes => ShowHidden ? FileAttributes.System : FileAttributes.Hidden | FileAttributes.System;
@@ -27,7 +30,7 @@ public static class FolderListing
         foreach (var file in new DirectoryInfo(folder).EnumerateFiles())
         {
             ct.ThrowIfCancellationRequested();
-            // 属性は列挙時に読んであるので、ディスクは読まない
+            // 画像は ListImages と同じく属性を見ない。属性は列挙時に読んであるので、ディスクは読まない
             if (ImageFormats.IsSupported(file.Name) || (!ArchivePath.IsArchiveName(file.Name) && (file.Attributes & skip) == 0))
                 list.Add(ImageFile.From(file));
         }
