@@ -46,11 +46,13 @@ public sealed class FolderWatcher : IDisposable
             files.Deleted += (_, e) => OnEvent(e.Name);
             files.Changed += (_, e) => OnEvent(e.Name);
             files.Renamed += (_, e) => { if (Relevant(e.OldName) || Relevant(e.Name)) Mark(); };
-            // フォルダ: 一覧に出る中のフォルダの追加・削除・名前の変更（名前に . があっても拡張子で絞らない）
-            var folders = _folders = Create(folder, NotifyFilters.DirectoryName);
+            // フォルダ: 一覧に出る中のフォルダの追加・削除・名前の変更（名前に . があっても拡張子で絞らない）。
+            // 属性の変化も見る（隠し属性を付け外しすると一覧に出る / 出ないが変わる。属性の変化はファイルの分も届くので、フォルダだけを拾う）
+            var folders = _folders = Create(folder, NotifyFilters.DirectoryName | NotifyFilters.Attributes);
             folders.Created += (_, _) => Mark();
             folders.Deleted += (_, _) => Mark();
             folders.Renamed += (_, _) => Mark();
+            folders.Changed += (_, e) => { if (Directory.Exists(e.FullPath)) Mark(); };
             files.EnableRaisingEvents = true;
             folders.EnableRaisingEvents = true;
             Folder = folder;
