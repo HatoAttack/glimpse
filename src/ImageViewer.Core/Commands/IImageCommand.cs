@@ -19,7 +19,7 @@ public interface ICommandHost
     /// </summary>
     void FilesRenamed(IReadOnlyList<Rename.RenameOp> ops);
 
-    /// <summary>コマンドがファイルを削除した・別のフォルダへ移動した。本体は一覧から外し、消えた位置の次の画像を選択する</summary>
+    /// <summary>コマンドがファイル・フォルダを削除した・別のフォルダへ移動した。本体は一覧から外し、消えた位置の次の画像（フォルダだけならフォルダ）を選択する</summary>
     void FilesRemoved(IReadOnlyList<string> paths);
 
     /// <summary>コマンドが表示中のフォルダにファイル・フォルダを追加した。本体は読み直して、追加したものを選択する</summary>
@@ -56,7 +56,7 @@ public interface IImageCommand
 public interface IWorksInArchive { }
 
 /// <summary>
-/// 選択中のフォルダ（ZIP のタイルも）も対象にするコマンドの印（コピーなど）。
+/// 選択中のフォルダ（ZIP のタイルも）も対象にするコマンドの印（コピー・切り取り・移動・削除）。
 /// 印の無いコマンドには、フォルダを含めずに画像だけを渡す
 /// </summary>
 public interface IWorksOnFolders { }

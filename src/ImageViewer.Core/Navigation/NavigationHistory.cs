@@ -48,6 +48,13 @@ public sealed class NavigationHistory
                 stack[i] = FolderListing.Retarget(stack[i], oldPath, newPath) ?? stack[i];
     }
 
+    /// <summary>フォルダーを消した・別の場所へ移した。そのフォルダ（とその中）を戻る / 進む の履歴から外す（今の場所はそのまま）</summary>
+    public void Remove(string path)
+    {
+        foreach (var stack in new[] { _back, _forward })
+            stack.RemoveAll(p => FolderListing.Retarget(p, path, path) != null);
+    }
+
     private void Push(List<string> stack, string path)
     {
         stack.Add(path);

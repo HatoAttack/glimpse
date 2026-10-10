@@ -154,7 +154,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         // フォルダのタイル・ツリーのフォルダへのドロップで移動 / コピー（エクスプローラーからのドロップも）
         _grid.FilesDroppedOnFolder += async (_, drop) => await TransferDroppedAsync(drop);
         _tree.FilesDroppedOnFolder += async (_, drop) => await TransferDroppedAsync(drop);
-        // グリッドからエクスプローラー等へドラッグして移動された画像は一覧から外す
+        // グリッドからエクスプローラー等へドラッグして移動された画像・フォルダは一覧から外す
         _grid.FilesMovedOut += (_, paths) => FilesRemoved(paths);
         SetUpNameEdit();
         FormClosed += (_, _) =>
@@ -1105,10 +1105,10 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         UpdateCommandStates();
     }
 
-    /// <summary>画像を選んでいる間はフッターを操作ボタンに（高さは変えない）</summary>
+    /// <summary>画像・フォルダを選んでいる間はフッターを操作ボタンに（高さは変えない）。ZIP の中のフォルダには使える操作が無いので数えない</summary>
     private void UpdateActionBar()
     {
-        int selected = _grid.SelectedImages.Count, marked = _grid.MarkedCount;
+        int selected = _grid.SelectedImages.Count + (_inArchive ? 0 : _grid.SelectedFolders.Count), marked = _grid.MarkedCount;
         _footer.ActionMode = selected > 0;
         if (selected == 0) return;
         _targetSelection.Text = $"選択 {selected}";
@@ -1194,7 +1194,8 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
     private async Task TransferToAsync(string folder, bool move)
     {
-        var paths = TargetPaths();
+        // 「フォルダーへ移動」と同じ対象（選択中のフォルダのタイルも）
+        var paths = _registry.Find("file.moveTo") is { } cmd ? PathsFor(cmd, TargetPaths()) : TargetPaths();
         if (paths.Count == 0) return;
         ((ISettingsAccess)this).UpdateSettings(s => s.WithRecentDestination(folder));
         try
@@ -1846,15 +1847,34 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     {
         if (_folder == null || paths.Count == 0) return;
         var gone = new HashSet<string>(paths, StringComparer.OrdinalIgnoreCase);
+        // フォルダのタイル（ZIP も）: 一覧から外し、古いパスを覚えているもの（ツリー・戻る / 進む）からも外す
+        int firstFolder = _grid.Folders.ToList().FindIndex(d => gone.Contains(d.FullName));
+        var folders = firstFolder < 0 ? _grid.Folders : _grid.Folders.Where(d => !gone.Contains(d.FullName)).ToList();
+        if (firstFolder >= 0)
+        {
+            foreach (var d in _grid.Folders.Where(d => gone.Contains(d.FullName)))
+            {
+                _tree.FolderRemoved(d.FullName);
+                _history.Remove(d.FullName);
+            }
+            UpdateNavigationState();
+        }
         int first = _grid.Items.ToList().FindIndex(f => gone.Contains(f.FullName));
-        if (first < 0) return; // 別のフォルダへ移っていた
+        if (first < 0)
+        {
+            if (firstFolder < 0) return; // 別のフォルダへ移っていた
+            // フォルダだけが消えた: 消した位置にある次のフォルダ（無ければ最後のフォルダ）を選ぶ
+            _grid.SetContents(folders, _grid.Items, reload: true);
+            if (folders.Count > 0) _grid.SelectPath(folders[Math.Min(firstFolder, folders.Count - 1)].FullName);
+            return;
+        }
         var items = _grid.Items.Where(f => !gone.Contains(f.FullName)).ToList();
         // 消したファイルの名前の変更は元に戻せない
         if (_lastRename is { } last && last.Ops.Any(o => gone.Contains(o.To))) ClearUndo();
         if (_sortMode == SortMode.Manual) SaveManualOrder(items);
 
         bool peeking = _quickLook.Visible;
-        _grid.SetItems(items, reload: true); // 表示中の画像が消えるので Quick Look は一度閉じる
+        _grid.SetContents(folders, items, reload: true); // 表示中の画像が消えるので Quick Look は一度閉じる
         if (items.Count == 0) return;
         // エクスプローラーと同じく、消した位置にある次の画像を選ぶ（Quick Look ならそのまま次を表示）
         int next = Math.Clamp(first, 0, items.Count - 1);
