@@ -90,3 +90,4 @@ dotnet run --project tests/ImageViewer.Tests
 [MIT License](LICENSE)
 
 画像の読み書きに使っている [ImageSharp](https://github.com/SixLabors/ImageSharp) は [Six Labors Split License](https://github.com/SixLabors/ImageSharp/blob/main/LICENSE) です。
+Glimpse.exe に含まれているソフトウェア（ImageSharp・.NET）のライセンス文と著作権表示は [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt) にあり、アプリの ☰ → ヘルプ →「ライセンス」でも見られます。
