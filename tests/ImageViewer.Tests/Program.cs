@@ -131,6 +131,7 @@ string licenses = ImageViewer.App.Dialogs.LicenseDialog.LicenseText;
 Check(licenses.StartsWith("MIT License") && licenses.Contains("Copyright (c) 2026 HatoAttack"), "ライセンス: Glimpse の LICENSE が先頭");
 Check(licenses.Contains("Six Labors Split License") && licenses.Contains("Apache License") && licenses.Contains(".NET Foundation"),
     "ライセンス: 同梱しているソフトウェア（ImageSharp・.NET）のライセンスも入っている");
+Check(licenses.Contains(".NET Runtime - Third-party notices"), "ライセンス: .NET Runtime の Third-party notices の欄がある（同梱しないビルドではその旨）");
 Check(!licenses.Replace("\r\n", "").Contains('\n'), "ライセンス: 改行は CRLF（TextBox で改行される）");
 
 Console.WriteLine(failed ? "\n失敗あり" : "\nすべて OK");

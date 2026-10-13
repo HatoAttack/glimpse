@@ -21,6 +21,16 @@
     <EmbeddedResource Include="..\..\THIRD-PARTY-NOTICES.txt" LogicalName="THIRD-PARTY-NOTICES.txt" />
   </ItemGroup>
 
+  <!-- .NET Runtime を同梱するビルド（リリースの exe）では、同梱した版の .NET Runtime の Third-party notices も埋め込む。
+       修正版ごとに中身が変わるので、THIRD-PARTY-NOTICES.txt に写さず、publish で使う runtime pack のものをそのまま使う -->
+  <Target Name="EmbedRuntimeNotices" AfterTargets="ResolveFrameworkReferences" Condition="'$(SelfContained)' == 'true'">
+    <ItemGroup>
+      <_RuntimeNotices Include="@(ResolvedRuntimePack->'%(PackageDirectory)/THIRD-PARTY-NOTICES.TXT')" Condition="'%(ResolvedRuntimePack.FrameworkName)' == 'Microsoft.NETCore.App'" />
+      <EmbeddedResource Include="@(_RuntimeNotices)" LogicalName="RUNTIME-THIRD-PARTY-NOTICES.txt" />
+    </ItemGroup>
+    <Error Condition="'@(_RuntimeNotices)' == '' Or !Exists('@(_RuntimeNotices)')" Text=".NET Runtime の THIRD-PARTY-NOTICES.TXT が runtime pack に見つかりません（@(_RuntimeNotices)）" />
+  </Target>
+
   <ItemGroup>
     <ProjectReference Include="..\ImageViewer.Core\ImageViewer.Core.csproj" />
   </ItemGroup>
