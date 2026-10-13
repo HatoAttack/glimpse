@@ -38,9 +38,14 @@ public static class NameFitter
             else hi = mid - 1;
         }
         if (lo > 0) return Compose(stem, starts, lo, tail);
-        // 前半を全部削っても入らないときは、拡張子だけでも見えるように末尾の数文字もあきらめる
-        // （それでも入らなければ描画側の切り捨てに任せる）
-        return measure(Ellipsis + tail) <= width ? Ellipsis + tail : Ellipsis + ext;
+        // 前半を全部削っても入らないときは、入るところまで末尾の文字を減らす
+        // （拡張子だけでも入らなければ描画側の切り捨てに任せる）
+        for (int k = tailCount; k > 0; k--)
+        {
+            string shorter = Ellipsis + stem[starts[^k]..] + ext;
+            if (measure(shorter) <= width) return shorter;
+        }
+        return Ellipsis + ext;
     }
 
     /// <summary>先頭から count 文字（見た目の文字数）＋「…」＋ tail</summary>
