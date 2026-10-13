@@ -32,7 +32,10 @@ static class ThumbnailTests
         check(NameFitter.Fit("abcdefghijklmnop.png", 50, Measure) == "….png", $"狭ければ拡張子だけ ({NameFitter.Fit("abcdefghijklmnop.png", 50, Measure)})");
         check(NameFitter.Fit(".gitignore_long_name", 100, Measure).EndsWith('…'), "先頭の「.」は拡張子扱いしない");
         string emoji = NameFitter.Fit("😀😀😀😀😀😀😀😀😀.jpg", 110, Measure);
-        check(emoji == "😀…😀😀.jpg", $"絵文字の途中で切らない ({emoji})");
+        check(emoji == "…😀😀😀.jpg", $"絵文字の途中で切らない ({emoji})");
+        // 結合した絵文字（家族）は 1 文字として扱い、ZWJ の途中で切らない
+        string family = NameFitter.Fit("photo_of_my_family_👨‍👩‍👧‍👦.jpg", 250, Measure);
+        check(family.EndsWith("👨‍👩‍👧‍👦.jpg") && family.Contains('…'), $"結合した絵文字の途中で切らない ({family})");
     }
 
     // ---- GridLayout ----
