@@ -1427,6 +1427,8 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         helpMenu.DropDownItems.Add(new ToolStripSeparator());
         helpMenu.DropDownItems.Add(new ToolStripMenuItem("更新を確認(&U)...", null, async (_, _) => await _updates.CheckAsync(manual: true)));
         helpMenu.DropDownItems.Add(checkOnStartup);
+        helpMenu.DropDownItems.Add(new ToolStripSeparator());
+        helpMenu.DropDownItems.Add(new ToolStripMenuItem("ライセンス(&L)...", null, (_, _) => ShowLicenses()));
         menu.Items.Add(helpMenu);
 
         // よく使うものを上に（カテゴリで増えたメニューはヘルプの前）
@@ -1580,6 +1582,12 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             "HEIC は「HEIF 画像拡張機能」と「HEVC ビデオ拡張機能」、AVIF は「AV1 Video Extension」、\n" +
             "RAW は「Raw Image Extension」を Microsoft Store から入れると読めるようになります。",
             "対応形式", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    private void ShowLicenses()
+    {
+        using var dlg = new LicenseDialog(GetType().Assembly.GetName().Version ?? new Version(0, 0, 0));
+        dlg.ShowDialog(this);
     }
 
     private void BuildContextMenu()
