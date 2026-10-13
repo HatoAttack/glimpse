@@ -36,6 +36,7 @@ public sealed class AnnotateDialog : ThemedForm
     private static string _lastFont = "";
     private static TextLineAlign _lastAlign = TextLineAlign.Center;
     private static bool _lastShadow = true;
+    private static bool _lastTextOpen, _lastStyleOpen; // 「文字」「見た目」の枠を開いていたか（初めは閉じておく）
     private static bool _lastToCustomFolder;
     private static string _lastFolder = "";
 
@@ -96,6 +97,7 @@ public sealed class AnnotateDialog : ThemedForm
     // 2 行分の高さに固定する（文の長さで下のボタンが上下しないように）
     private readonly Label _selectionInfo = new() { AutoSize = false, Size = new Size(210, 34), Margin = new Padding(3, 6, 3, 1) };
     private readonly ToolTip _toolTip = new();
+    private CollapsibleSection _textSection = null!, _styleSection = null!; // BuildSidePanel で作る
 
     /// <summary>保存したファイルの数（一覧の読み直しの判断用）</summary>
     public int SavedCount => _saver.SavedCount;
@@ -195,6 +197,8 @@ public sealed class AnnotateDialog : ThemedForm
             }
             _lastHead = _head.Value;
             _lastShadow = _shadow.Checked;
+            _lastTextOpen = _textSection.Open;
+            _lastStyleOpen = _styleSection.Open;
             _lastFolder = _saver.FolderText;
             _lastToCustomFolder = _saver.ToCustom;
         };
@@ -237,21 +241,33 @@ public sealed class AnnotateDialog : ThemedForm
     private Control BuildSidePanel()
     {
         var side = EditDialogShell.SidePanel(250); // 縦のスクロールバーが出ても横にはみ出さない幅
-        side.Controls.Add(EditDialogShell.Group("描くもの", vertical: false, _toolFrame, _toolArrow, _toolText, _toolNumber));
+        // 2 行 2 列に並べる（4 つとも同じ入れ物に入れて、1 つしか選べないようにする）
+        var tools = new TableLayoutPanel { AutoSize = true, ColumnCount = 2, RowCount = 2, Margin = Padding.Empty };
+        tools.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 90));
+        tools.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        tools.Controls.Add(_toolFrame, 0, 0);
+        tools.Controls.Add(_toolArrow, 1, 0);
+        tools.Controls.Add(_toolText, 0, 1);
+        tools.Controls.Add(_toolNumber, 1, 1);
+        side.Controls.Add(EditDialogShell.Group("描くもの", vertical: true, tools));
         _toolTip.SetToolTip(_toolArrow, "指したい所へ向かってドラッグします（離した所が先端）。\nShift を押しながらドラッグすると、向きを 45° ごとにそろえます");
         _toolTip.SetToolTip(_toolText, "クリックした所に文字を置きます（中身は下の欄に打ちます）。\n吹き出しは、置く所から指したい所へドラッグします（離した所がしっぽの先）");
         _toolTip.SetToolTip(_toolNumber, "クリックした所に、丸で囲んだ番号を置きます（置くたびに 1 ずつ増えます）");
 
         // 背景・行の寄せは、それぞれ別の入れ物に入れる（同じ入れ物のラジオボタンは 1 つしか選べないため）
-        side.Controls.Add(EditDialogShell.Group("文字", vertical: true, _text, Row(_fontText, _font), Row(_backText, _backNone, _backBox, _backBalloon),
-            Row(_alignText, _alignLeft, _alignCenter, _alignRight)));
+        // 「文字」「見た目」は縦に場所を取るので、初めは閉じておく（見出しのボタンで開く）
+        _textSection = new CollapsibleSection("文字", _lastTextOpen, _text, Row(_fontText, _font), Row(_backText, _backNone, _backBox, _backBalloon),
+            Row(_alignText, _alignLeft, _alignCenter, _alignRight));
+        side.Controls.Add(_textSection);
         foreach (var c in new Control[] { _alignText, _alignLeft, _alignCenter, _alignRight })
             _toolTip.SetToolTip(c, "文字を本体の 左 / 中央 / 右 のどこに寄せるか（2 行以上なら行も同じ側にそろえます）");
         _toolTip.SetToolTip(_text, "選んだ文字の中身。Enter で改行します");
         _toolTip.SetToolTip(_backBox, "文字の後ろに角の丸い四角を置きます");
         _toolTip.SetToolTip(_backBalloon, "四角に、指したい所へ向かうしっぽを付けます");
 
-        side.Controls.Add(EditDialogShell.Group("見た目", vertical: true, Row(_swatch, _pickColor, _fillSwatch, _pickFill), Row(_textSwatch, _pickText, _fontBox), Row(_thicknessText, _thickness), Row(_radiusText, _radius), Row(_headText, _head), _shadow));
+        _styleSection = new CollapsibleSection("見た目", _lastStyleOpen, Row(_swatch, _pickColor, _fillSwatch, _pickFill), Row(_textSwatch, _pickText, _fontBox),
+            Row(_thicknessText, _thickness), Row(_radiusText, _radius), Row(_headText, _head), _shadow);
+        side.Controls.Add(_styleSection);
         foreach (var c in new Control[] { _thicknessText, _thickness }) _toolTip.SetToolTip(c, "線の太さ（枠・矢印と、帯・吹き出しの縁）");
         foreach (var c in new Control[] { _radiusText, _radius }) _toolTip.SetToolTip(c, "枠・帯・吹き出しの角の丸み。短い辺の半分より大きくはなりません");
         foreach (var c in new Control[] { _headText, _head }) _toolTip.SetToolTip(c, "矢印の先端の大きさ（線の太さの何倍か）");
@@ -568,6 +584,7 @@ public sealed class AnnotateDialog : ThemedForm
     /// <summary>文字の欄へ移って、すぐ打ち直せるようにする</summary>
     private void FocusText()
     {
+        _textSection.Open = true; // 閉じていると打てないので開く
         _text.Focus();
         _text.SelectAll();
     }
