@@ -12,9 +12,25 @@ static class ThumbnailTests
     public static void Run(Action<bool, string> check, string dir)
     {
         LayoutCases(check);
+        NameFitCases(check);
         SelectionCases(check);
         ServiceCases(check);
         GeneratorCases(check, dir);
+    }
+
+    // ---- 名前の省略 ----
+
+    static void NameFitCases(Action<bool, string> check)
+    {
+        // 1 文字 10px として測る
+        static int Measure(string s) => s.Length * 10;
+        check(NameFitter.Fit("short.jpg", 100, Measure) == "short.jpg", "収まる名前はそのまま");
+        string fit = NameFitter.Fit("very_long_photo_name_0012.jpeg", 150, Measure);
+        check(fit == "very_l…012.jpeg", $"拡張子と末尾の数文字を残す ({fit})");
+        string folder = NameFitter.Fit("very_long.folder_name_here", 100, Measure, keepExtension: false);
+        check(folder.EndsWith('…') && Measure(folder) <= 100, $"フォルダは末尾を省略 ({folder})");
+        check(NameFitter.Fit("abcdefghijklmnop.png", 50, Measure) == "….png", $"狭ければ拡張子だけ ({NameFitter.Fit("abcdefghijklmnop.png", 50, Measure)})");
+        check(NameFitter.Fit(".gitignore_long_name", 100, Measure).EndsWith('…'), "先頭の「.」は拡張子扱いしない");
     }
 
     // ---- GridLayout ----
