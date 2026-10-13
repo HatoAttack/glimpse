@@ -40,13 +40,16 @@ internal sealed class EditCanvas : Panel
         base.Dispose(disposing);
     }
 
-    /// <summary>width × height の画像を、キャンバスいっぱいに中央で収める。表示の大きさを返す</summary>
+    /// <summary>画像の周りに空ける余白（キャンバスの px）。画像の端にある四隅のつかむ点も、枠に掛からずに掴めるように</summary>
+    private int ImageMargin => HandleRadius * 2 + 2;
+
+    /// <summary>width × height の画像を、キャンバスに周りの余白を空けて中央で収める。表示の大きさを返す</summary>
     public Size FitImage(int width, int height)
     {
         int cw = Math.Max(1, ClientSize.Width), ch = Math.Max(1, ClientSize.Height);
         _imageWidth = width;
         _imageHeight = height;
-        Zoom = Math.Min((double)cw / width, (double)ch / height);
+        Zoom = Math.Min((double)Math.Max(1, cw - ImageMargin * 2) / width, (double)Math.Max(1, ch - ImageMargin * 2) / height);
         int dw = Math.Max(1, (int)Math.Round(width * Zoom)), dh = Math.Max(1, (int)Math.Round(height * Zoom));
         _offX = (cw - dw) / 2.0;
         _offY = (ch - dh) / 2.0;

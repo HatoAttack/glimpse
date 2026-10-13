@@ -501,7 +501,7 @@ public sealed class ThumbnailGrid : Control
     private Rectangle NameTextBounds(int index, Rectangle cell)
     {
         var name = NameArea(cell);
-        int textWidth = Math.Min(name.Width, TextRenderer.MeasureText(CellName(index), Font).Width);
+        int textWidth = Math.Min(name.Width, TextRenderer.MeasureText(DisplayName(index, name.Width), Font, Size.Empty, NameFlags).Width);
         return new Rectangle(name.X + (name.Width - textWidth) / 2, name.Y, textWidth, name.Height);
     }
 
@@ -568,8 +568,7 @@ public sealed class ThumbnailGrid : Control
         {
             if (IsArchiveTile(index)) DrawArchiveIcon(g, FolderIconBounds(area), CellPath(index));
             else DrawFolderIcon(g, FolderIconBounds(area));
-            TextRenderer.DrawText(g, CellName(index), Font, NameArea(cell), nameColor,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
+            DrawName(g, index, cell, nameColor);
             return;
         }
 
@@ -597,9 +596,21 @@ public sealed class ThumbnailGrid : Control
 
         if (IsMarked(index)) DrawCheckBadge(g, area);
 
-        TextRenderer.DrawText(g, CellName(index), Font, NameArea(cell), nameColor,
-            TextFormatFlags.HorizontalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix);
+        DrawName(g, index, cell, nameColor);
     }
+
+    private const TextFormatFlags NameFlags = TextFormatFlags.HorizontalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.SingleLine | TextFormatFlags.NoPrefix;
+
+    private void DrawName(Graphics g, int index, Rectangle cell, Color color)
+    {
+        var area = NameArea(cell);
+        TextRenderer.DrawText(g, DisplayName(index, area.Width), Font, area, color, NameFlags);
+    }
+
+    /// <summary>セルに出す名前。長ければ拡張子を残して途中を「…」にする（普通のフォルダは末尾を「…」）</summary>
+    private string DisplayName(int index, int width) =>
+        NameFitter.Fit(CellName(index), width, s => TextRenderer.MeasureText(s, Font, Size.Empty, NameFlags).Width,
+            keepExtension: !IsFolder(index) || IsArchiveTile(index));
 
     /// <summary>フォルダのアイコンの位置（サムネイル枠の中央、枠の 6 割の大きさ）</summary>
     private Rectangle FolderIconBounds(Rectangle area)
