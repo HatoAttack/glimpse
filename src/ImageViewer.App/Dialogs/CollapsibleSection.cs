@@ -15,6 +15,7 @@ internal sealed class CollapsibleSection : FlowLayoutPanel
         FlowDirection = FlowDirection.TopDown;
         WrapContents = false;
         AutoSize = true;
+        AutoSizeMode = AutoSizeMode.GrowAndShrink; // 既定の GrowOnly だと、閉じても初めの高さ（約 100px）が残る
         Margin = Padding.Empty;
         _body = EditDialogShell.Group("", vertical: true, controls);
         _body.Margin = new Padding(3, 0, 3, 3);
