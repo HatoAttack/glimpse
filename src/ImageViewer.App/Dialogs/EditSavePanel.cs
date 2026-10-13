@@ -44,7 +44,7 @@ internal sealed class EditSavePanel
     /// <summary>保存したファイルの数（一覧の読み直しの判断用）</summary>
     public int SavedCount { get; private set; }
 
-    /// <param name="hint">保存先の枠の中に出す説明（どんな名前で保存するか）</param>
+    /// <param name="hint">保存のボタンの上に出す説明（どんな名前で保存するか）</param>
     /// <param name="withSaveAll">一括の「全部を保存 / 全部を上書き」も置く</param>
     public EditSavePanel(Form form, int imageCount, string hint, string lastFolder, bool lastToCustom, bool withSaveAll)
     {
@@ -63,12 +63,16 @@ internal sealed class EditSavePanel
         _folder.Enter += (_, _) => _toCustom.Checked = true;
         _folder.Text = lastFolder;
         (lastToCustom && lastFolder.Length > 0 ? _toCustom : _toSame).Checked = true;
-        var outputHint = new Label { AutoSize = true, MaximumSize = new Size(190, 0), Text = hint, ForeColor = Theme.Current.TextMuted };
         var outStack = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false, Dock = DockStyle.Fill };
-        outStack.Controls.AddRange(new Control[] { _toSame, _toCustom, _folder, browse, outputHint });
+        outStack.Controls.AddRange(new Control[] { _toSame, _toCustom, _folder, browse });
         var outBox = new GroupBox { Text = "保存先", AutoSize = true, Width = 210, Padding = new Padding(8), Margin = new Padding(3, 8, 3, 3) };
         outBox.Controls.Add(outStack);
         FolderBox = outBox;
+
+        // どんな名前で保存するかの説明は、場所を取らないように保存のボタンの上に出す
+        var toolTip = new ToolTip { AutoPopDelay = 20000 };
+        foreach (var button in new[] { _save, _saveOver, _saveNext, _saveNextOver }) toolTip.SetToolTip(button, hint);
+        form.FormClosed += (_, _) => toolTip.Dispose();
 
         _save.Click += (_, _) => SaveRequested?.Invoke(false, false);
         _saveOver.Click += (_, _) => SaveRequested?.Invoke(false, true);
