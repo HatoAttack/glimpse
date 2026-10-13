@@ -31,6 +31,8 @@ static class ThumbnailTests
         check(folder.EndsWith('…') && Measure(folder) <= 100, $"フォルダは末尾を省略 ({folder})");
         check(NameFitter.Fit("abcdefghijklmnop.png", 50, Measure) == "….png", $"狭ければ拡張子だけ ({NameFitter.Fit("abcdefghijklmnop.png", 50, Measure)})");
         check(NameFitter.Fit(".gitignore_long_name", 100, Measure).EndsWith('…'), "先頭の「.」は拡張子扱いしない");
+        string emoji = NameFitter.Fit("😀😀😀😀😀😀😀😀😀.jpg", 110, Measure);
+        check(emoji == "😀…😀😀.jpg", $"絵文字の途中で切らない ({emoji})");
     }
 
     // ---- GridLayout ----

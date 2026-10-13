@@ -21,6 +21,7 @@ public static class NameFitter
         string stem = name[..dot], ext = name[dot..];
         // 拡張子の前の数文字も残す（「IMG_0012.jpg」と「IMG_0013.jpg」を見分けられるように）
         int tailLength = ext.Length == 0 ? 0 : Math.Min(stem.Length / 2, 3);
+        if (tailLength > 0 && tailLength < stem.Length && char.IsLowSurrogate(stem[^tailLength])) tailLength++; // 絵文字などの途中で切らない
         string tail = stem[^tailLength..] + ext;
         string head = stem[..^tailLength];
 
