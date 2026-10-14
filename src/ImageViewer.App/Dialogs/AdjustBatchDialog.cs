@@ -1,5 +1,5 @@
 // まとめて補正のダイアログ（一覧のフッターの「補正」から）。
-// 左に代表の 1 枚（◀ ▶ で選んだ画像を切り替えて確かめられる）、右に 1 枚表示と同じ補正パネル、下に出力先と「元 → 出力」の一覧。
+// 左に代表の 1 枚（◀ ▶ で選んだ画像を切り替えて確かめられる）、右に 1 枚表示と同じ補正パネル、下に「元 → 出力」の一覧と、出力先・ボタン。
 // プレビューは画面の大きさに縮小して読んだものに補正をかける（保存は原寸で読み直してかける）
 using ImageViewer.App.Theming;
 using ImageViewer.App.Viewer;
@@ -44,11 +44,11 @@ public sealed class AdjustBatchDialog : ThemedForm
     {
         View = View.Details, VirtualMode = true, FullRowSelect = true, Dock = DockStyle.Fill, HeaderStyle = ColumnHeaderStyle.Nonclickable,
     };
-    private readonly Label _summary = new() { AutoSize = true, Dock = DockStyle.Left, Padding = new Padding(0, 6, 0, 0) };
-    private readonly ProgressBar _progress = new() { Dock = DockStyle.Bottom, Height = 6, Visible = false, Style = ProgressBarStyle.Continuous };
+    private readonly Label _summary = new() { AutoSize = true, Margin = new Padding(3, 6, 3, 3) };
+    private readonly ProgressBar _progress = new() { Dock = DockStyle.Fill, Height = 6, Visible = false, Style = ProgressBarStyle.Continuous, Margin = new Padding(3, 4, 3, 0) };
     private readonly Button _run = new() { Text = "実行", Width = 110 };
     private readonly Button _runOver = new() { Text = "上書き保存", Width = 110 };
-    private readonly Button _close = new() { Text = "閉じる", AutoSize = true };
+    private readonly Button _close = new() { Text = "閉じる", Width = 110 };
     private readonly Control[] _inputs;
 
     /// <summary>実行したときの補正の値（「前回の補正」として覚える用。1 枚ずつ自動のときレベルは既定）。実行していなければ null</summary>
@@ -74,7 +74,7 @@ public sealed class AdjustBatchDialog : ThemedForm
         KeyPreview = true;
         var screen = Screen.FromPoint(Cursor.Position).WorkingArea;
         Size = new Size(Math.Min(1100, screen.Width * 9 / 10), Math.Min(940, screen.Height * 9 / 10));
-        MinimumSize = new Size(760, 600);
+        MinimumSize = new Size(900, 600);
 
         var top = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, Padding = new Padding(6, 4, 6, 0) };
         _prev.Click += async (_, _) => await StepAsync(-1);
@@ -121,16 +121,18 @@ public sealed class AdjustBatchDialog : ThemedForm
             RebuildAdjusted();
         };
 
+        // 出力先の枠は中身の幅だけにして、右の空いたところにボタンを置く
         var outputGroup = Group("出力先",
             Flow(_output.FolderRow),
-            Flow(_output.ExistingRow.Append(Hint("形式は元のまま。HEIC・RAW など書き出せない形式は同じ名前の JPG に")).ToArray()));
-        outputGroup.Dock = DockStyle.Bottom;
+            Flow(_output.ExistingRow),
+            Flow(Hint("形式は元のまま。HEIC・RAW など書き出せない形式は同じ名前の JPG に")));
 
         _list.Columns.Add("元の画像", 260);
         _list.Columns.Add("出力", 260);
         _list.Columns.Add("", 280);
         _list.RetrieveVirtualItem += OnRetrieveItem;
-        var listHost = new Panel { Dock = DockStyle.Bottom, Height = LogicalToDeviceUnits(100), Padding = new Padding(10, 4, 10, 0) };
+        // 一覧は確かめる用なので低めに（見出し + 1 枚なら 1 行、複数なら 3 行ほど。残りはスクロール）
+        var listHost = new Panel { Dock = DockStyle.Bottom, Height = LogicalToDeviceUnits(paths.Count > 1 ? 84 : 52), Padding = new Padding(10, 4, 10, 0) };
         listHost.Controls.Add(_list);
 
         CancelButton = _close;
@@ -139,22 +141,34 @@ public sealed class AdjustBatchDialog : ThemedForm
         _runOver.Click += async (_, _) => await RunAsync(overwriteSources: true);
         new ToolTip().SetToolTip(_runOver, "出力先の設定に関わらず、元の画像を補正した画像で置き換えます（元には戻せません）。\n" +
                                            "HEIC・RAW など書き出せない形式は、元を残して同じ名前の JPG に保存します");
-        // 「実行」の下に「上書き保存」を置く
-        var runStack = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false, Margin = Padding.Empty };
-        runStack.Controls.AddRange(new Control[] { _run, _runOver });
-        var buttons = new FlowLayoutPanel { FlowDirection = FlowDirection.RightToLeft, Dock = DockStyle.Right, AutoSize = true, WrapContents = false };
-        buttons.Controls.AddRange(new Control[] { _close, runStack });
-        var bottom = new Panel { Dock = DockStyle.Bottom, Height = 78, Padding = new Padding(10, 6, 10, 6) };
-        bottom.Controls.Add(_summary);
-        bottom.Controls.Add(buttons);
-        bottom.Controls.Add(_progress);
+        // 右下に「実行」「上書き保存」「閉じる」を縦に並べる
+        var buttons = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.TopDown, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = false,
+            Anchor = AnchorStyles.Top | AnchorStyles.Right, Margin = new Padding(12, 8, 0, 0),
+        };
+        buttons.Controls.AddRange(new Control[] { _run, _runOver, _close });
+        // 左に出力先と件数、右にボタン。高さは中身に合わせる（固定にするとボタンが隠れる）
+        var bottom = new TableLayoutPanel
+        {
+            Dock = DockStyle.Bottom, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2, RowCount = 3,
+            Padding = new Padding(10, 4, 10, 8),
+        };
+        bottom.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        for (int i = 0; i < 3; i++) bottom.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        bottom.Controls.Add(outputGroup, 0, 0);
+        bottom.Controls.Add(_summary, 0, 1);
+        bottom.Controls.Add(buttons, 1, 0);
+        bottom.SetRowSpan(buttons, 2);
+        bottom.Controls.Add(_progress, 0, 2);
+        bottom.SetColumnSpan(_progress, 2);
 
-        // Dock は後から追加したものが外側になる: 下（ボタン → 出力先 → 一覧）・上・右の順に外から取り、残りがプレビュー
+        // Dock は後から追加したものが外側になる: 下（出力先・ボタン → 一覧）・上・右の順に外から取り、残りがプレビュー
         Controls.Add(_canvas);
         Controls.Add(side);
         Controls.Add(top);
         Controls.Add(listHost);
-        Controls.Add(outputGroup);
         Controls.Add(bottom);
         _inputs = new Control[] { side, outputGroup, _prev, _next };
 
@@ -471,18 +485,24 @@ public sealed class AdjustBatchDialog : ThemedForm
 
     private static FlowLayoutPanel Flow(params Control[] items)
     {
-        var row = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, WrapContents = true, Margin = Padding.Empty };
+        var row = new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = false, Margin = Padding.Empty };
         row.Controls.AddRange(items);
         return row;
     }
 
+    /// <summary>行を縦に並べた、中身の大きさの枠</summary>
     private static GroupBox Group(string title, params Control[] rows)
     {
-        var box = new GroupBox { Text = title, Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(8, 4, 8, 4) };
-        // Dock=Top は後から追加したものが上に来るので逆順に追加
-        foreach (var r in rows.Reverse()) box.Controls.Add(r);
+        var stack = new FlowLayoutPanel
+        {
+            FlowDirection = FlowDirection.TopDown, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = false,
+            Dock = DockStyle.Fill, Margin = Padding.Empty,
+        };
+        stack.Controls.AddRange(rows);
+        var box = new GroupBox { Text = title, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = new Padding(8, 4, 8, 4), Margin = Padding.Empty };
+        box.Controls.Add(stack);
         return box;
     }
 
-    private static Label Hint(string text) => new() { Text = text, AutoSize = true, ForeColor = Theme.Current.TextMuted, Margin = new Padding(8, 7, 3, 3) };
+    private static Label Hint(string text) => new() { Text = text, AutoSize = true, ForeColor = Theme.Current.TextMuted, Margin = new Padding(3, 2, 3, 3) };
 }
