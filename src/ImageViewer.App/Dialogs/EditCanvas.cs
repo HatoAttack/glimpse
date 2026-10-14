@@ -97,4 +97,19 @@ internal sealed class EditCanvas : Panel
             g.DrawRectangle(border, p.X - hs, p.Y - hs, hs * 2, hs * 2);
         }
     }
+
+    /// <summary>回すためのつまみを描く（from から線を引いた先 handle に、白い丸に青い縁）</summary>
+    public void DrawRotateHandle(Graphics g, (double X, double Y) from, (double X, double Y) handle)
+    {
+        using var fill = new SolidBrush(Color.White);
+        using var border = new Pen(Color.FromArgb(0, 120, 215), 1);
+        int hs = HandleRadius - 2;
+        var p = ToCanvasPoint(handle.X, handle.Y);
+        var smooth = g.SmoothingMode;
+        g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        g.DrawLine(border, ToCanvasPoint(from.X, from.Y), p);
+        g.FillEllipse(fill, p.X - hs, p.Y - hs, hs * 2, hs * 2);
+        g.DrawEllipse(border, p.X - hs, p.Y - hs, hs * 2, hs * 2);
+        g.SmoothingMode = smooth;
+    }
 }

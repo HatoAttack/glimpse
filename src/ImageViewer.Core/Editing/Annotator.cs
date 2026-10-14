@@ -30,6 +30,42 @@ public sealed record Annotation(AnnotationKind Kind, double X0, double Y0, doubl
     public double Height => Math.Abs(Y1 - Y0);
     public double Length => Math.Sqrt((X1 - X0) * (X1 - X0) + (Y1 - Y0) * (Y1 - Y0));
 
+    /// <summary>枠の傾き（度。時計回りが正）。(X0, Y0)〜(X1, Y1) は傾ける前の四角で、その中心を軸に回す。枠のほかは使わない</summary>
+    public double Angle { get; init; }
+
+    /// <summary>
+    /// 枠の左右の辺の倒れ（度。-MaxSkew〜MaxSkew。正なら上の辺が右へずれる平行四辺形）。上下の辺は横のまま、幅（Width）と高さ（Height）も変えない。
+    /// 線の太さはどの辺も同じ。倒してから Angle だけ回す。枠のほかは使わない
+    /// </summary>
+    public double Skew { get; init; }
+
+    /// <summary>左右の辺の倒れの tan（縦に 1 進むと横にどれだけずれるか）</summary>
+    public double Shear => Kind == AnnotationKind.Frame ? Math.Tan(Math.Clamp(Skew, -Annotator.MaxSkew, Annotator.MaxSkew) * Math.PI / 180) : 0;
+
+    /// <summary>傾けた枠か</summary>
+    public bool Rotated => Kind == AnnotationKind.Frame && Angle % 360 != 0;
+
+    /// <summary>枠の中心</summary>
+    public (double X, double Y) Center => ((X0 + X1) / 2, (Y0 + Y1) / 2);
+
+    /// <summary>傾ける前の枠での位置（中心からの横 u・縦 v）を、画像の位置にする</summary>
+    public (double X, double Y) FromLocal(double u, double v)
+    {
+        double rad = Angle * Math.PI / 180, cos = Math.Cos(rad), sin = Math.Sin(rad);
+        var (cx, cy) = Center;
+        return (cx + u * cos - v * sin, cy + u * sin + v * cos);
+    }
+
+    /// <summary>枠の四隅（倒して傾けた後。左上・右上・右下・左下の順）</summary>
+    public (double X, double Y)[] Corners
+    {
+        get
+        {
+            double hx = Width / 2, hy = Height / 2, s = Shear * hy; // 上の辺は右へ s、下の辺は左へ s ずれる
+            return new[] { FromLocal(-hx + s, -hy), FromLocal(hx + s, -hy), FromLocal(hx - s, hy), FromLocal(-hx - s, hy) };
+        }
+    }
+
     /// <summary>文字（番号は数字）。改行で行を分ける</summary>
     public string Text { get; init; } = "";
 
@@ -102,11 +138,16 @@ public sealed record Annotation(AnnotationKind Kind, double X0, double Y0, doubl
         }
     }
 
-    /// <summary>形が収まる四角（線の太さは含めない）</summary>
+    /// <summary>形が収まる四角（線の太さは含めない。倒した・傾けた枠は四隅が収まる四角）</summary>
     public (double Left, double Top, double Right, double Bottom) Bounds
     {
         get
         {
+            if (Rotated || Shear != 0)
+            {
+                var c = Corners;
+                return (c.Min(p => p.X), c.Min(p => p.Y), c.Max(p => p.X), c.Max(p => p.Y));
+            }
             if (!IsText) return (Math.Min(X0, X1), Math.Min(Y0, Y1), Math.Max(X0, X1), Math.Max(Y0, Y1));
             var (x, y, w, h) = Body;
             return HasTail ? (Math.Min(x, X1), Math.Min(y, Y1), Math.Max(x + w, X1), Math.Max(y + h, Y1)) : (x, y, x + w, y + h);
@@ -136,6 +177,8 @@ internal readonly struct AnnotationShape
     // 枠: 中心と、外側・内側の四角（半分の大きさと角の丸み）。内側が無い（線が太くて埋まる）なら _hole は false
     private readonly double _cx, _cy, _ohx, _ohy, _or, _ihx, _ihy, _ir;
     private readonly bool _hole;
+    // 傾けた枠: 点を傾ける前の向きへ戻すための cos・sin。倒した枠: 左右の辺の倒れの tan（0 なら四角）
+    private readonly double _cos, _sin, _k;
     // 矢印: 始点・向き（単位ベクトル）・軸（始点からの長さ）・軸の太さの半分・先端の三角（根元の位置と幅の半分）
     private readonly double _sx, _sy, _ux, _uy, _length, _shaftEnd, _half, _headBase, _headHalf;
     private readonly bool _shaft;
@@ -186,7 +229,25 @@ internal readonly struct AnnotationShape
             _ihy = hy - t / 2;
             _ir = Math.Max(0, r - t / 2);
             _hole = _ihx > 0 && _ihy > 0;
+            double rad = a.Angle * Math.PI / 180;
+            (_cos, _sin) = (Math.Cos(rad), Math.Sin(rad));
             Reach = t / 2;
+            _k = a.Shear;
+            if (_k == 0) return;
+            // 倒した枠: 辺を垂直に d だけ外へ出すと、上下の辺は d、左右の辺は横に d × stretch だけ広がる。
+            // 角を丸めるときは、丸みの分だけ内へ縮めた平行四辺形から丸みの分だけ離れた所を縁にする（_ohx 〜 _ihy は縮めた後の半分の大きさ）
+            double stretch = Math.Sqrt(1 + _k * _k);
+            r = Math.Clamp(a.CornerRadius, 0, Math.Min(hy, hx / stretch));
+            _or = r > 0 ? r + t / 2 : 0;
+            _ohx = hx - (_or - t / 2) * stretch;
+            _ohy = hy - (_or - t / 2);
+            _ir = Math.Max(0, r - t / 2);
+            _ihx = hx - (_ir + t / 2) * stretch;
+            _ihy = hy - (_ir + t / 2);
+            _hole = hx - t / 2 * stretch > 0 && hy - t / 2 > 0;
+            // 尖った角は線の外側が角の二等分線の向きに伸びる（いちばん鋭い角 90° - 倒れ の半分で決まる）
+            double sharp = (Math.PI / 2 - Math.Atan(Math.Abs(_k))) / 2;
+            Reach = t / 2 / Math.Sin(sharp);
         }
         else
         {
@@ -218,7 +279,13 @@ internal readonly struct AnnotationShape
         }
         if (_kind == AnnotationKind.Frame)
         {
-            double px = x - _cx, py = y - _cy;
+            double ox = x - _cx, oy = y - _cy;
+            double px = ox * _cos + oy * _sin, py = -ox * _sin + oy * _cos; // 傾ける前の向きで測る
+            if (_k != 0)
+            {
+                double edge = Parallelogram(px, py, _ohx, _ohy, _k) - _or;
+                return _hole ? Math.Max(edge, -(Parallelogram(px, py, _ihx, _ihy, _k) - _ir)) : edge;
+            }
             double outer = RoundedBox(px, py, _ohx, _ohy, _or);
             return _hole ? Math.Max(outer, -RoundedBox(px, py, _ihx, _ihy, _ir)) : outer;
         }
@@ -237,6 +304,34 @@ internal readonly struct AnnotationShape
         double qx = Math.Abs(px) - (hx - r), qy = Math.Abs(py) - (hy - r);
         double ox = Math.Max(qx, 0), oy = Math.Max(qy, 0);
         return Math.Sqrt(ox * ox + oy * oy) + Math.Min(Math.Max(qx, qy), 0) - r;
+    }
+
+    /// <summary>
+    /// 中心が原点の平行四辺形までの距離（上下の辺は v = ±hy で横幅の半分が hx、上の辺が右へ k × hy ずれる）。
+    /// 大きさ 0 の（点や線になった）ものでも距離は測れる
+    /// </summary>
+    private static double Parallelogram(double px, double py, double hx, double hy, double k)
+    {
+        double s = k * hy;
+        double ax = -hx + s, ay = -hy, bx = hx + s, by = -hy, cx = hx - s, cy = hy, dx = -hx - s, dy = hy;
+        double best = double.MaxValue;
+        bool inside = false;
+        Edge(ax, ay, bx, by);
+        Edge(bx, by, cx, cy);
+        Edge(cx, cy, dx, dy);
+        Edge(dx, dy, ax, ay);
+        double dist = Math.Sqrt(best);
+        return inside ? -dist : dist;
+
+        // 辺 (x0, y0)→(x1, y1) までの距離の 2 乗を best に、点から横へ伸ばした線が辺を横切るかを inside に入れる
+        void Edge(double x0, double y0, double x1, double y1)
+        {
+            double ex = x1 - x0, ey = y1 - y0, wx = px - x0, wy = py - y0, len = ex * ex + ey * ey;
+            double k2 = len > 0 ? Math.Clamp((wx * ex + wy * ey) / len, 0, 1) : 0;
+            double qx = wx - ex * k2, qy = wy - ey * k2;
+            best = Math.Min(best, qx * qx + qy * qy);
+            if ((y0 > py) != (y1 > py) && px < x0 + (py - y0) * ex / ey) inside = !inside;
+        }
     }
 
     /// <summary>しっぽの三角（根元の 2 点と先）までの距離</summary>
@@ -283,6 +378,9 @@ internal readonly struct AnnotationShape
 public static class Annotator
 {
     public const double MinHeadSize = 2, MaxHeadSize = 8, DefaultHeadSize = 4;
+
+    /// <summary>枠の左右の辺を倒せるいちばん大きな角度（度）</summary>
+    public const double MaxSkew = 75;
 
     /// <summary>影の濃さ（0〜1）</summary>
     private const double ShadowAlpha = 0.5;
