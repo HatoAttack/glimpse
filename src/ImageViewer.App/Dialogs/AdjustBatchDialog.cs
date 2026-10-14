@@ -74,7 +74,8 @@ public sealed class AdjustBatchDialog : ThemedForm
         KeyPreview = true;
         var screen = Screen.FromPoint(Cursor.Position).WorkingArea;
         Size = new Size(Math.Min(1100, screen.Width * 9 / 10), Math.Min(940, screen.Height * 9 / 10));
-        MinimumSize = new Size(900, 600);
+        // 出力先の枠とボタンを横に並べられる幅。作業領域がそれより狭い画面では画面に収める
+        MinimumSize = new Size(Math.Min(900, screen.Width), Math.Min(600, screen.Height));
 
         var top = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Top, Padding = new Padding(6, 4, 6, 0) };
         _prev.Click += async (_, _) => await StepAsync(-1);
@@ -148,14 +149,15 @@ public sealed class AdjustBatchDialog : ThemedForm
             Anchor = AnchorStyles.Top | AnchorStyles.Right, Margin = new Padding(12, 8, 0, 0),
         };
         buttons.Controls.AddRange(new Control[] { _run, _runOver, _close });
-        // 左に出力先と件数、右にボタン。高さは中身に合わせる（固定にするとボタンが隠れる）
+        // 左に出力先と件数、右にボタン。高さは中身に合わせる（固定にするとボタンが隠れる）。
+        // 幅が足りないときは出力先の枠の右側が切れるようにして、ボタンの列は必ず見えるようにする
         var bottom = new TableLayoutPanel
         {
             Dock = DockStyle.Bottom, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2, RowCount = 3,
             Padding = new Padding(10, 4, 10, 8),
         };
-        bottom.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        bottom.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         for (int i = 0; i < 3; i++) bottom.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         bottom.Controls.Add(outputGroup, 0, 0);
         bottom.Controls.Add(_summary, 0, 1);
