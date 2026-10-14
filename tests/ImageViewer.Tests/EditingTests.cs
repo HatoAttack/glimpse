@@ -338,6 +338,27 @@ static class EditingTests
             check(img[50, 10] == Red && img[20, 40] == Blue && img[50, 40] == Blue, "枠: 傾けた枠を描ける");
         }
         check(frame.Corners[0] == (20, 20) && frame.Corners[2] == (80, 60), "枠: 傾けていない枠の四隅は (X0, Y0)〜(X1, Y1)");
+        var skewed = frame with { Skew = 45 }; // 上の辺は右へ 20、下の辺は左へ 20 ずれる
+        var sc = skewed.Corners;
+        check(Math.Abs(sc[0].X - 40) < 1e-9 && Math.Abs(sc[1].X - 100) < 1e-9 && Math.Abs(sc[2].X - 60) < 1e-9 && Math.Abs(sc[3].X - 0) < 1e-9 && sc[0].Y == 20 && sc[2].Y == 60,
+            "枠: 倒すと上の辺が右へ、下の辺が左へずれた平行四辺形になる（幅・高さはそのまま）");
+        // 左の辺の真ん中は (20, 40)。辺に垂直（左上へ）に太さの半分 2 だけ離れた所が縁
+        check(Math.Abs(skewed.Distance(20, 40) + 2) < 1e-6 && Math.Abs(skewed.Distance(20 - Math.Sqrt(2), 40 - Math.Sqrt(2))) < 1e-6
+              && Math.Abs(skewed.Distance(70, 20) + 2) < 1e-6 && skewed.Distance(30, 50) > 0,
+            "枠: 倒した枠も線の太さはどの辺も同じ（左右の辺から垂直に測る）");
+        check((frame with { Skew = 999 }).Shear == Math.Tan(Annotator.MaxSkew * Math.PI / 180) && (frame with { Skew = 30, Kind = AnnotationKind.Arrow }).Shear == 0,
+            "枠: 倒せるのは ±75° まで。枠のほかは倒さない");
+        using (var img = new Image<Rgba32>(100, 80, Blue))
+        {
+            Annotator.Draw(img, new[] { skewed });
+            check(img[70, 20] == Red && img[19, 40] == Red && img[50, 40] == Blue && img[50, 30] == Blue && img[10, 25] == Blue, "枠: 倒した枠を描ける");
+        }
+        using (var img = new Image<Rgba32>(200, 100, Blue))
+        {
+            // 75° 倒すと右上の角は 15° の尖った角になり、線の外側が角の先へ 3 / sin 7.5° ≒ 23px 伸びる（角は (137.3, 40)）
+            Annotator.Draw(img, new[] { new Annotation(AnnotationKind.Frame, 60, 40, 100, 60, Red, 6, 0, 4, false) { Skew = 75 } });
+            check(img[149, 38] == Red, "枠: 大きく倒したときの尖った角の先も切れずに描く");
+        }
         check((frame with { CornerRadius = 999 }).Distance(19.5, 19.5) == (frame with { CornerRadius = 20 }).Distance(19.5, 19.5),
             "枠: 角の丸みは短い辺の半分まで");
         using (var img = new Image<Rgba32>(100, 80, Blue))
