@@ -30,6 +30,42 @@ public sealed record Annotation(AnnotationKind Kind, double X0, double Y0, doubl
     public double Height => Math.Abs(Y1 - Y0);
     public double Length => Math.Sqrt((X1 - X0) * (X1 - X0) + (Y1 - Y0) * (Y1 - Y0));
 
+    /// <summary>枠の傾き（度。時計回りが正）。(X0, Y0)〜(X1, Y1) は傾ける前の四角で、その中心を軸に回す。枠のほかは使わない</summary>
+    public double Angle { get; init; }
+
+    /// <summary>傾けた枠か</summary>
+    public bool Rotated => Kind == AnnotationKind.Frame && Angle % 360 != 0;
+
+    /// <summary>枠の中心</summary>
+    public (double X, double Y) Center => ((X0 + X1) / 2, (Y0 + Y1) / 2);
+
+    /// <summary>傾ける前の四角での位置（中心からの横 u・縦 v）を、画像の位置にする</summary>
+    public (double X, double Y) FromLocal(double u, double v)
+    {
+        double rad = Angle * Math.PI / 180, cos = Math.Cos(rad), sin = Math.Sin(rad);
+        var (cx, cy) = Center;
+        return (cx + u * cos - v * sin, cy + u * sin + v * cos);
+    }
+
+    /// <summary>画像の位置を、傾ける前の四角での位置（中心からの横 u・縦 v）にする</summary>
+    public (double U, double V) ToLocal(double x, double y)
+    {
+        double rad = Angle * Math.PI / 180, cos = Math.Cos(rad), sin = Math.Sin(rad);
+        var (cx, cy) = Center;
+        double dx = x - cx, dy = y - cy;
+        return (dx * cos + dy * sin, -dx * sin + dy * cos);
+    }
+
+    /// <summary>枠の四隅（傾けた後。左上・右上・右下・左下の順）</summary>
+    public (double X, double Y)[] Corners
+    {
+        get
+        {
+            double hx = Width / 2, hy = Height / 2;
+            return new[] { FromLocal(-hx, -hy), FromLocal(hx, -hy), FromLocal(hx, hy), FromLocal(-hx, hy) };
+        }
+    }
+
     /// <summary>文字（番号は数字）。改行で行を分ける</summary>
     public string Text { get; init; } = "";
 
@@ -102,11 +138,16 @@ public sealed record Annotation(AnnotationKind Kind, double X0, double Y0, doubl
         }
     }
 
-    /// <summary>形が収まる四角（線の太さは含めない）</summary>
+    /// <summary>形が収まる四角（線の太さは含めない。傾けた枠は四隅が収まる四角）</summary>
     public (double Left, double Top, double Right, double Bottom) Bounds
     {
         get
         {
+            if (Rotated)
+            {
+                var c = Corners;
+                return (c.Min(p => p.X), c.Min(p => p.Y), c.Max(p => p.X), c.Max(p => p.Y));
+            }
             if (!IsText) return (Math.Min(X0, X1), Math.Min(Y0, Y1), Math.Max(X0, X1), Math.Max(Y0, Y1));
             var (x, y, w, h) = Body;
             return HasTail ? (Math.Min(x, X1), Math.Min(y, Y1), Math.Max(x + w, X1), Math.Max(y + h, Y1)) : (x, y, x + w, y + h);
@@ -136,6 +177,8 @@ internal readonly struct AnnotationShape
     // 枠: 中心と、外側・内側の四角（半分の大きさと角の丸み）。内側が無い（線が太くて埋まる）なら _hole は false
     private readonly double _cx, _cy, _ohx, _ohy, _or, _ihx, _ihy, _ir;
     private readonly bool _hole;
+    // 傾けた枠: 点を傾ける前の向きへ戻すための cos・sin
+    private readonly double _cos, _sin;
     // 矢印: 始点・向き（単位ベクトル）・軸（始点からの長さ）・軸の太さの半分・先端の三角（根元の位置と幅の半分）
     private readonly double _sx, _sy, _ux, _uy, _length, _shaftEnd, _half, _headBase, _headHalf;
     private readonly bool _shaft;
@@ -186,6 +229,8 @@ internal readonly struct AnnotationShape
             _ihy = hy - t / 2;
             _ir = Math.Max(0, r - t / 2);
             _hole = _ihx > 0 && _ihy > 0;
+            double rad = a.Angle * Math.PI / 180;
+            (_cos, _sin) = (Math.Cos(rad), Math.Sin(rad));
             Reach = t / 2;
         }
         else
@@ -218,7 +263,8 @@ internal readonly struct AnnotationShape
         }
         if (_kind == AnnotationKind.Frame)
         {
-            double px = x - _cx, py = y - _cy;
+            double ox = x - _cx, oy = y - _cy;
+            double px = ox * _cos + oy * _sin, py = -ox * _sin + oy * _cos; // 傾ける前の向きで測る
             double outer = RoundedBox(px, py, _ohx, _ohy, _or);
             return _hole ? Math.Max(outer, -RoundedBox(px, py, _ihx, _ihy, _ir)) : outer;
         }

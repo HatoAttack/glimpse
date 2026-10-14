@@ -5,6 +5,7 @@
 // - 線の上（文字・番号は本体）をクリックで選ぶ。選んだものはドラッグで移動、枠は四隅・矢印は両端で形を変える。
 //   文字は四隅で本体の大きさを変える（文字が収まる大きさより小さくはならない。文字の大きさは右の欄で変える）。番号は四隅で大きさを変える。
 //   吹き出しはしっぽの先も動かせる（本体を動かしても、しっぽの先は指している所に残る）。Delete か右クリックで消す
+// - 選んだ枠は、外に出る丸いつまみか「傾き」のスライダーで回す（つまみは 1° ごと、Shift を押しながらで 15° ごと）
 // - 色・太さ・角の丸み・先端の大きさ・影・文字の大きさなどは、選んだものがあればそれを変え、無ければ次に描くものの見た目になる
 // - 選択した画像を ◀ ▶（PageUp / PageDown）で切り替え。Enter で保存して次へ。描いたものは画像ごとに覚える
 // - 「保存」は元の画像を残して別の名前で、「上書き保存」は元の画像を置き換える（確かめない。アニメ・書き出せない形式などは上書きしない）
@@ -50,8 +51,9 @@ public sealed class AnnotateDialog : ThemedForm
     private List<Annotation> _items => _edits.Current;
     private int _selected = -1;
     private readonly PendingEdits<Annotation> _edits = new();
-    private enum DragMode { None, Move, Resize, Box, Scale, Tail } // Box: 文字の本体の大きさ、Scale: 番号の大きさ、Tail: 吹き出しのしっぽの先
+    private enum DragMode { None, Move, Resize, Box, Scale, Tail, Rotate } // Box: 文字の本体の大きさ、Scale: 番号の大きさ、Tail: 吹き出しのしっぽの先、Rotate: 枠の傾き
     private DragMode _mode;
+    private double _rotateStartAngle, _rotateStartMouse; // 回し始めたときの枠の傾きと、中心から見たマウスの向き（度）
     private bool _creating;                // 新しく描いている途中（小さすぎれば離したときに消す）
     private (double X, double Y) _fixed;   // 形を変えるときに動かない点（枠・文字は対角、矢印は反対の端）
     private bool _fixedRight, _fixedBottom; // 文字・番号: 動かない角が本体の右 / 下か
@@ -89,6 +91,8 @@ public sealed class AnnotateDialog : ThemedForm
     private readonly TrackBar _thickness = Slider(1, 100);
     private readonly Label _radiusText = SliderLabel();
     private readonly TrackBar _radius = Slider(0, 200);
+    private readonly Label _angleText = SliderLabel();
+    private readonly TrackBar _angle = Slider(-180, 180);
     private readonly Label _headText = SliderLabel();
     private readonly TrackBar _head = Slider((int)(Annotator.MinHeadSize * HeadScale), (int)(Annotator.MaxHeadSize * HeadScale));
     private readonly CheckBox _shadow = new() { Text = "影を付ける", AutoSize = true };
@@ -165,6 +169,7 @@ public sealed class AnnotateDialog : ThemedForm
         foreach (var slider in new[] { _thickness, _radius, _head, _font })
             slider.ValueChanged += (_, _) => OnStyleChanged();
         _shadow.CheckedChanged += (_, _) => OnStyleChanged();
+        _angle.ValueChanged += (_, _) => OnAngleChanged();
         _text.TextChanged += (_, _) => OnStyleChanged();
         _fontBox.SelectedIndexChanged += (_, _) => OnStyleChanged();
         foreach (var (swatch, button) in new[] { (_swatch, _pickColor), (_fillSwatch, _pickFill), (_textSwatch, _pickText) })
@@ -266,8 +271,10 @@ public sealed class AnnotateDialog : ThemedForm
         _toolTip.SetToolTip(_backBalloon, "四角に、指したい所へ向かうしっぽを付けます");
 
         _styleSection = new CollapsibleSection("見た目", _lastStyleOpen, Row(_swatch, _pickColor, _fillSwatch, _pickFill), Row(_textSwatch, _pickText, _fontBox),
-            Row(_thicknessText, _thickness), Row(_radiusText, _radius), Row(_headText, _head), _shadow);
+            Row(_thicknessText, _thickness), Row(_radiusText, _radius), Row(_angleText, _angle), Row(_headText, _head), _shadow);
         side.Controls.Add(_styleSection);
+        foreach (var c in new Control[] { _angleText, _angle })
+            _toolTip.SetToolTip(c, "選んだ枠の傾き（時計回りが＋）。枠の外の丸いつまみをドラッグしても回せます（Shift で 15° ごと）");
         foreach (var c in new Control[] { _thicknessText, _thickness }) _toolTip.SetToolTip(c, "線の太さ（枠・矢印と、帯・吹き出しの縁）");
         foreach (var c in new Control[] { _radiusText, _radius }) _toolTip.SetToolTip(c, "枠・帯・吹き出しの角の丸み。短い辺の半分より大きくはなりません");
         foreach (var c in new Control[] { _headText, _head }) _toolTip.SetToolTip(c, "矢印の先端の大きさ（線の太さの何倍か）");
@@ -344,6 +351,28 @@ public sealed class AnnotateDialog : ThemedForm
         _canvas.Update();
     }
 
+    /// <summary>傾きのスライダーを動かした: 選んだ枠を回す（傾きは次に描く枠には使わない。新しい枠はいつも傾けずに描く）</summary>
+    private void OnAngleChanged()
+    {
+        if (_syncing || _saver.Busy || Selected is not { Kind: AnnotationKind.Frame } a) return;
+        _items[_selected] = a with { Angle = _angle.Value }; // 先に変える（UpdateStyleControls でスライダーを元の傾きに戻さないように）
+        UpdateStyleControls();
+        RenderPreview();
+        UpdateButtons();
+        _canvas.Update();
+    }
+
+    /// <summary>傾きのスライダーを、選んだ枠の傾きに合わせる（選んでいなければ 0）</summary>
+    private void SyncAngle()
+    {
+        int value = Selected is { Kind: AnnotationKind.Frame } a ? (int)Math.Round(a.Angle) : 0;
+        if (_angle.Value == value) return;
+        bool syncing = _syncing;
+        _syncing = true;
+        _angle.Value = Math.Clamp(value, _angle.Minimum, _angle.Maximum);
+        _syncing = syncing;
+    }
+
     /// <summary>文字・番号の本体が画像からはみ出していたら中へ戻す（文字を足した・大きくした・背景を付けたときに、端で切れないように）</summary>
     private Annotation KeepInside(Annotation a)
     {
@@ -399,6 +428,9 @@ public sealed class AnnotateDialog : ThemedForm
         _thickness.Enabled = _thicknessText.Enabled = kind is AnnotationKind.Frame or AnnotationKind.Arrow || boxed;
         _radius.Enabled = _radiusText.Enabled = kind == AnnotationKind.Frame || boxed;
         _head.Enabled = _headText.Enabled = kind == AnnotationKind.Arrow;
+        SyncAngle();
+        _angle.Enabled = _angleText.Enabled = Selected?.Kind == AnnotationKind.Frame;
+        _angleText.Text = $"傾き {_angle.Value}°";
         _font.Enabled = _fontText.Enabled = kind is AnnotationKind.Text or AnnotationKind.Number;
         _text.Enabled = _backText.Enabled = _backNone.Enabled = _backBox.Enabled = _backBalloon.Enabled = text;
         _alignText.Enabled = _alignLeft.Enabled = _alignCenter.Enabled = _alignRight.Enabled = text;
@@ -495,7 +527,8 @@ public sealed class AnnotateDialog : ThemedForm
             : Selected is not { } a ? $"描いたもの {_items.Count} 個（クリックすると選べます）"
             : a.Kind switch
             {
-                AnnotationKind.Frame => $"描いたもの {_items.Count} 個（選んだ枠: {Math.Round(a.Width)} × {Math.Round(a.Height)} px）",
+                AnnotationKind.Frame => $"描いたもの {_items.Count} 個（選んだ枠: {Math.Round(a.Width)} × {Math.Round(a.Height)} px"
+                    + (a.Rotated ? $"・傾き {Math.Round(a.Angle)}°）" : "）"),
                 AnnotationKind.Arrow => $"描いたもの {_items.Count} 個（選んだ矢印: 長さ {Math.Round(a.Length)} px）",
                 AnnotationKind.Number => $"描いたもの {_items.Count} 個（選んだ番号: {a.Text}）",
                 _ => $"描いたもの {_items.Count} 個（選んだ文字: {Math.Round(a.Body.Width)} × {Math.Round(a.Body.Height)} px。ダブルクリックで打ち直し）",
@@ -567,10 +600,30 @@ public sealed class AnnotateDialog : ThemedForm
     private static (double X, double Y)[] HandlesOf(Annotation a)
     {
         if (a.Kind == AnnotationKind.Arrow) return new[] { (a.X0, a.Y0), (a.X1, a.Y1) };
-        if (a.Kind == AnnotationKind.Frame) return new[] { (a.X0, a.Y0), (a.X1, a.Y0), (a.X1, a.Y1), (a.X0, a.Y1) };
+        if (a.Kind == AnnotationKind.Frame) return a.Corners;
         var (x, y, w, h) = a.Body;
         var corners = new[] { (x, y), (x + w, y), (x + w, y + h), (x, y + h) };
         return a.HasTail ? corners.Append((a.X1, a.Y1)).ToArray() : corners;
+    }
+
+    /// <summary>
+    /// 枠を回すつまみ: 線を引く元（辺の中点）とつまみの位置。上の辺の外に出す（キャンバスからはみ出すなら下の辺の外）
+    /// </summary>
+    private ((double X, double Y) From, (double X, double Y) Handle) RotateHandleOf(Annotation a)
+    {
+        double hy = a.Height / 2, gap = _canvas.HandleRadius * 3 / _canvas.Zoom + a.Thickness / 2;
+        var top = a.FromLocal(0, -hy - gap);
+        var (cx, cy) = _canvas.ImageToCanvas(top.X, top.Y);
+        int m = _canvas.HandleRadius;
+        if (cx >= m && cy >= m && cx <= _canvas.ClientSize.Width - m && cy <= _canvas.ClientSize.Height - m) return (a.FromLocal(0, -hy), top);
+        return (a.FromLocal(0, hy), a.FromLocal(0, hy + gap));
+    }
+
+    /// <summary>枠の中心から見た点の向き（度）</summary>
+    private static double AngleAround(Annotation a, double x, double y)
+    {
+        var (cx, cy) = a.Center;
+        return Math.Atan2(y - cy, x - cx) * 180 / Math.PI;
     }
 
     /// <summary>長さ size のものを 0〜limit に収めたときの始まりの位置（収まらない大きさなら中央に置く）</summary>
@@ -595,7 +648,13 @@ public sealed class AnnotateDialog : ThemedForm
         var g = e.Graphics;
         _canvas.DrawDisplay(g, _display);
         // 選んだものだけ、つかむ点を出す
-        if (_selected >= 0 && _selected < _items.Count) _canvas.DrawHandles(g, HandlesOf(_items[_selected]));
+        if (Selected is not { } a) return;
+        if (a.Kind == AnnotationKind.Frame)
+        {
+            var (from, handle) = RotateHandleOf(a);
+            _canvas.DrawRotateHandle(g, from, handle);
+        }
+        _canvas.DrawHandles(g, HandlesOf(a));
     }
 
     // ---- マウス ----
@@ -631,6 +690,14 @@ public sealed class AnnotateDialog : ThemedForm
         // 選んだもののつかむ点なら形を変える（しっぽの先が角に重なっていたら、しっぽの先を優先する）
         if (Selected is { } a)
         {
+            if (a.Kind == AnnotationKind.Frame && _canvas.HitsHandle(e.X, e.Y, RotateHandleOf(a).Handle))
+            {
+                _creating = false;
+                _mode = DragMode.Rotate;
+                _rotateStartAngle = a.Angle;
+                _rotateStartMouse = AngleAround(a, ix, iy);
+                return;
+            }
             var handles = HandlesOf(a);
             for (int i = handles.Length - 1; i >= 0; i--)
             {
@@ -642,7 +709,7 @@ public sealed class AnnotateDialog : ThemedForm
                     return;
                 }
                 _mode = a.Kind == AnnotationKind.Text ? DragMode.Box : a.IsText ? DragMode.Scale : DragMode.Resize;
-                _fixed = handles[a.IsText ? (i + 2) % 4 : (i + handles.Length / 2) % handles.Length]; // 枠・文字は対角、矢印は反対の端を固定
+                _fixed = handles[a.Kind == AnnotationKind.Arrow ? 1 - i : (i + 2) % 4]; // 枠・文字は対角、矢印は反対の端を固定
                 _fixedRight = i is 0 or 3;
                 _fixedBottom = i is 0 or 1;
                 _dragTip = i == 1;
@@ -713,6 +780,7 @@ public sealed class AnnotateDialog : ThemedForm
         else if (_mode == DragMode.Box) DoBox(e);
         else if (_mode == DragMode.Scale) DoScale(e);
         else if (_mode == DragMode.Tail) DoTail(e);
+        else if (_mode == DragMode.Rotate) DoRotate(e);
         else DoResize(e);
         RenderPreview();
         UpdateButtons();
@@ -755,9 +823,10 @@ public sealed class AnnotateDialog : ThemedForm
             _moveLast = (_moveLast.X + mx, _moveLast.Y + my);
             return;
         }
-        // 画像の外へ出ない範囲で動かす
-        double dx = Math.Clamp(ix - _moveLast.X, -Math.Min(a.X0, a.X1), _stepper.Image!.Width - Math.Max(a.X0, a.X1));
-        double dy = Math.Clamp(iy - _moveLast.Y, -Math.Min(a.Y0, a.Y1), _stepper.Image.Height - Math.Max(a.Y0, a.Y1));
+        // 画像の外へ出ない範囲で動かす（傾けた枠は四隅が収まる四角で見る。画像より大きければ動かさない）
+        var (left, top, right, bottom) = a.Bounds;
+        double dx = Math.Clamp(ix - _moveLast.X, Math.Min(0, -left), Math.Max(0, _stepper.Image!.Width - right));
+        double dy = Math.Clamp(iy - _moveLast.Y, Math.Min(0, -top), Math.Max(0, _stepper.Image.Height - bottom));
         _items[_selected] = a.Offset(dx, dy);
         _moveLast = (_moveLast.X + dx, _moveLast.Y + dy);
     }
@@ -804,6 +873,18 @@ public sealed class AnnotateDialog : ThemedForm
         _items[_selected] = _items[_selected] with { X1 = mx, Y1 = my };
     }
 
+    /// <summary>枠: 中心を軸に、マウスが回った分だけ回す（1° ごと。Shift を押している間は 15° ごと）</summary>
+    private void DoRotate(MouseEventArgs e)
+    {
+        var a = _items[_selected];
+        var (mx, my) = _canvas.CanvasToImage(e.X, e.Y);
+        double step = (ModifierKeys & Keys.Shift) != 0 ? 15 : 1;
+        double angle = Math.Round((_rotateStartAngle + AngleAround(a, mx, my) - _rotateStartMouse) / step) * step;
+        angle = angle - 360 * Math.Ceiling((angle - 180) / 360); // -180 より大きく 180 以下に
+        _items[_selected] = a with { Angle = angle };
+        UpdateStyleControls(); // 傾きのスライダーも合わせる
+    }
+
     private void DoResize(MouseEventArgs e)
     {
         var (fx, fy) = _fixed;
@@ -812,9 +893,13 @@ public sealed class AnnotateDialog : ThemedForm
         if (a.Kind == AnnotationKind.Frame)
         {
             (mx, my) = _canvas.ClampToImage((mx, my));
-            double x0 = Math.Min(fx, mx), x1 = Math.Max(fx, mx), y0 = Math.Min(fy, my), y1 = Math.Max(fy, my);
+            // 傾けた枠は、傾ける前の向きで動かない角からの横・縦の長さを測る（対角の 2 点の中点が新しい中心）
+            double rad = a.Angle * Math.PI / 180, cos = Math.Cos(rad), sin = Math.Sin(rad);
+            double u = (mx - fx) * cos + (my - fy) * sin, v = -(mx - fx) * sin + (my - fy) * cos;
+            double w = Math.Abs(u), h = Math.Abs(v), cx = (fx + mx) / 2, cy = (fy + my) / 2;
             // 描いている途中は小さくてもよい（離したときに確かめる）。描いた枠を小さくしすぎることはできない
-            if (_creating || (x1 - x0 >= MinSizePx && y1 - y0 >= MinSizePx)) _items[_selected] = a with { X0 = x0, Y0 = y0, X1 = x1, Y1 = y1 };
+            if (_creating || (w >= MinSizePx && h >= MinSizePx))
+                _items[_selected] = a with { X0 = cx - w / 2, Y0 = cy - h / 2, X1 = cx + w / 2, Y1 = cy + h / 2 };
             return;
         }
 

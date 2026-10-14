@@ -325,6 +325,19 @@ static class EditingTests
             Annotator.Draw(img, new[] { frame with { CornerRadius = 20 } });
             check(img[18, 18] == Blue && img[20, 40] == Red && img[50, 20] == Red, "枠: 角の丸みを付けると角が丸くなる（辺はそのまま）");
         }
+        var tilted = frame with { Angle = 90 };
+        check(tilted.Distance(50, 10) < 0 && tilted.Distance(20, 40) > 0 && tilted.Distance(50, 40) > 0,
+            "枠: 傾けると中心を軸に回る（90° なら横長が縦長に。中は線にならない）");
+        var (tl, tt, tr, tb) = (frame with { Angle = 45 }).Bounds;
+        double half45 = (30 + 20) / Math.Sqrt(2); // 半分の大きさ 30 × 20 を 45° 傾けたときの、外枠の半分の幅・高さ
+        check(Math.Abs(tl - (50 - half45)) < 1e-9 && Math.Abs(tr - (50 + half45)) < 1e-9 && Math.Abs(tt - (40 - half45)) < 1e-9 && Math.Abs(tb - (40 + half45)) < 1e-9,
+            "枠: 傾けた枠の外枠は四隅が収まる四角");
+        using (var img = new Image<Rgba32>(100, 80, Blue))
+        {
+            Annotator.Draw(img, new[] { tilted });
+            check(img[50, 10] == Red && img[20, 40] == Blue && img[50, 40] == Blue, "枠: 傾けた枠を描ける");
+        }
+        check(frame.Corners[0] == (20, 20) && frame.Corners[2] == (80, 60), "枠: 傾けていない枠の四隅は (X0, Y0)〜(X1, Y1)");
         check((frame with { CornerRadius = 999 }).Distance(19.5, 19.5) == (frame with { CornerRadius = 20 }).Distance(19.5, 19.5),
             "枠: 角の丸みは短い辺の半分まで");
         using (var img = new Image<Rgba32>(100, 80, Blue))
