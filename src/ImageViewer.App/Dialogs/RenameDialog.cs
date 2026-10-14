@@ -109,6 +109,13 @@ public sealed class RenameDialog : ThemedForm
         };
         _lowerExt.CheckedChanged += (_, _) => UpdatePreview();
 
+        // 開いたら名前の欄を全選択しておく（そのまま打てば推測した名前を置き換えられる）
+        Shown += (_, _) =>
+        {
+            _pattern.Focus();
+            _pattern.SelectAll();
+        };
+
         UpdatePreview();
     }
 
