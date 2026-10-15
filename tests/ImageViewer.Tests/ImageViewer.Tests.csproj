@@ -5,9 +5,21 @@
     <!-- テスト用の HEIC / JPEG XL を作るのに WinRT のエンコーダを使う（テストのみ。本体は net10.0-windows のまま） -->
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
+    <!-- テスト用の画像の読み書きに WIC（WPF の画像 API）を使う（ImageSharp にも Skia にも頼らずに、正解を作って確かめるため） -->
+    <UseWPF>true</UseWPF>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- UseWPF を付けると外れるので戻す（WPF の Path と名前がぶつかるが、テストでは WPF の図形を使わない） -->
+    <Using Include="System.IO" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- WIC で作れないテスト用の画像（アニメーション WebP など）。作り方は Fixtures/README.md -->
+    <None Include="Fixtures\**" CopyToOutputDirectory="PreserveNewest" LinkBase="Fixtures" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\ImageViewer.Core\ImageViewer.Core.csproj" />

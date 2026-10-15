@@ -1,17 +1,12 @@
 // ImageLoader の動作確認
 // HEIC / JPEG XL のテスト画像は WinRT のエンコーダで作る（その PC に拡張機能が無ければ SKIP）
 using ImageViewer.Core.Imaging;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Gif;
-using SixLabors.ImageSharp.Metadata.Profiles.Exif;
-using SixLabors.ImageSharp.PixelFormats;
 using Windows.Foundation;
 using Windows.Graphics.Imaging;
-using Image = SixLabors.ImageSharp.Image;
 
 static class LoaderTests
 {
-    static readonly Rgba32 Red = new(255, 0, 0), Blue = new(0, 0, 255);
+    static readonly Px Red = Px.Red, Blue = Px.Blue;
 
     public static async Task RunAsync(Action<bool, string> check, string dir)
     {
@@ -23,27 +18,22 @@ static class LoaderTests
 
         // ---- ImageSharp 経路 ----
         string jpg = Path.Combine(dir, "wide.jpg");
-        using (var img = SplitImage(2000, 1000)) img.SaveAsJpeg(jpg);
+        SplitImage(2000, 1000).Save(jpg);
         using (var img = ImageLoader.Load(jpg, LoadOptions.Thumbnail(500)))
-            check(img.Width == 500 && img.Height == 250 && IsLeftRedRightBlue(img), $"JPEG 縮小読み込み 2000x1000 → {img.Width}x{img.Height}");
+            check(img.Width == 500 && img.Height == 250 && IsLeftRedRightBlue(TestImage.FromApi(img)), $"JPEG 縮小読み込み 2000x1000 → {img.Width}x{img.Height}");
         using (var img = ImageLoader.Load(jpg))
             check(img.Width == 2000 && img.Height == 1000, "JPEG 原寸読み込み");
 
         string small = Path.Combine(dir, "small.png");
-        using (var img = SplitImage(300, 100)) img.SaveAsPng(small);
+        SplitImage(300, 100).Save(small);
         using (var img = ImageLoader.Load(small, LoadOptions.Thumbnail(500)))
             check(img.Width == 300 && img.Height == 100, "上限より小さい画像は拡大しない");
 
         // Orientation=6（時計回り 90° で正立）: 元画像の左側が上に来る
         string rotated = Path.Combine(dir, "rotated.jpg");
-        using (var img = SplitImage(200, 100))
-        {
-            img.Metadata.ExifProfile = new ExifProfile();
-            img.Metadata.ExifProfile.SetValue(ExifTag.Orientation, (ushort)6);
-            img.SaveAsJpeg(rotated);
-        }
+        SplitImage(200, 100).Save(rotated, new TestExif { Orientation = 6 });
         using (var img = ImageLoader.Load(rotated))
-            check(img.Width == 100 && img.Height == 200 && Near(img[50, 20], Red) && Near(img[50, 180], Blue),
+            check(img.Width == 100 && img.Height == 200 && TestImage.FromApi(img)[50, 20].Near(Red, 39) && TestImage.FromApi(img)[50, 180].Near(Blue, 39),
                 $"JPEG の EXIF 回転補正 200x100 → {img.Width}x{img.Height}");
 
         // ---- 大きさと形式だけを調べる（ヘッダーだけ読む） ----
@@ -54,18 +44,11 @@ static class LoaderTests
 
         // ---- 撮影情報（EXIF） ----
         string photo = Path.Combine(dir, "photo.jpg");
-        using (var img = SplitImage(120, 80))
+        SplitImage(120, 80).Save(photo, new TestExif
         {
-            var exif = img.Metadata.ExifProfile = new ExifProfile();
-            exif.SetValue(ExifTag.DateTimeOriginal, "2026:09:10 10:21:05");
-            exif.SetValue(ExifTag.Make, "Canon");
-            exif.SetValue(ExifTag.Model, "Canon EOS R5");
-            exif.SetValue(ExifTag.LensModel, "RF24-70mm F2.8 L IS USM");
-            exif.SetValue(ExifTag.FNumber, new Rational(28, 10));
-            exif.SetValue(ExifTag.ExposureTime, new Rational(1, 250));
-            exif.SetValue(ExifTag.ISOSpeedRatings, new ushort[] { 200 });
-            img.SaveAsJpeg(photo);
-        }
+            Taken = "2026:09:10 10:21:05", Make = "Canon", Model = "Canon EOS R5", Lens = "RF24-70mm F2.8 L IS USM",
+            FNumber = (28, 10), Exposure = (1, 250), Iso = 200,
+        });
         var shot = ImageLoader.Identify(photo)?.Photo;
         check(shot?.TakenAt == new DateTime(2026, 9, 10, 10, 21, 5), $"EXIF: 撮影日時（{shot?.TakenAt}）");
         check(shot?.Camera == "Canon EOS R5", $"EXIF: 機種名がメーカー名で始まれば機種名だけ（{shot?.Camera}）");
@@ -77,25 +60,20 @@ static class LoaderTests
         check(PhotoInfo.FormatExposure(2) == "2s" && PhotoInfo.FormatExposure(0.5) == "1/2", "シャッター速度の表示");
 
         string gif = Path.Combine(dir, "anim.gif");
-        using (var img = new Image<Rgba32>(40, 40, Red))
-        {
-            img.Frames.AddFrame(new Image<Rgba32>(40, 40, Blue).Frames.RootFrame);
-            img.Frames.AddFrame(new Image<Rgba32>(40, 40, Red).Frames.RootFrame);
-            img.SaveAsGif(gif, new GifEncoder());
-        }
+        TestImage.SaveFrames(gif, new[] { new TestImage(40, 40, Red), new TestImage(40, 40, Blue), new TestImage(40, 40, Red) }, new[] { 10, 10, 10 });
         using (var img = ImageLoader.Load(gif))
             check(img.Frames.Count == 1, "アニメ GIF: 既定は先頭フレームのみ");
         using (var img = ImageLoader.Load(gif, new LoadOptions { FirstFrameOnly = false }))
             check(img.Frames.Count == 3, $"アニメ GIF: 全フレーム指定で {img.Frames.Count} フレーム");
 
-        // ---- TIFF は WIC で読む（ImageSharp の TIFF デコーダの脆弱性を避けるため。テスト画像は ImageSharp で書く） ----
+        // ---- TIFF は WIC で読む（ImageSharp の TIFF デコーダの脆弱性を避けるため） ----
         string tif = Path.Combine(dir, "split.tif");
-        using (var img = SplitImage(400, 200)) img.SaveAsTiff(tif);
+        SplitImage(400, 200).Save(tif);
         using (var img = ImageLoader.Load(tif))
-            check(img.Width == 400 && img.Height == 200 && IsLeftRedRightBlue(img) && !ImageViewer.Core.Editing.Adjuster.KeepsMetadata(img),
+            check(img.Width == 400 && img.Height == 200 && IsLeftRedRightBlue(TestImage.FromApi(img)) && !ImageViewer.Core.Editing.Adjuster.KeepsMetadata(img),
                 "TIFF: WIC で読む（ImageSharp で読んでいればメタデータを持つ）");
         using (var img = ImageLoader.Load(tif, LoadOptions.Thumbnail(100)))
-            check(img.Width == 100 && img.Height == 50 && IsLeftRedRightBlue(img), $"TIFF: 縮小読み込み 400x200 → {img.Width}x{img.Height}");
+            check(img.Width == 100 && img.Height == 50 && IsLeftRedRightBlue(TestImage.FromApi(img)), $"TIFF: 縮小読み込み 400x200 → {img.Width}x{img.Height}");
         info = ImageLoader.Identify(tif);
         check(info == new ImageHeader(400, 200, "TIFF"), $"Identify: TIFF（{info}）");
         check(ImageFormats.IsSupported(tif) && !ImageFormats.IsImageSharpFormat(tif), "TIFF: 対応形式だが ImageSharp の形式ではない");
@@ -103,7 +81,7 @@ static class LoaderTests
         string disguised = Path.Combine(dir, "tiff_inside.png");
         File.Copy(tif, disguised, overwrite: true);
         using (var img = ImageLoader.Load(disguised))
-            check(img.Width == 400 && IsLeftRedRightBlue(img) && !ImageViewer.Core.Editing.Adjuster.KeepsMetadata(img),
+            check(img.Width == 400 && IsLeftRedRightBlue(TestImage.FromApi(img)) && !ImageViewer.Core.Editing.Adjuster.KeepsMetadata(img),
                 "拡張子が PNG の TIFF: ImageSharp では読まず WIC で読む");
         info = ImageLoader.Identify(disguised);
         check(info == new ImageHeader(400, 200, "TIFF"), $"拡張子が PNG の TIFF: Identify も WIC で、形式は中身の TIFF（{info}）");
@@ -113,7 +91,7 @@ static class LoaderTests
         string disguisedQoi = Path.Combine(dir, "tiff_inside.qoi");
         File.Copy(tif, disguisedQoi, overwrite: true);
         using (var img = ImageLoader.Load(disguisedQoi))
-            check(img.Width == 400 && IsLeftRedRightBlue(img), "拡張子が QOI の TIFF: WIC で読む");
+            check(img.Width == 400 && IsLeftRedRightBlue(TestImage.FromApi(img)), "拡張子が QOI の TIFF: WIC で読む");
         info = ImageLoader.Identify(disguisedQoi);
         check(info == new ImageHeader(400, 200, "TIFF"), $"拡張子が QOI の TIFF: Identify も WIC で（{info}）");
         string notImage = Path.Combine(dir, "not_image.qoi");
@@ -169,10 +147,10 @@ static class LoaderTests
 
         using var img = ImageLoader.Load(path, LoadOptions.Thumbnail(100));
         if (orientation == 6)
-            check(img.Width == 50 && img.Height == 100 && Near(img[25, 10], Red) && Near(img[25, 90], Blue),
+            check(img.Width == 50 && img.Height == 100 && TestImage.FromApi(img)[25, 10].Near(Red, 39) && TestImage.FromApi(img)[25, 90].Near(Blue, 39),
                 $"{label} 縮小＋回転補正 400x200 → {img.Width}x{img.Height}");
         else
-            check(img.Width == 100 && img.Height == 50 && IsLeftRedRightBlue(img),
+            check(img.Width == 100 && img.Height == 50 && IsLeftRedRightBlue(TestImage.FromApi(img)),
                 $"{label} 縮小読み込み 400x200 → {img.Width}x{img.Height}");
 
         // 拡張子を .qoi に変えた HEIC も、HEIC と同じ向き・大きさで読む。
@@ -184,7 +162,7 @@ static class LoaderTests
             var renamedInfo = ImageLoader.Identify(renamed);
             check(renamedInfo == expected, $"{label} 拡張子が QOI でも同じ向き（Identify: {renamedInfo}）");
             using var renamedImg = ImageLoader.Load(renamed, LoadOptions.Thumbnail(100));
-            check(renamedImg.Width == 50 && renamedImg.Height == 100 && Near(renamedImg[25, 10], Red) && Near(renamedImg[25, 90], Blue),
+            check(renamedImg.Width == 50 && renamedImg.Height == 100 && TestImage.FromApi(renamedImg)[25, 10].Near(Red, 39) && TestImage.FromApi(renamedImg)[25, 90].Near(Blue, 39),
                 $"{label} 拡張子が QOI でも同じ向き（読み込み {renamedImg.Width}x{renamedImg.Height}）");
         }
     }
@@ -215,22 +193,11 @@ static class LoaderTests
     }
 
     /// <summary>左半分が赤、右半分が青の画像</summary>
-    static Image<Rgba32> SplitImage(int w, int h)
-    {
-        var img = new Image<Rgba32>(w, h, Blue);
-        img.ProcessPixelRows(a =>
-        {
-            for (int y = 0; y < h; y++) a.GetRowSpan(y)[..(w / 2)].Fill(Red);
-        });
-        return img;
-    }
+    static TestImage SplitImage(int w, int h) => new TestImage(w, h, Blue).Fill(Red, 0, 0, w / 2, h);
 
-    static bool IsLeftRedRightBlue(Image<Rgba32> img) =>
-        Near(img[img.Width / 5, img.Height / 2], Red) && Near(img[img.Width * 4 / 5, img.Height / 2], Blue);
-
-    /// <summary>非可逆圧縮の誤差を許容した色比較</summary>
-    static bool Near(Rgba32 a, Rgba32 b) =>
-        Math.Abs(a.R - b.R) < 40 && Math.Abs(a.G - b.G) < 40 && Math.Abs(a.B - b.B) < 40;
+    /// <summary>左が赤・右が青か（非可逆圧縮の誤差は許す）</summary>
+    static bool IsLeftRedRightBlue(TestImage img) =>
+        img[img.Width / 5, img.Height / 2].Near(Red, 39) && img[img.Width * 4 / 5, img.Height / 2].Near(Blue, 39);
 
     static bool Throws<T>(Action action) where T : Exception
     {

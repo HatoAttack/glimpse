@@ -1,9 +1,5 @@
 // 色調補正（レベル補正・明るさ・コントラスト・彩度・自動補正）の動作確認
 using ImageViewer.Core.Editing;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Metadata.Profiles.Exif;
-using SixLabors.ImageSharp.PixelFormats;
-using Image = SixLabors.ImageSharp.Image;
 
 static class AdjustTests
 {
@@ -39,53 +35,56 @@ static class AdjustTests
         check(wild.Brightness == 100 && wild.Temperature == -100 && wild.BlackPoint == 254 && wild.WhitePoint == 255 && wild.Gamma == 1, "範囲外の値は丸める");
 
         // ---- 彩度 ----
-        using (var img = new Image<Rgba32>(1, 1, new Rgba32(200, 80, 40, 128)))
+        using (var img = new TestImage(1, 1, new Px(200, 80, 40, 128)).ToApi())
         {
             Adjuster.Apply(img, new AdjustOptions { Saturation = -100 });
-            var p = img[0, 0];
+            var p = TestImage.FromApi(img)[0, 0];
             check(p.R == p.G && p.G == p.B && p.A == 128, $"彩度 -100 で白黒、透明度はそのまま（{p}）");
         }
-        using (var img = new Image<Rgba32>(1, 1, new Rgba32(160, 120, 100)))
+        using (var img = new TestImage(1, 1, new Px(160, 120, 100)).ToApi())
         {
             Adjuster.Apply(img, new AdjustOptions { Saturation = 100 });
-            var p = img[0, 0];
+            var p = TestImage.FromApi(img)[0, 0];
             check(p.R - p.B > 60, $"彩度 +100 で色の差が広がる（{p}）");
         }
 
         // ---- 色温度 ----
-        using (var img = new Image<Rgba32>(2, 1, new Rgba32(128, 128, 128)))
+        using (var img = new TestImage(2, 1, new Px(128, 128, 128)).Fill(Px.White, 1, 0, 1, 1).ToApi())
         {
-            img[1, 0] = new Rgba32(255, 255, 255);
             Adjuster.Apply(img, new AdjustOptions { Temperature = 100 });
-            var gray = img[0, 0];
+            var warm = TestImage.FromApi(img);
+            var gray = warm[0, 0];
             check(gray.R > 128 && gray.G == 128 && gray.B < 128, $"色温度 +: 赤みが増えて青みが減る（{gray}）");
-            check(img[1, 0].R == 255 && img[1, 0].B < 255, "色温度 +: 白も暖かい色になる（赤は 255 で止まる）");
+            check(warm[1, 0].R == 255 && warm[1, 0].B < 255, "色温度 +: 白も暖かい色になる（赤は 255 で止まる）");
         }
-        using (var img = new Image<Rgba32>(1, 1, new Rgba32(128, 128, 128)))
+        using (var img = new TestImage(1, 1, new Px(128, 128, 128)).ToApi())
         {
             Adjuster.Apply(img, new AdjustOptions { Temperature = -100 });
-            check(img[0, 0].R < 128 && img[0, 0].B > 128, $"色温度 -: 青みが増える（{img[0, 0]}）");
+            var p = TestImage.FromApi(img)[0, 0];
+            check(p.R < 128 && p.B > 128, $"色温度 -: 青みが増える（{p}）");
         }
 
         // ---- BGRA（プレビュー用）と ImageSharp の結果が同じ ----
         var opts = new AdjustOptions { Brightness = 30, Contrast = -20, Saturation = 40, Temperature = 25, BlackPoint = 10, WhitePoint = 240, Gamma = 1.3 };
-        using (var img = new Image<Rgba32>(3, 2))
         {
-            var colors = new[] { new Rgba32(255, 0, 0), new Rgba32(10, 200, 90), new Rgba32(128, 128, 128), new Rgba32(0, 0, 0), new Rgba32(250, 250, 5), new Rgba32(33, 66, 99) };
+            var colors = new[] { new Px(255, 0, 0), new Px(10, 200, 90), new Px(128, 128, 128), new Px(0, 0, 0), new Px(250, 250, 5), new Px(33, 66, 99) };
+            var src = new TestImage(3, 2);
             int stride = 3 * 4 + 4; // 行の終わりの詰め物
             var bgra = new byte[stride * 2];
             for (int i = 0; i < 6; i++)
             {
-                img[i % 3, i / 3] = colors[i];
+                src[i % 3, i / 3] = colors[i];
                 int o = (i / 3) * stride + (i % 3) * 4;
                 (bgra[o], bgra[o + 1], bgra[o + 2], bgra[o + 3]) = (colors[i].B, colors[i].G, colors[i].R, 255);
             }
             bgra[12] = 77; // 詰め物は触らない
+            using var img = src.ToApi();
             Adjuster.Apply(img, opts);
             Adjuster.ApplyBgra(bgra, 3, 2, stride, opts);
+            var adjusted = TestImage.FromApi(img);
             bool same = Enumerable.Range(0, 6).All(i =>
             {
-                var p = img[i % 3, i / 3];
+                var p = adjusted[i % 3, i / 3];
                 int o = (i / 3) * stride + (i % 3) * 4;
                 return bgra[o] == p.B && bgra[o + 1] == p.G && bgra[o + 2] == p.R;
             });
@@ -93,16 +92,18 @@ static class AdjustTests
         }
 
         // ---- 自動補正 ----
-        using (var img = new Image<Rgba32>(100, 10))
         {
+            var sleepy = new TestImage(100, 10);
             for (int x = 0; x < 100; x++)
                 for (int y = 0; y < 10; y++)
-                    img[x, y] = new Rgba32((byte)(60 + x), (byte)(60 + x), (byte)(60 + x)); // 60〜159 の眠い画像
+                    sleepy[x, y] = new Px((byte)(60 + x), (byte)(60 + x), (byte)(60 + x)); // 60〜159 の眠い画像
+            using var img = sleepy.ToApi();
             var auto = Adjuster.Auto(img);
             check(auto.BlackPoint is >= 60 and <= 62 && auto.WhitePoint is >= 157 and <= 159 && auto.Brightness == 0,
                 $"自動補正: 両端を黒と白に広げる（{auto.BlackPoint}〜{auto.WhitePoint}, γ{auto.Gamma}）");
             Adjuster.Apply(img, auto);
-            check(img[0, 0].R == 0 && img[99, 0].R == 255, "自動補正: かけると黒から白まで使う");
+            var applied = TestImage.FromApi(img);
+            check(applied[0, 0].R == 0 && applied[99, 0].R == 255, "自動補正: かけると黒から白まで使う");
         }
         check(Adjuster.AutoFromHistogram(new long[256]).IsIdentity, "自動補正: 画素が無ければ何もしない");
         var flat = new long[256];
@@ -114,37 +115,21 @@ static class AdjustTests
         check(darkAuto.Gamma > 1 && darkAuto.Gamma <= Adjuster.AutoMaxGamma, $"自動補正: 暗い画像は中間を持ち上げる（γ{darkAuto.Gamma}）");
 
         // ---- ファイル: 上書きしても EXIF が残る ----
-        using (var img = new Image<Rgba32>(20, 10, new Rgba32(100, 100, 100)))
-        {
-            img.Metadata.ExifProfile = new ExifProfile();
-            img.Metadata.ExifProfile.SetValue(ExifTag.Model, "TestCam");
-            img.SaveAsJpeg(P("photo.jpg"));
-        }
+        new TestImage(20, 10, new Px(100, 100, 100)).Save(P("photo.jpg"), new TestExif { Model = "TestCam" });
         Adjuster.ApplyToFile(P("photo.jpg"), P("photo.jpg"), new AdjustOptions { Brightness = 50 });
-        using (var img = Image.Load<Rgba32>(P("photo.jpg")))
-        {
-            bool exif = img.Metadata.ExifProfile?.TryGetValue(ExifTag.Model, out var model) == true && model.Value == "TestCam";
-            check(img[5, 5].R > 110 && exif, "ファイル: 上書きで補正がかかり、EXIF は残る");
-        }
+        check(TestImage.Load(P("photo.jpg"))[5, 5].R > 110 && TestImage.ReadExif(P("photo.jpg"))?.Model == "TestCam",
+            "ファイル: 上書きで補正がかかり、EXIF は残る");
         check(Directory.GetFiles(dir, "*.tmp").Length == 0, "ファイル: 一時ファイルを残さない");
 
         // ---- ファイル: アニメは保存しない（先頭のコマだけの静止画になってしまうため） ----
-        using (var anim = new Image<Rgba32>(8, 8, new Rgba32(255, 0, 0)))
-        {
-            anim.Frames.AddFrame(new Image<Rgba32>(8, 8, new Rgba32(0, 0, 255)).Frames.RootFrame);
-            anim.SaveAsGif(P("anim.gif"));
-        }
+        TestImage.SaveFrames(P("anim.gif"), new[] { new TestImage(8, 8, Px.Red), new TestImage(8, 8, Px.Blue) }, new[] { 10, 10 });
         byte[] gifBefore = File.ReadAllBytes(P("anim.gif"));
         bool animRefused = false;
         try { Adjuster.ApplyToFile(P("anim.gif"), P("anim.gif"), new AdjustOptions { Brightness = 30 }); }
         catch (NotSupportedException) { animRefused = true; }
         check(animRefused && File.ReadAllBytes(P("anim.gif")).SequenceEqual(gifBefore), "ファイル: アニメは補正して保存しない（元のまま）");
 
-        using (var pages = new Image<Rgba32>(8, 8, new Rgba32(255, 0, 0)))
-        {
-            pages.Frames.AddFrame(new Image<Rgba32>(8, 8, new Rgba32(0, 255, 0)).Frames.RootFrame);
-            pages.SaveAsTiff(P("pages.tif"));
-        }
+        TestImage.SaveFrames(P("pages.tif"), new[] { new TestImage(8, 8, Px.Red), new TestImage(8, 8, Px.Green) });
         byte[] tifBefore = File.ReadAllBytes(P("pages.tif"));
         bool tifRefused = false;
         try { Adjuster.ApplyToFile(P("pages.tif"), P("pages.tif"), new AdjustOptions { Brightness = 30 }); }
@@ -152,7 +137,7 @@ static class AdjustTests
         check(Adjuster.FrameCount(P("pages.tif")) == 2 && tifRefused && File.ReadAllBytes(P("pages.tif")).SequenceEqual(tifBefore),
             "ファイル: 複数ページの TIFF も補正して保存しない（元のまま）");
         // 1 ページの TIFF は WIC で読むので撮影情報を残せない。確かめずに上書きはしない（MetadataLossException で元のまま）
-        using (var one = new Image<Rgba32>(8, 8, new Rgba32(100, 100, 100))) one.SaveAsTiff(P("one.tif"));
+        new TestImage(8, 8, new Px(100, 100, 100)).Save(P("one.tif"));
         byte[] oneBefore = File.ReadAllBytes(P("one.tif"));
         bool oneAsked = false;
         try { Adjuster.ApplyToFile(P("one.tif"), P("one.tif"), new AdjustOptions { Brightness = 30 }); }
@@ -170,14 +155,14 @@ static class AdjustTests
         foreach (var (name, from, to) in new[] { ("b1.png", 60, 140), ("b2.png", 100, 200) })
         {
             // 左から右へ from → to の灰色（自動補正で 0〜255 に広がる）
-            using var img = new Image<Rgba32>(100, 4);
+            var img = new TestImage(100, 4);
             for (int x = 0; x < 100; x++)
             for (int y = 0; y < 4; y++)
             {
                 byte v = (byte)(from + (to - from) * x / 99);
-                img[x, y] = new Rgba32(v, v, v);
+                img[x, y] = new Px(v, v, v);
             }
-            img.SaveAsPng(B(name));
+            img.Save(B(name));
         }
         File.Copy(P("anim.gif"), B("anim.gif"));
         var sources = new[] { B("b1.png"), B("b2.png"), B("anim.gif") };
@@ -197,7 +182,7 @@ static class AdjustTests
             $"まとめて: アニメは失敗として数え、ほかは補正する（{result.Converted} 枚・失敗 {result.Errors.Count}）");
         foreach (var name in new[] { "b1.png", "b2.png" })
         {
-            using var img = Image.Load<Rgba32>(Path.Combine(batchDir, "adjusted", name));
+            var img = TestImage.Load(Path.Combine(batchDir, "adjusted", name));
             check(img[0, 0].R < 10 && img[99, 0].R > 245, $"まとめて: 1 枚ずつ自動でレベルを決める（{name}: {img[0, 0].R}〜{img[99, 0].R}）");
         }
         check(File.ReadAllBytes(B("b1.png")).SequenceEqual(b1Before) && !File.Exists(Path.Combine(batchDir, "adjusted", "anim.gif")),
@@ -210,8 +195,8 @@ static class AdjustTests
         var inPlacePlan = BatchAdjuster.Plan(sources[..1], inPlace);
         check(inPlacePlan[0].ReplacesSource, "まとめて: 同じフォルダ＋上書きなら元の画像を置き換える計画");
         BatchAdjuster.Run(inPlacePlan, new AdjustOptions { Brightness = 60 }, inPlace);
-        using (var img = Image.Load<Rgba32>(B("b1.png")))
-            check(img[50, 0].R > 110, $"まとめて: 元の画像に上書きで補正がかかる（{img[50, 0].R}）");
+        int b1Middle = TestImage.Load(B("b1.png"))[50, 0].R;
+        check(b1Middle > 110, $"まとめて: 元の画像に上書きで補正がかかる（{b1Middle}）");
 
         // 上書き保存（元の画像を置き換えるものだけ上書き）: 別の保存先（HEIC の代わりの JPG など）は、計画の後にできたファイルでも上書きしない
         File.WriteAllText(B("other.png"), "other");
@@ -229,13 +214,11 @@ static class AdjustTests
         void Marked(string path)
         {
             // 4×2 の左上だけ赤
-            using var img = new Image<Rgba32>(4, 2, new Rgba32(0, 0, 255));
-            img[0, 0] = new Rgba32(255, 0, 0);
-            img.SaveAsPng(path);
+            new TestImage(4, 2, Px.Blue).Fill(Px.Red, 0, 0, 1, 1).Save(path);
         }
         bool RedAt(string path, int w, int h, int x, int y)
         {
-            using var img = Image.Load<Rgba32>(path);
+            var img = TestImage.Load(path);
             return img.Width == w && img.Height == h && img[x, y].R > 200 && img[x, y].B < 50;
         }
         Marked(R("r.png"));
@@ -249,21 +232,15 @@ static class AdjustTests
         check(RedAt(R("h.png"), 4, 2, 3, 1), "回転: 180° で左上が右下へ");
 
         // EXIF の向き（6 = 右に 90° 回して見る）が付いた写真: 見えている向きから回し、向きの値は「そのまま」にする。撮影情報は残す
-        using (var img = new Image<Rgba32>(40, 20, new Rgba32(90, 90, 90)))
-        {
-            img.Metadata.ExifProfile = new ExifProfile();
-            img.Metadata.ExifProfile.SetValue(ExifTag.Orientation, (ushort)6);
-            img.Metadata.ExifProfile.SetValue(ExifTag.Model, "TestCam");
-            img.SaveAsJpeg(R("exif.jpg"));
-        }
+        new TestImage(40, 20, new Px(90, 90, 90)).Save(R("exif.jpg"), new TestExif { Orientation = 6, Model = "TestCam" });
         Rotator.RotateFile(R("exif.jpg"), RotateDirection.Right90);
-        using (var img = Image.Load<Rgba32>(R("exif.jpg")))
         {
-            ushort orientation = img.Metadata.ExifProfile?.TryGetValue(ExifTag.Orientation, out var o) == true ? o.Value : (ushort)1;
-            bool model = img.Metadata.ExifProfile?.TryGetValue(ExifTag.Model, out var m) == true && m.Value == "TestCam";
+            var (w, h) = TestImage.SizeOf(R("exif.jpg"));
+            var exif = TestImage.ReadExif(R("exif.jpg"));
+            ushort orientation = exif?.Orientation ?? 1;
             // 見えていたのは 20×40（縦長）。右に回すと 40×20 になり、向きの値は 1
-            check(img.Width == 40 && img.Height == 20 && orientation == 1 && model,
-                $"回転: EXIF の向き付きの写真は見えている向きから回し、向きは「そのまま」・撮影情報は残す（{img.Width}×{img.Height}・向き {orientation}）");
+            check(w == 40 && h == 20 && orientation == 1 && exif?.Model == "TestCam",
+                $"回転: EXIF の向き付きの写真は見えている向きから回し、向きは「そのまま」・撮影情報は残す（{w}×{h}・向き {orientation}）");
         }
 
         var rotated = Rotator.RotateFiles(new[] { P("anim.gif"), P("pages.tif"), R("missing.heic"), R("r.png") }, RotateDirection.Right90);

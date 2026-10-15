@@ -8,38 +8,15 @@ using ImageViewer.Core.Archives;
 using ImageViewer.Core.Imaging;
 using ImageViewer.Core.Navigation;
 using ImageViewer.Core.Thumbnails;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Gif;
-using SixLabors.ImageSharp.PixelFormats;
-using Image = SixLabors.ImageSharp.Image;
 
 static class ArchiveTests
 {
     public static void Run(Action<bool, string> check, string dir)
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
-        byte[] Jpeg(int w, int h)
-        {
-            using var img = new Image<Rgba32>(w, h, new Rgba32(255, 0, 0));
-            using var ms = new MemoryStream();
-            img.SaveAsJpeg(ms);
-            return ms.ToArray();
-        }
-        byte[] Png(int w, int h)
-        {
-            using var img = new Image<Rgba32>(w, h, new Rgba32(0, 0, 255));
-            using var ms = new MemoryStream();
-            img.SaveAsPng(ms);
-            return ms.ToArray();
-        }
-        byte[] Gif()
-        {
-            using var img = new Image<Rgba32>(20, 10, new Rgba32(255, 0, 0));
-            using (var frame = new Image<Rgba32>(20, 10, new Rgba32(0, 0, 255))) img.Frames.AddFrame(frame.Frames.RootFrame);
-            using var ms = new MemoryStream();
-            img.SaveAsGif(ms);
-            return ms.ToArray();
-        }
+        byte[] Jpeg(int w, int h) => new TestImage(w, h, Px.Red).Encode(".jpg");
+        byte[] Png(int w, int h) => new TestImage(w, h, Px.Blue).Encode(".png");
+        byte[] Gif() => TestImage.EncodeFrames(".gif", new[] { new TestImage(20, 10, Px.Red), new TestImage(20, 10, Px.Blue) }, new[] { 10, 10 });
         void Write(string zipPath, Encoding? encoding, params (string Name, byte[]? Data)[] entries)
         {
             using var fs = File.Create(zipPath);
