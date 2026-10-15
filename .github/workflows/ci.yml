@@ -12,10 +12,11 @@ on:
 permissions:
   contents: read
 
-# 同じ PR に続けて push したら古い実行を止める（main への push は止めずに全部走らせる）
+# 同じ PR に続けて push したら古い実行を止める。
+# main への push は実行ごとに別のグループにして、全部走らせる（同じグループだと、待機中の実行は新しい実行に置き換えられて消える）
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   build-and-test:
