@@ -89,9 +89,13 @@ sealed class TestImage
     // ---- 保存（WIC） ----
 
     /// <summary>拡張子の形式で保存する（png・jpg・jpeg・bmp・gif・tif・tiff）。JPEG は exif を付けられる</summary>
-    public void Save(string path, TestExif? exif = null, int quality = 95)
+    public void Save(string path, TestExif? exif = null, int quality = 95) =>
+        File.WriteAllBytes(path, Encode(Path.GetExtension(path), exif, quality));
+
+    /// <summary>ext（".png" など）の形式のファイルの中身を作る（ZIP に入れるときなど）</summary>
+    public byte[] Encode(string ext, TestExif? exif = null, int quality = 95)
     {
-        string ext = Path.GetExtension(path).ToLowerInvariant();
+        ext = ext.ToLowerInvariant();
         if (exif != null && ext is not (".jpg" or ".jpeg"))
             throw new ArgumentException("EXIF を付けられるのは JPEG だけ", nameof(exif));
         BitmapEncoder encoder = ext switch
@@ -101,43 +105,47 @@ sealed class TestImage
             ".bmp" => new BmpBitmapEncoder(),
             ".gif" => new GifBitmapEncoder(),
             ".tif" or ".tiff" => new TiffBitmapEncoder { Compression = TiffCompressOption.Lzw },
-            _ => throw new ArgumentException($"保存できない形式: {ext}", nameof(path)),
+            _ => throw new ArgumentException($"保存できない形式: {ext}", nameof(ext)),
         };
         // JPEG と BMP は透明を持てないので、不透明として渡す（そのまま渡すと、透明な所が黒くなるエンコーダがある）
         bool opaque = ext is ".jpg" or ".jpeg" or ".bmp";
         encoder.Frames.Add(BitmapFrame.Create(ToBitmapSource(opaque), null, exif == null ? null : JpegMetadata(exif), null));
-        using var s = File.Create(path);
-        encoder.Save(s);
+        using var ms = new MemoryStream();
+        encoder.Save(ms);
+        return ms.ToArray();
     }
 
     /// <summary>
     /// 複数のコマ・ページを 1 つのファイルに保存する（GIF はコマごとの表示時間 1/100 秒、TIFF はページ）。
     /// GIF の繰り返し再生の印（NETSCAPE2.0）は WPF のエンコーダでは付けられないので付けない（読み込みには関係しない）
     /// </summary>
-    public static void SaveFrames(string path, IReadOnlyList<TestImage> frames, IReadOnlyList<int>? gifDelays = null)
+    public static void SaveFrames(string path, IReadOnlyList<TestImage> frames, IReadOnlyList<int>? gifDelays = null) =>
+        File.WriteAllBytes(path, EncodeFrames(Path.GetExtension(path), frames, gifDelays));
+
+    public static byte[] EncodeFrames(string ext, IReadOnlyList<TestImage> frames, IReadOnlyList<int>? gifDelays = null)
     {
-        string ext = Path.GetExtension(path).ToLowerInvariant();
+        ext = ext.ToLowerInvariant();
         BitmapEncoder encoder = ext switch
         {
             ".gif" => new GifBitmapEncoder(),
             ".tif" or ".tiff" => new TiffBitmapEncoder { Compression = TiffCompressOption.Lzw },
-            _ => throw new ArgumentException($"複数のコマを保存できない形式: {ext}", nameof(path)),
+            _ => throw new ArgumentException($"複数のコマを保存できない形式: {ext}", nameof(ext)),
         };
-        for (int i = 0; i < frames.Count; i++)
-        {
-            encoder.Frames.Add(BitmapFrame.Create(frames[i].ToBitmapSource(opaque: false)));
-        }
-        using (var s = File.Create(path)) encoder.Save(s);
-        if (ext == ".gif" && gifDelays != null) PatchGifDelays(path, gifDelays);
+        foreach (var frame in frames)
+            encoder.Frames.Add(BitmapFrame.Create(frame.ToBitmapSource(opaque: false)));
+        using var ms = new MemoryStream();
+        encoder.Save(ms);
+        byte[] bytes = ms.ToArray();
+        if (ext == ".gif" && gifDelays != null) PatchGifDelays(bytes, gifDelays);
+        return bytes;
     }
 
     /// <summary>
     /// GIF のコマごとの表示時間を書き込む。WPF のエンコーダはコマごとの制御の欄（GCE）を書くが、表示時間は 0 のままにするので、
-    /// 保存したファイルの GCE を前から順に書き換える
+    /// 書き出した中身の GCE を前から順に書き換える
     /// </summary>
-    private static void PatchGifDelays(string path, IReadOnlyList<int> delays)
+    private static void PatchGifDelays(byte[] d, IReadOnlyList<int> delays)
     {
-        byte[] d = File.ReadAllBytes(path);
         int i = 13, frame = 0;
         if ((d[10] & 0x80) != 0) i += 3 << ((d[10] & 7) + 1);
         while (i < d.Length && d[i] != 0x3B)
@@ -166,7 +174,6 @@ sealed class TestImage
             else throw new InvalidDataException($"GIF の読み取りに失敗（{i} バイト目）");
         }
         if (frame != delays.Count) throw new InvalidDataException($"GIF の GCE が {frame} 個しか無い（コマは {delays.Count}）");
-        File.WriteAllBytes(path, d);
     }
 
     private static BitmapMetadata JpegMetadata(TestExif exif)

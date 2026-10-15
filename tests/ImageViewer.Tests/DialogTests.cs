@@ -4,8 +4,6 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Windows.Forms;
 using ImageViewer.App.Dialogs;
-using SixLabors.ImageSharp.PixelFormats;
-using Image = SixLabors.ImageSharp.Image;
 
 static class DialogTests
 {
@@ -156,18 +154,18 @@ static class DialogTests
         }
     }
 
-    static int Width(string path) => File.Exists(path) ? Image.Identify(path).Width : -1;
+    static int Width(string path) => TestImage.SizeOf(path).Width;
 
     /// <summary>モザイクをかけると必ず画素が変わるよう、ばらばらの色で埋めた 200 × 100 の画像</summary>
     static string Noise(string dir, string name)
     {
         string path = Path.Combine(dir, name);
         var random = new Random(name.Sum(ch => ch));
-        using var image = new SixLabors.ImageSharp.Image<Rgba32>(200, 100);
+        var image = new TestImage(200, 100);
         for (int y = 0; y < image.Height; y++)
             for (int x = 0; x < image.Width; x++)
-                image[x, y] = new Rgba32((byte)random.Next(256), (byte)random.Next(256), (byte)random.Next(256));
-        SixLabors.ImageSharp.ImageExtensions.SaveAsPng(image, path);
+                image[x, y] = new Px((byte)random.Next(256), (byte)random.Next(256), (byte)random.Next(256));
+        image.Save(path);
         return path;
     }
 

@@ -2,8 +2,6 @@
 using System.Collections.Concurrent;
 using ImageViewer.App.Grid;
 using ImageViewer.Core.Thumbnails;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
 using Bitmap = System.Drawing.Bitmap;
 using Color = System.Drawing.Color;
 
@@ -248,7 +246,7 @@ static class ThumbnailTests
     static void GeneratorCases(Action<bool, string> check, string dir)
     {
         string jpg = Path.Combine(dir, "thumb.jpg");
-        using (var img = new Image<Rgba32>(800, 400, new Rgba32(255, 0, 0))) img.SaveAsJpeg(jpg);
+        new TestImage(800, 400, Px.Red).Save(jpg);
 
         using (var shell = ShellThumbnail.TryGet(jpg, 128))
             check(shell != null && Math.Max(shell.Width, shell.Height) <= 128 && IsRed(shell.GetPixel(shell.Width / 2, shell.Height / 2)),
@@ -256,14 +254,7 @@ static class ThumbnailTests
 
         // 上下の向き: 上半分が赤・下半分が青の画像で、シェルのサムネイルも上が赤であること
         string updown = Path.Combine(dir, "updown.jpg");
-        using (var img = new Image<Rgba32>(400, 300, new Rgba32(0, 0, 255)))
-        {
-            img.ProcessPixelRows(acc =>
-            {
-                for (int y = 0; y < 150; y++) acc.GetRowSpan(y).Fill(new Rgba32(255, 0, 0));
-            });
-            img.SaveAsJpeg(updown);
-        }
+        new TestImage(400, 300, Px.Blue).Fill(Px.Red, 0, 0, 400, 150).Save(updown);
         using (var shell = ShellThumbnail.TryGet(updown, 128))
         {
             var top = shell?.GetPixel(shell.Width / 2, shell.Height / 5);
@@ -274,14 +265,7 @@ static class ThumbnailTests
 
         string png = Path.Combine(dir, "alpha.png");
         // 左半分が不透明の赤、右半分が透明（全面透明だと「アルファを使わないハンドラ」と区別できないため）
-        using (var img = new Image<Rgba32>(300, 300, new Rgba32(0, 0, 255, 0)))
-        {
-            img.ProcessPixelRows(acc =>
-            {
-                for (int y = 0; y < 300; y++) acc.GetRowSpan(y)[..150].Fill(new Rgba32(255, 0, 0));
-            });
-            img.SaveAsPng(png);
-        }
+        new TestImage(300, 300, new Px(0, 0, 255, 0)).Fill(Px.Red, 0, 0, 150, 300).Save(png);
         using (var thumb = ThumbnailGenerator.Generate(png, 100))
         {
             var left = thumb.GetPixel(thumb.Width / 5, thumb.Height / 2);
@@ -296,7 +280,7 @@ static class ThumbnailTests
         using (var icon = ThumbnailGenerator.Generate(txt, 100))
             check(icon.Width is > 0 and <= 60 && icon.Height <= 60, $"画像でないファイルはアイコン（枠の 6 割まで。{icon.Width}x{icon.Height}）");
 
-        using (var img = new Image<Rgba32>(4, 2, new Rgba32(200, 100, 50, 128)))
+        using (var img = new TestImage(4, 2, new Px(200, 100, 50, 128)).ToApi())
         using (var bmp = ThumbnailGenerator.ToPArgbBitmap(img))
         {
             var p = bmp.GetPixel(0, 0); // GetPixel は乗算前の値に戻して返す
