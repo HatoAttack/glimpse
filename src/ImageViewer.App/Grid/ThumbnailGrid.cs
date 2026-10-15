@@ -856,7 +856,7 @@ public sealed class ThumbnailGrid : Control
         _dragHasImages = SelectedImageIndices.Any();
 
         // ZIP の中の画像は、一時フォルダへ書き出したものをコピーで渡す（移動はできない）
-        var data = archive ? new ArchiveDragData(paths) : new DataObject();
+        var data = archive ? ArchiveDragData.Create(paths) : new DataObject();
         if (!archive) data.SetData(DataFormats.FileDrop, paths);
         data.SetData(ReorderFormat, _dragToken);
         _droppedInside = false;

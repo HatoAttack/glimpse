@@ -18,6 +18,8 @@ using ImageViewer.Core.Rename;
 using ImageViewer.Core.Settings;
 using ImageViewer.Core.Thumbnails;
 using ImageViewer.Core.Updates;
+// .NET 10 の WinForms には古い System.Windows.Forms.ToolBar もあるので、自前のツールバーを指す
+using ToolBar = ImageViewer.App.Chrome.ToolBar;
 
 namespace ImageViewer.App;
 

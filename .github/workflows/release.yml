@@ -20,11 +20,11 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: 8.0.x
+          dotnet-version: 10.0.x
 
       - name: テスト
         run: dotnet run --project tests/ImageViewer.Tests -c Release
@@ -64,7 +64,7 @@ jobs:
 
       - name: 成果物に置く（試しの実行）
         if: github.event_name != 'release'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Glimpse
           path: |

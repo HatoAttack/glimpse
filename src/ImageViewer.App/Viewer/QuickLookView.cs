@@ -248,7 +248,7 @@ public sealed class QuickLookView : Control
                 if (string.Equals(_animPath, current, StringComparison.OrdinalIgnoreCase))
                 {
                     ReleaseAnimation();
-                    _ = LoadAnimationAsync(current, 0, paused: false);
+                    _ = LoadAnimationAsync(f.FullName, 0, paused: false);
                 }
             }
             reload = true;

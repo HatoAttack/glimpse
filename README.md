@@ -74,7 +74,7 @@ UI の設計は [docs/ui-concept.md](docs/ui-concept.md) にまとめていま�
 - **不具合の報告・要望**: [Issues](https://github.com/HatoAttack/glimpse/issues) に書いてください。不具合は、再現する手順・画像の形式・Windows のバージョンがあると助かります
 - **プルリクエスト**: 大きな変更は先に Issue で相談してもらえると行き違いがありません
 
-開発に必要なもの: Windows・[.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+開発に必要なもの: Windows・[.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 
 ```
 git clone https://github.com/HatoAttack/glimpse.git
