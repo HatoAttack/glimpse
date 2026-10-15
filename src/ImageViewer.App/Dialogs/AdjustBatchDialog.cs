@@ -410,6 +410,17 @@ public sealed class AdjustBatchDialog : ThemedForm
                     $"上書き保存できない画像があります（{planErrors.Count} 枚）", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
+            // 元の画像を置き換えるもののうち、撮影情報を残せない画像（TIFF、ImageSharp で読めない JPEG の亜種など）は、
+            // 元の撮影情報が消えるので確かめる（1 枚表示の補正と同じ）
+            var losing = plan.Where(p => p.Status == ConvertStatus.Ok && p.ReplacesSource && !Converter.KeepsMetadata(p.Source)).ToList();
+            if (losing.Count > 0)
+            {
+                var answer = MessageBox.Show(this, string.Join("\n", losing.Take(15).Select(p => p.SourceName))
+                                                   + (losing.Count > 15 ? $"\n…ほか {losing.Count - 15} 件" : "")
+                                                   + "\n\nこれらの画像は撮影情報（EXIF など）を残して保存できません。撮影情報なしで上書きしますか？",
+                    $"撮影情報が消える画像があります（{losing.Count} 枚）", MessageBoxButtons.OKCancel, MessageBoxIcon.Warning);
+                if (answer != DialogResult.OK) return;
+            }
         }
 
         // 実際にかけた値を覚える（1 枚ずつ自動のときは、隠れているレベルの値は使っていないので既定にしておく）。

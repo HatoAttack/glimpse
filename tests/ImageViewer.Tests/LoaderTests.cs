@@ -88,6 +88,39 @@ static class LoaderTests
         using (var img = ImageLoader.Load(gif, new LoadOptions { FirstFrameOnly = false }))
             check(img.Frames.Count == 3, $"アニメ GIF: 全フレーム指定で {img.Frames.Count} フレーム");
 
+        // ---- TIFF は WIC で読む（ImageSharp の TIFF デコーダの脆弱性を避けるため。テスト画像は ImageSharp で書く） ----
+        string tif = Path.Combine(dir, "split.tif");
+        using (var img = SplitImage(400, 200)) img.SaveAsTiff(tif);
+        using (var img = ImageLoader.Load(tif))
+            check(img.Width == 400 && img.Height == 200 && IsLeftRedRightBlue(img) && !ImageViewer.Core.Editing.Adjuster.KeepsMetadata(img),
+                "TIFF: WIC で読む（ImageSharp で読んでいればメタデータを持つ）");
+        using (var img = ImageLoader.Load(tif, LoadOptions.Thumbnail(100)))
+            check(img.Width == 100 && img.Height == 50 && IsLeftRedRightBlue(img), $"TIFF: 縮小読み込み 400x200 → {img.Width}x{img.Height}");
+        info = ImageLoader.Identify(tif);
+        check(info == new ImageHeader(400, 200, "TIFF"), $"Identify: TIFF（{info}）");
+        check(ImageFormats.IsSupported(tif) && !ImageFormats.IsImageSharpFormat(tif), "TIFF: 対応形式だが ImageSharp の形式ではない");
+        // 拡張子を変えた TIFF も ImageSharp の TIFF デコーダには渡さない（読めない扱いにして WIC で読み直す）
+        string disguised = Path.Combine(dir, "tiff_inside.png");
+        File.Copy(tif, disguised, overwrite: true);
+        using (var img = ImageLoader.Load(disguised))
+            check(img.Width == 400 && IsLeftRedRightBlue(img) && !ImageViewer.Core.Editing.Adjuster.KeepsMetadata(img),
+                "拡張子が PNG の TIFF: ImageSharp では読まず WIC で読む");
+        info = ImageLoader.Identify(disguised);
+        check(info == new ImageHeader(400, 200, "TIFF"), $"拡張子が PNG の TIFF: Identify も WIC で、形式は中身の TIFF（{info}）");
+        check(!ImageViewer.Core.Editing.Converter.KeepsMetadata(disguised) && ImageViewer.Core.Editing.Converter.KeepsMetadata(small),
+            "拡張子が PNG の TIFF: 変換でメタデータを残せない（中身で判断する。本物の PNG は残せる）");
+        // WIC にデコーダが無い拡張子（.qoi など ImageSharp だけの形式）でも、中身が TIFF なら WIC で読む
+        string disguisedQoi = Path.Combine(dir, "tiff_inside.qoi");
+        File.Copy(tif, disguisedQoi, overwrite: true);
+        using (var img = ImageLoader.Load(disguisedQoi))
+            check(img.Width == 400 && IsLeftRedRightBlue(img), "拡張子が QOI の TIFF: WIC で読む");
+        info = ImageLoader.Identify(disguisedQoi);
+        check(info == new ImageHeader(400, 200, "TIFF"), $"拡張子が QOI の TIFF: Identify も WIC で（{info}）");
+        string notImage = Path.Combine(dir, "not_image.qoi");
+        File.WriteAllText(notImage, "not an image");
+        check(ImageLoader.Identify(notImage) == null && Throws<Exception>(() => ImageLoader.Load(notImage)),
+            "画像でないファイルは WIC で読み直しても失敗する（拡張子が QOI）");
+
         // ---- WIC 経路 ----
         await WicCaseAsync(check, dir, ".heic", orientation: null);
         await WicCaseAsync(check, dir, ".heic", orientation: 6);
@@ -141,6 +174,19 @@ static class LoaderTests
         else
             check(img.Width == 100 && img.Height == 50 && IsLeftRedRightBlue(img),
                 $"{label} 縮小読み込み 400x200 → {img.Width}x{img.Height}");
+
+        // 拡張子を .qoi に変えた HEIC も、HEIC と同じ向き・大きさで読む。
+        // （ここで作る HEIC は回転をコンテナにだけ持ち EXIF の向きが無いので、二重の回転そのものは再現しない）
+        if (ext == ".heic" && orientation == 6)
+        {
+            string renamed = Path.ChangeExtension(path, ".qoi");
+            File.Copy(path, renamed, overwrite: true);
+            var renamedInfo = ImageLoader.Identify(renamed);
+            check(renamedInfo == expected, $"{label} 拡張子が QOI でも同じ向き（Identify: {renamedInfo}）");
+            using var renamedImg = ImageLoader.Load(renamed, LoadOptions.Thumbnail(100));
+            check(renamedImg.Width == 50 && renamedImg.Height == 100 && Near(renamedImg[25, 10], Red) && Near(renamedImg[25, 90], Blue),
+                $"{label} 拡張子が QOI でも同じ向き（読み込み {renamedImg.Width}x{renamedImg.Height}）");
+        }
     }
 
     /// <summary>WinRT のエンコーダで左半分が赤・右半分が青の画像を作る（WIC で読む形式のテスト画像用）</summary>

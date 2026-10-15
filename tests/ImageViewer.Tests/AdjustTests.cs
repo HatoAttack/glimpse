@@ -151,6 +151,15 @@ static class AdjustTests
         catch (NotSupportedException) { tifRefused = true; }
         check(Adjuster.FrameCount(P("pages.tif")) == 2 && tifRefused && File.ReadAllBytes(P("pages.tif")).SequenceEqual(tifBefore),
             "ファイル: 複数ページの TIFF も補正して保存しない（元のまま）");
+        // 1 ページの TIFF は WIC で読むので撮影情報を残せない。確かめずに上書きはしない（MetadataLossException で元のまま）
+        using (var one = new Image<Rgba32>(8, 8, new Rgba32(100, 100, 100))) one.SaveAsTiff(P("one.tif"));
+        byte[] oneBefore = File.ReadAllBytes(P("one.tif"));
+        bool oneAsked = false;
+        try { Adjuster.ApplyToFile(P("one.tif"), P("one.tif"), new AdjustOptions { Brightness = 30 }); }
+        catch (MetadataLossException) { oneAsked = true; }
+        check(oneAsked && File.ReadAllBytes(P("one.tif")).SequenceEqual(oneBefore), "ファイル: TIFF の上書きは撮影情報を残せないので、確かめる（元のまま）");
+        Adjuster.ApplyToFile(P("one.tif"), P("one.tif"), new AdjustOptions { Brightness = 30 }, allowMetadataLoss: true);
+        check(!File.ReadAllBytes(P("one.tif")).SequenceEqual(oneBefore), "ファイル: TIFF も確かめた後は上書きする");
         check(Adjuster.FrameCount(P("photo.jpg")) == 1, "コマの数: 静止画は 1");
         check(ImageViewer.Core.Imaging.ImageLoader.WicFrameCount(P("pages.tif")) == 2, "コマの数: WIC でも複数ページの TIFF を数えられる（ImageSharp で読めない亜種用）");
 
