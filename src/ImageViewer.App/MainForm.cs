@@ -94,6 +94,8 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     private readonly IconButton _targetChecked = new() { AccessibleName = "チェックした項目を対象にする" };
     private readonly List<(IconButton Button, IImageCommand Command)> _actionButtons = new();
     private readonly ContextMenuStrip _moveMenu = new(), _moreMenu = new(), _rotateMenu = new();
+    /// <summary>フッターの「回転 ▾」。回転のどれも使えないときは押せなくする（ほかの操作のボタンと同じ）</summary>
+    private IconButton? _rotateButton;
 
     // フォルダジャンプ（索引・候補の一覧・検索）と、更新の確認（見つけたバージョン・「更新」のメニュー項目）は、それぞれの持ち主に任せる
     private readonly JumpController _jumper;
@@ -1068,6 +1070,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         foreach (var id in new[] { "image.rotateRight", "image.rotateLeft", "image.rotate180" })
             if (_registry.Find(id) is { } cmd) _rotateMenu.Items.Add(CreateCommandItem(cmd, withShortcut: false));
         _rotateMenu.Opening += (_, _) => UpdateCommandEnabled();
+        _rotateButton = rotate;
         var more = new IconButton { Icon = Icons.More, AccessibleName = "その他の操作" };
         _toolTip.SetToolTip(more, "その他の操作");
         more.Click += (_, _) => ShowFooterMenu(more, _moreMenu, null);
@@ -1687,6 +1690,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             item.Enabled = CanRun(cmd, paths);
         foreach (var (button, cmd) in _actionButtons)
             button.Enabled = CanRun(cmd, paths);
+        if (_rotateButton != null) _rotateButton.Enabled = _rotateMenu.Items.Cast<ToolStripItem>().Any(i => i.Enabled);
         bool oneFolder = SelectedSingleFolder() != null && !_inArchive;
         foreach (var item in _renameFolderItems) item.Enabled = oneFolder;
         foreach (var item in _newFolderItems) item.Enabled = _folder != null && !_inArchive;
