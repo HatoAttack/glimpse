@@ -7,6 +7,7 @@ using SixLabors.ImageSharp.Formats.Png;
 using SixLabors.ImageSharp.Formats.Webp;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
+using SkiaSharp;
 
 namespace ImageViewer.Core.Editing;
 
@@ -79,6 +80,26 @@ public static class ImageSaver
     /// false なら、書き終えて差し替える時点で dst があれば保存せずに DestinationExistsException
     /// （事前に無いことを確かめていても、書いている間に別の処理が作ることがあるため、最後の差し替えで確かめる）
     /// </param>
+    /// <param name="metadataFrom">
+    /// このファイルのメタデータ（EXIF・ICC など）を読み直して書く（編集した画像の元のファイル）。null ならメタデータを書かない。
+    /// ImageSharp で読めない形式（TIFF・HEIC など）は画素だけになる
+    /// </param>
+    public static void Save(SKBitmap image, string dst, bool overwrite = true, string? metadataFrom = null)
+    {
+        using var converted = Imaging.ImageSharpBridge.ToImageSharp(image, metadataFrom == null ? null : Imaging.ImageLoader.MetadataForSave(metadataFrom));
+        Save(converted, dst, overwrite);
+    }
+
+    /// <summary>
+    /// ImageSharp の画像を保存する（移行中だけ）。metadataFrom があれば、画像についているメタデータの代わりに、そのファイルのメタデータを書く
+    /// </summary>
+    internal static void Save(Image<Rgba32> image, string dst, bool overwrite, string metadataFrom)
+    {
+        using var withMetadata = Imaging.ImageSharpBridge.WithMetadata(image, Imaging.ImageLoader.MetadataForSave(metadataFrom));
+        Save(withMetadata, dst, overwrite);
+    }
+
+    /// <summary>ImageSharp の画像を、画像についているメタデータごと保存する（移行中だけ。連結など）</summary>
     public static void Save(Image<Rgba32> image, string dst, bool overwrite = true)
     {
         string ext = Path.GetExtension(dst).ToLowerInvariant();
@@ -133,6 +154,13 @@ public static class ImageSaver
     /// 空いているのを確かめてから書き終えるまでの間に別の処理が同じ名前で作ったときも、そのファイルは残して別の名前で保存する
     /// </summary>
     /// <returns>実際に保存したパス</returns>
+    public static string SaveNew(SKBitmap image, string path, string? metadataFrom = null)
+    {
+        using var converted = Imaging.ImageSharpBridge.ToImageSharp(image, metadataFrom == null ? null : Imaging.ImageLoader.MetadataForSave(metadataFrom));
+        return SaveNew(converted, path);
+    }
+
+    /// <summary>ImageSharp の画像を新しいファイルとして保存する（移行中だけ。画像についているメタデータごと）</summary>
     public static string SaveNew(Image<Rgba32> image, string path)
     {
         for (int attempt = 0; ; attempt++)

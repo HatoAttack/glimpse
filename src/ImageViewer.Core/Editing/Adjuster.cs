@@ -169,10 +169,11 @@ public static class Adjuster
         if (frames == null && SourceGuard.IsSameFile(src, dst))
             throw new NotSupportedException("ページの数を確かめられない画像なので、上書きしませんでした");
         using var image = ImageLoader.LoadForEdit(src); // 回転補正済み
-        if (!allowMetadataLoss && !KeepsMetadata(image)) throw new MetadataLossException(src);
+        // メタデータは保存するときに元のファイルから読み直す（読めなければ画素だけ）
+        if (!allowMetadataLoss && ImageLoader.MetadataForSave(src) == null) throw new MetadataLossException(src);
         if (autoLevels) options = options.WithLevels(Auto(image));
         Apply(image, options);
-        ImageSaver.Save(image, dst, overwrite);
+        ImageSaver.Save(image, dst, overwrite, metadataFrom: src);
     }
 
     public const string MultiFrameMessage = "アニメーションや複数ページの画像は補正できません（保存すると先頭の 1 枚だけになるため）";

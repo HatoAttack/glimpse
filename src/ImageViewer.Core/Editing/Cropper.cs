@@ -76,7 +76,7 @@ public static class Cropper
         bool overwrite = SourceGuard.IsSameFile(src, dst);
         if (overwrite) SourceGuard.EnsureReplaceable(src);
         using var image = ImageLoader.LoadForEdit(src);
-        if (overwrite) SourceGuard.EnsureKeepsMetadata(image);
+        if (overwrite) SourceGuard.EnsureKeepsMetadata(src);
         var (x0, y0, x1, y1) = CarryRect(rect, fromWidth, fromHeight, image.Width, image.Height);
         var box = ClampBox(x0, y0, x1, y1, image.Width, image.Height);
         image.Mutate(c => c.Crop(box));
@@ -95,7 +95,7 @@ public static class Cropper
         if (SourceGuard.IsSameFile(src, dst))
         {
             SourceGuard.EnsureReplaceable(src);
-            SourceGuard.EnsureKeepsMetadata(image);
+            SourceGuard.EnsureKeepsMetadata(src);
         }
         using var cropped = image.Clone(x => x.Crop(box));
         return SourceGuard.Save(cropped, src, dst);
@@ -108,7 +108,7 @@ public static class Cropper
         bool overwrite = SourceGuard.IsSameFile(src, dst);
         if (overwrite) SourceGuard.EnsureReplaceable(src);
         using var image = ImageLoader.LoadForEdit(src);
-        if (overwrite) SourceGuard.EnsureKeepsMetadata(image);
+        if (overwrite) SourceGuard.EnsureKeepsMetadata(src);
         var (x, y, w, h) = CenterRect(image.Width, image.Height, aspect);
         var box = ClampBox(x, y, x + w, y + h, image.Width, image.Height);
         image.Mutate(c => c.Crop(box));

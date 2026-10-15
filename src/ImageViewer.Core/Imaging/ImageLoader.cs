@@ -268,6 +268,50 @@ public static class ImageLoader
         image.Mutate(x => x.AutoOrient());
     }
 
+    /// <summary>
+    /// 編集した画像を保存するときに付けるメタデータ（EXIF・ICC・XMP・IPTC など）を、元のファイルから読み直す。
+    /// 読み込んだ画像は EXIF の回転を直してあるので、向きは「そのまま」（1）にする。
+    /// ImageSharp で読めない形式・中身（TIFF・HEIC など WIC で読むもの）は null（画素だけを保存する）
+    /// </summary>
+    public static SixLabors.ImageSharp.Metadata.ImageMetadata? MetadataForSave(string path)
+    {
+        if (!ImageFormats.IsImageSharpFormat(path)) return null;
+        ImageInfo info;
+        try
+        {
+            info = IdentifyImageSharp(path);
+        }
+        catch (Exception ex) when (IsDecodeFailure(ex))
+        {
+            return null; // 拡張子を変えた TIFF や、ImageSharp では読めず WIC で読み直す壊れたファイルなど
+        }
+        // ヘッダーは読めても、画素は ImageSharp で読めずに WIC で読み直す画像がある（CMYK の JPEG の一部）。
+        // WIC は sRGB に直して読むので、元の CMYK のメタデータ（色の並びと ICC）を付けると色が変わる。画素だけを保存する
+        if (info.Metadata.DecodedImageFormat is JpegFormat
+            && info.Metadata.GetJpegMetadata().ColorType is JpegEncodingColor.Cmyk or JpegEncodingColor.Ycck
+            && !DecodesWithImageSharp(path))
+            return null;
+        var metadata = info.Metadata.DeepClone();
+        if (metadata.ExifProfile?.TryGetValue(ExifTag.Orientation, out _) == true)
+            metadata.ExifProfile.SetValue(ExifTag.Orientation, (ushort)1);
+        return metadata;
+    }
+
+    /// <summary>画素まで ImageSharp で読めるか（LoadForEdit が WIC で読み直さないか）</summary>
+    private static bool DecodesWithImageSharp(string path)
+    {
+        try
+        {
+            using var stream = ImageSource.OpenRead(path);
+            Image.Load<Rgba32>(new DecoderOptions { Configuration = DecodeConfiguration, MaxFrames = 1 }, stream).Dispose();
+            return true;
+        }
+        catch (Exception ex) when (IsDecodeFailure(ex))
+        {
+            return false;
+        }
+    }
+
     /// <summary>ImageSharp でヘッダーを読む（ZIP の中の画像も。読めなければ例外）</summary>
     internal static ImageInfo IdentifyImageSharp(string path)
     {

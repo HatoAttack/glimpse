@@ -513,7 +513,7 @@ public static class Annotator
         if (SourceGuard.IsSameFile(src, dst))
         {
             SourceGuard.EnsureReplaceable(src);
-            SourceGuard.EnsureKeepsMetadata(image);
+            SourceGuard.EnsureKeepsMetadata(src);
         }
         using var drawn = image.Clone();
         Draw(drawn, items);

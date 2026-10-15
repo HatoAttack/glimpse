@@ -1,6 +1,7 @@
 // 元の画像を編集結果で置き換えるときの検査と、編集結果の保存（切り抜き・モザイク・枠や矢印・回転で共通）
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
+using SkiaSharp;
 
 namespace ImageViewer.Core.Editing;
 
@@ -23,10 +24,13 @@ public static class SourceGuard
         if (frames == null) throw new NotSupportedException($"ページの数を確かめられない画像なので、{action}しませんでした");
     }
 
-    /// <summary>撮影情報（EXIF など）を残せない画像（WIC で読んだもの）は、置き換えると失われるので NotSupportedException</summary>
-    public static void EnsureKeepsMetadata(Image image, string action = "上書き")
+    /// <summary>
+    /// 撮影情報（EXIF など）を残せない画像（TIFF・HEIC など、WIC で読む形式）は、置き換えると失われるので NotSupportedException。
+    /// 保存するときに元のファイルからメタデータを読み直すので、元のファイルで判断する（ImageLoader.MetadataForSave と同じ条件）
+    /// </summary>
+    public static void EnsureKeepsMetadata(string src, string action = "上書き")
     {
-        if (!Adjuster.KeepsMetadata(image))
+        if (Imaging.ImageLoader.MetadataForSave(src) == null)
             throw new NotSupportedException($"撮影情報（EXIF など）を残して保存できない画像なので、{action}しませんでした");
     }
 
@@ -35,10 +39,19 @@ public static class SourceGuard
     /// （保存先を決めた後に同じ名前のファイルができていても置き換えず、別の名前にする）
     /// </summary>
     /// <returns>実際に保存したパス</returns>
-    public static string Save(Image<Rgba32> image, string src, string dst)
+    public static string Save(SKBitmap image, string src, string dst)
     {
-        if (!IsSameFile(src, dst)) return ImageSaver.SaveNew(image, dst);
-        ImageSaver.Save(image, dst);
+        if (!IsSameFile(src, dst)) return ImageSaver.SaveNew(image, dst, metadataFrom: src);
+        ImageSaver.Save(image, dst, metadataFrom: src);
+        return dst;
+    }
+
+    /// <summary>ImageSharp の画像を保存する（移行中だけ）。メタデータは SKBitmap 版と同じく、元のファイルから読み直す</summary>
+    internal static string Save(Image<Rgba32> image, string src, string dst)
+    {
+        using var withMetadata = Imaging.ImageSharpBridge.WithMetadata(image, Imaging.ImageLoader.MetadataForSave(src));
+        if (!IsSameFile(src, dst)) return ImageSaver.SaveNew(withMetadata, dst);
+        ImageSaver.Save(withMetadata, dst);
         return dst;
     }
 }
