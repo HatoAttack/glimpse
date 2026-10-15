@@ -65,9 +65,11 @@ public static class ImageLoader
             {
                 return LoadWithImageSharp(path, options);
             }
-            catch (Exception ex) when (IsDecodeFailure(ex) && ImageFormats.IsWicFormat(path))
+            catch (Exception ex) when (IsDecodeFailure(ex) && (ex is UnknownImageFormatException || ImageFormats.IsWicFormat(path)))
             {
-                // ImageSharp が対応しない亜種（CMYK の一部など）は WIC に任せる
+                // ImageSharp が対応しない亜種（CMYK の一部など）は WIC に任せる。
+                // 中身が ImageSharp の形式でないもの（拡張子を .qoi などに変えた TIFF）は、拡張子に関わらず WIC で読み直す
+                return LoadWithWic(path, options);
             }
         }
         if (ImageFormats.IsWicFormat(path)) return LoadWithWic(path, options);
@@ -82,6 +84,7 @@ public static class ImageLoader
     {
         try
         {
+            bool unknownContent = false;
             if (ImageFormats.IsImageSharpFormat(path))
             {
                 try
@@ -93,12 +96,13 @@ public static class ImageLoader
                     return (Rotated(o) ? new ImageHeader(info.Height, info.Width, format) : new ImageHeader(info.Width, info.Height, format))
                         with { Photo = photo };
                 }
-                catch (Exception ex) when (IsDecodeFailure(ex) && ImageFormats.IsWicFormat(path))
+                catch (Exception ex) when (IsDecodeFailure(ex) && (ex is UnknownImageFormatException || ImageFormats.IsWicFormat(path)))
                 {
-                    // ImageSharp で読めない亜種は WIC で
+                    // ImageSharp で読めない亜種は WIC で（中身が ImageSharp の形式でなければ、拡張子に関わらず。Load と同じ）
+                    unknownContent = ex is UnknownImageFormatException;
                 }
             }
-            if (!ImageFormats.IsWicFormat(path)) return null;
+            if (!unknownContent && !ImageFormats.IsWicFormat(path)) return null;
 
             using var stream = ImageSource.OpenRead(path);
             var decoder = Wpf.BitmapDecoder.Create(stream,

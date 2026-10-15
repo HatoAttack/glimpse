@@ -109,6 +109,17 @@ static class LoaderTests
         check(info == new ImageHeader(400, 200, "TIFF"), $"拡張子が PNG の TIFF: Identify も WIC で、形式は中身の TIFF（{info}）");
         check(!ImageViewer.Core.Editing.Converter.KeepsMetadata(disguised) && ImageViewer.Core.Editing.Converter.KeepsMetadata(small),
             "拡張子が PNG の TIFF: 変換でメタデータを残せない（中身で判断する。本物の PNG は残せる）");
+        // WIC にデコーダが無い拡張子（.qoi など ImageSharp だけの形式）でも、中身が TIFF なら WIC で読む
+        string disguisedQoi = Path.Combine(dir, "tiff_inside.qoi");
+        File.Copy(tif, disguisedQoi, overwrite: true);
+        using (var img = ImageLoader.Load(disguisedQoi))
+            check(img.Width == 400 && IsLeftRedRightBlue(img), "拡張子が QOI の TIFF: WIC で読む");
+        info = ImageLoader.Identify(disguisedQoi);
+        check(info == new ImageHeader(400, 200, "TIFF"), $"拡張子が QOI の TIFF: Identify も WIC で（{info}）");
+        string notImage = Path.Combine(dir, "not_image.qoi");
+        File.WriteAllText(notImage, "not an image");
+        check(ImageLoader.Identify(notImage) == null && Throws<Exception>(() => ImageLoader.Load(notImage)),
+            "画像でないファイルは WIC で読み直しても失敗する（拡張子が QOI）");
 
         // ---- WIC 経路 ----
         await WicCaseAsync(check, dir, ".heic", orientation: null);
