@@ -176,7 +176,7 @@ static class EditingTests
         Cropper.CropCarried(src, (0, 0, 100, 50), 200, 100, P("carried.png"));
         {
             var (cw2, ch2) = TestImage.SizeOf(P("carried.png"));
-            using var whole = ImageViewer.Core.Imaging.ImageLoader.Load(src); // 回転を反映した大きさで比べる
+            using var whole = ImageViewer.Core.Imaging.ImageLoader.LoadForEdit(src); // 回転を反映した大きさで比べる
             // 200 × 100 の画像での 100 × 50 の枠を、縦横同じ倍率（小さい方の比）で合わせた大きさになる
             double carry = Math.Min(whole.Width / 200.0, whole.Height / 100.0);
             check(Math.Abs(cw2 - 100 * carry) <= 1 && Math.Abs(ch2 - 50 * carry) <= 1,
@@ -190,7 +190,7 @@ static class EditingTests
         Cropper.CropCenter(P("over.png"), 1.0, P("over.png"));
         var overSize = TestImage.SizeOf(P("over.png"));
         check(overSize == (100, 100), $"切り抜き: 元のファイルに上書きできる（{overSize}）");
-        using (var whole = ImageViewer.Core.Imaging.ImageLoader.Load(P("over.png")))
+        using (var whole = ImageViewer.Core.Imaging.ImageLoader.LoadForEdit(P("over.png")))
             Cropper.SaveCrop(whole, new Rectangle(0, 0, 40, 30), P("over.png"), P("over.png"));
         overSize = TestImage.SizeOf(P("over.png"));
         check(overSize == (40, 30), $"切り抜き: 表示中の画像の範囲で上書きできる（{overSize}）");
@@ -294,7 +294,7 @@ static class EditingTests
         string maskOut = Masker.OutputPathFor(P("mask.png"), dir, MaskEffect.Mosaic);
         check(maskOut == P("mask_mosaic.png") && Masker.OutputPathFor(P("mask.png"), dir, MaskEffect.Blur) == P("mask_blur.png"),
             "モザイク: 保存先の名前は _mosaic / _blur");
-        using (var whole = ImageViewer.Core.Imaging.ImageLoader.Load(P("mask.png")))
+        using (var whole = ImageViewer.Core.Imaging.ImageLoader.LoadForEdit(P("mask.png")))
         {
             Masker.SaveMasked(whole, new[] { MaskRegion.Rect(0, 0, 10, 10) }, MaskEffect.Mosaic, 5, P("mask.png"), maskOut);
             check(whole.Width == 60 && whole[0, 0] == Red, "モザイク: 保存しても表示中の画像は変えない");
@@ -509,7 +509,7 @@ static class EditingTests
         check(Annotator.DefaultThickness(4000, 3000) == 20 && Annotator.DefaultThickness(100, 100) == 2, "枠・矢印: 太さの初めの値は長い辺に対する割合（最小 2px）");
         string markOut = Annotator.OutputPathFor(P("mask.png"), dir);
         check(markOut == P("mask_mark.png"), "枠・矢印: 保存先の名前は _mark");
-        using (var whole = ImageViewer.Core.Imaging.ImageLoader.Load(P("mask.png")))
+        using (var whole = ImageViewer.Core.Imaging.ImageLoader.LoadForEdit(P("mask.png")))
         {
             var before = whole[5, 5];
             Annotator.SaveAnnotated(whole, new[] { new Annotation(AnnotationKind.Frame, 2, 2, 20, 20, Blue, 4, 0, 4, true) }, P("mask.png"), markOut);
@@ -520,7 +520,7 @@ static class EditingTests
             check(img.Width == 60 && img[2, 10] == Px.Blue, "枠・矢印: 別の名前で保存できる");
         }
         refused = false;
-        using (var gif = ImageViewer.Core.Imaging.ImageLoader.Load(P("over.gif")))
+        using (var gif = ImageViewer.Core.Imaging.ImageLoader.LoadForEdit(P("over.gif")))
         {
             try { Annotator.SaveAnnotated(gif, new[] { frame }, P("over.gif"), P("over.gif")); }
             catch (NotSupportedException) { refused = true; }

@@ -4,6 +4,8 @@
 // ImageSharp は拡張子でなく中身で形式を決めるので、TIFF を除いた設定（DecodeConfiguration）で読む。
 // 拡張子を変えた TIFF も ImageSharp の TIFF デコーダには渡らず、読めない扱いになって WIC で読み直す
 // どちらの経路でも「回転補正済み・sRGB・Rgba32」の画像を返す
+// ImageSharp から SkiaSharp への移行中（#81）: Load は SKBitmap（RGBA・乗算しない）を返す。
+// 編集の処理はまだ ImageSharp の画像とそのメタデータを使うので、LoadForEdit で読む（編集を SKBitmap に移したら消す）
 using System.Windows.Media;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats;
@@ -56,7 +58,18 @@ public static class ImageLoader
         new BmpConfigurationModule(), new PbmConfigurationModule(), new TgaConfigurationModule(),
         new WebpConfigurationModule(), new QoiConfigurationModule());
 
-    public static Image<Rgba32> Load(string path, LoadOptions? options = null)
+    /// <summary>画像を読む（回転補正済み・RGBA・乗算しない。アニメーションは先頭のコマ）。読めなければ例外</summary>
+    public static SkiaSharp.SKBitmap Load(string path, LoadOptions? options = null)
+    {
+        using var image = LoadForEdit(path, (options ?? LoadOptions.Full) with { FirstFrameOnly = true });
+        return ImageSharpBridge.ToSkia(image);
+    }
+
+    /// <summary>
+    /// 編集用に、メタデータ（EXIF など）付きの ImageSharp の画像として読む。
+    /// 移行中（#81）だけ使う。編集の処理を SKBitmap に移したら消す
+    /// </summary>
+    public static Image<Rgba32> LoadForEdit(string path, LoadOptions? options = null)
     {
         options ??= LoadOptions.Full;
         if (ImageFormats.IsImageSharpFormat(path))

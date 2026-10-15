@@ -98,7 +98,7 @@ static class ArchiveTests
         using (var anim = AnimationLoader.Load(Z("anim.gif"), 100))
             check(anim?.Count == 2, "ZIP の中のアニメ GIF を再生用に読む");
         using (var frame = AnimationLoader.LoadFrame(Z("anim.gif"), 1))
-            check(frame[0, 0].B > 200, "ZIP の中のアニメ GIF の 2 コマ目");
+            check(TestImage.FromApi(frame)[0, 0].B > 200, "ZIP の中のアニメ GIF の 2 コマ目");
 
         // ---- UTF-8 の名前（印あり） ----
         string utf8 = Path.Combine(dir, "utf8.zip");

@@ -168,7 +168,7 @@ public static class Converter
     public static void ConvertOne(string src, string dst, ConvertOptions options, bool overwrite = true)
     {
         // 回転補正済み・先頭フレームだけ（アニメーションは静止画になる）
-        using var image = ImageLoader.Load(src);
+        using var image = ImageLoader.LoadForEdit(src);
 
         var (crop, w, h) = OutputGeometry(image.Width, image.Height, options);
         if (crop.Width != image.Width || crop.Height != image.Height) image.Mutate(x => x.Crop(crop));

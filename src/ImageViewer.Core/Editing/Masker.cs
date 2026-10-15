@@ -253,7 +253,7 @@ public static class Masker
     {
         bool overwrite = SourceGuard.IsSameFile(src, dst);
         if (overwrite) SourceGuard.EnsureReplaceable(src);
-        using var image = ImageLoader.Load(src);
+        using var image = ImageLoader.LoadForEdit(src);
         if (overwrite) SourceGuard.EnsureKeepsMetadata(image);
         Apply(image, CarryRegions(regions, fromWidth, fromHeight, image.Width, image.Height), effect, EffectSize(image.Width, image.Height, level));
         return SourceGuard.Save(image, src, dst);
