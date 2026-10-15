@@ -74,6 +74,11 @@ dotnet build ImageViewer.sln -c Release
 dotnet run --project tests/ImageViewer.Tests -c Release --no-build
 ```
 
+## 手動確認
+
+画面・エクスプローラーとのやり取り・更新など、自動テストで確かめられないことは [manual-test.md](manual-test.md) の表で確かめる。
+.NET の更新や画像ライブラリの置き換えなど、アプリ全体に関わる変更では、変更の前と後の版で同じ表を実施して比べる。
+
 ## リリースの手順
 
 GitHub でリリースを公開すると、GitHub Actions（`.github/workflows/release.yml`）がテストしてから
