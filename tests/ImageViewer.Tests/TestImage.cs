@@ -243,13 +243,46 @@ sealed class TestImage
         return new TestImage(w, h, bgra);
     }
 
-    /// <summary>ファイルの縦横（ヘッダーだけ読む。EXIF の向きは反映しない）。読めなければ (-1, -1)</summary>
+    /// <summary>
+    /// ファイルの縦横（ヘッダーだけ読む。EXIF の向きは反映しない）。読めなければ (-1, -1)。
+    /// WebP はヘッダーを自分で読む（WebP のデコーダが入っていない Windows もあるため）
+    /// </summary>
     public static (int Width, int Height) SizeOf(string path)
     {
         if (!File.Exists(path)) return (-1, -1);
+        if (WebpSize(File.ReadAllBytes(path)) is { } webp) return webp;
         using var stream = File.OpenRead(path);
         var frame = BitmapDecoder.Create(stream, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None).Frames[0];
         return (frame.PixelWidth, frame.PixelHeight);
+    }
+
+    /// <summary>WebP のヘッダーの縦横（VP8・VP8L・VP8X）。WebP でなければ null</summary>
+    private static (int Width, int Height)? WebpSize(byte[] d)
+    {
+        if (d.Length < 30 || System.Text.Encoding.ASCII.GetString(d, 0, 4) != "RIFF" || System.Text.Encoding.ASCII.GetString(d, 8, 4) != "WEBP")
+            return null;
+        string chunk = System.Text.Encoding.ASCII.GetString(d, 12, 4);
+        return chunk switch
+        {
+            // 拡張形式: 幅 - 1・高さ - 1 が 24 ビットずつ
+            "VP8X" => (1 + (d[24] | d[25] << 8 | d[26] << 16), 1 + (d[27] | d[28] << 8 | d[29] << 16)),
+            // 可逆: 署名 0x2F の後に 14 ビットずつ（幅 - 1・高さ - 1）
+            "VP8L" => (1 + ((d[21] | d[22] << 8) & 0x3FFF), 1 + (((d[22] >> 6) | d[23] << 2 | d[24] << 10) & 0x3FFF)),
+            // 非可逆: キーフレームの開始コードの後に 14 ビットずつ
+            "VP8 " => ((d[26] | d[27] << 8) & 0x3FFF, (d[28] | d[29] << 8) & 0x3FFF),
+            _ => null,
+        };
+    }
+
+    /// <summary>
+    /// ファイルに EXIF が入っているか（中身を直接見る）。JPEG の APP1「Exif」、PNG の eXIf、WebP の EXIF のどれか。
+    /// メタデータを消したかどうかを、形式に関わらず確かめるため
+    /// </summary>
+    public static bool HasExif(string path)
+    {
+        byte[] d = File.ReadAllBytes(path);
+        bool Has(string s) => d.AsSpan().IndexOf(System.Text.Encoding.ASCII.GetBytes(s)) >= 0;
+        return Has("Exif\0\0") || Has("eXIf") || (WebpSize(d) != null && Has("EXIF"));
     }
 
     /// <summary>コマ・ページの数</summary>

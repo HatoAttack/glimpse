@@ -2,7 +2,6 @@
 using ImageViewer.Core.Editing;
 using ImageViewer.Core.Settings;
 using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Metadata.Profiles.Exif;
 using SixLabors.ImageSharp.PixelFormats;
 using Image = SixLabors.ImageSharp.Image;
 using Rectangle = SixLabors.ImageSharp.Rectangle;
@@ -25,7 +24,12 @@ static class EditingTests
         check(Converter.BuildDestName("a.jpg", new ConvertOptions { Suffix = "_s", UseSuffix = false }) == "a.jpg", "出力名: 「末尾に付ける」がオフなら文字列があっても付けない");
 
         // ---- 計画 ----
-        using (var img = new Image<Rgba32>(40, 20, Red)) { img.SaveAsPng(P("a.png")); img.SaveAsJpeg(P("a.jpg")); img.SaveAsPng(P("b.png")); }
+        {
+            var img = new TestImage(40, 20, Px.Red);
+            img.Save(P("a.png"));
+            img.Save(P("a.jpg"));
+            img.Save(P("b.png"));
+        }
         Directory.CreateDirectory(P("resized"));
         File.WriteAllText(P(Path.Combine("resized", "b.png")), "old");
         var plan = Converter.Plan(new[] { P("a.png"), P("a.jpg"), P("b.png") }, new ConvertOptions { Format = OutputFormat.Png });
@@ -62,30 +66,24 @@ static class EditingTests
 
         // ---- 変換 ----
         string src = P("photo.jpg");
-        using (var img = SplitImage(2000, 1000))
-        {
-            img.Metadata.ExifProfile = new ExifProfile();
-            img.Metadata.ExifProfile.SetValue(ExifTag.Orientation, (ushort)6); // 時計回り 90° で正立 → 1000x2000
-            img.Metadata.ExifProfile.SetValue(ExifTag.Artist, "someone");
-            img.SaveAsJpeg(src);
-        }
+        SplitImage(2000, 1000).Save(src, new TestExif { Orientation = 6, Artist = "someone" }); // 時計回り 90° で正立 → 1000x2000
         var opts = new ConvertOptions { LongEdge = 600, Format = OutputFormat.Png };
         var result = Converter.Run(Converter.Plan(new[] { src }, opts), opts);
         string outPng = P(Path.Combine("resized", "photo.png"));
-        using (var img = Image.Load<Rgba32>(outPng))
-            check(result.Converted == 1 && img.Width == 300 && img.Height == 600 && img.Metadata.ExifProfile == null && Near(img[150, 10], Red),
+        {
+            var img = TestImage.Load(outPng);
+            check(result.Converted == 1 && img.Width == 300 && img.Height == 600 && !TestImage.HasExif(outPng) && img[150, 10].Near(Px.Red, 39),
                 $"リサイズ: 回転を反映して長辺 600（{img.Width}x{img.Height}）・PNG へ・メタデータを消す");
+        }
         check(!Directory.GetFiles(P("resized"), "*.tmp").Any(), "一時ファイルが残らない");
 
         opts = new ConvertOptions { LongEdge = 5000, StripMetadata = false, Suffix = "_big", OutputMode = OutputFolderMode.Same };
         Converter.Run(Converter.Plan(new[] { src }, opts), opts);
-        using (var img = Image.Load<Rgba32>(P("photo_big.jpg")))
-            check(img.Width == 1000 && img.Height == 2000 && img.Metadata.ExifProfile?.TryGetValue(ExifTag.Artist, out _) == true,
-                "拡大しない（既定）・メタデータを残す");
+        check(TestImage.SizeOf(P("photo_big.jpg")) == (1000, 2000) && TestImage.ReadExif(P("photo_big.jpg"))?.Artist == "someone",
+            "拡大しない（既定）・メタデータを残す");
         opts = opts with { NoUpscale = false, Suffix = "_up", LongEdge = 3000, Format = OutputFormat.Webp };
         Converter.Run(Converter.Plan(new[] { src }, opts), opts);
-        using (var img = Image.Load<Rgba32>(P("photo_up.webp")))
-            check(img.Width == 1500 && img.Height == 3000, "拡大あり・WEBP へ");
+        check(TestImage.SizeOf(P("photo_up.webp")) == (1500, 3000), $"拡大あり・WEBP へ（{TestImage.SizeOf(P("photo_up.webp"))}）");
 
         // ---- 幅 × 高さをぴったり指定 ----
         var exact = new ConvertOptions { ExactSize = true, ExactWidth = 560, ExactHeight = 315 };
@@ -101,16 +99,18 @@ static class EditingTests
             "幅 × 高さの指定: 指定より小さい画像は「拡大しない」ならそのまま、オフなら切って拡大");
         opts = new ConvertOptions { ExactSize = true, ExactWidth = 200, ExactHeight = 100, Suffix = "_exact", OutputMode = OutputFolderMode.Same };
         Converter.Run(Converter.Plan(new[] { src }, opts), opts);
-        using (var img = Image.Load<Rgba32>(P("photo_exact.jpg")))
-            check(img.Width == 200 && img.Height == 100, $"幅 × 高さの指定: 保存した画像がぴったりの大きさ（{img.Width}x{img.Height}）");
+        var exactSize = TestImage.SizeOf(P("photo_exact.jpg"));
+        check(exactSize == (200, 100), $"幅 × 高さの指定: 保存した画像がぴったりの大きさ（{exactSize}）");
         check(Converter.Describe(exact).StartsWith("560 × 315px"), "幅 × 高さの指定: 設定の説明に大きさを出す");
 
         string transparent = P("clear.png");
-        using (var img = new Image<Rgba32>(10, 10, new Rgba32(0, 0, 0, 0))) img.SaveAsPng(transparent);
+        new TestImage(10, 10, Px.Transparent).Save(transparent);
         opts = new ConvertOptions { LongEdge = ConvertOptions.KeepSize, Format = OutputFormat.Jpeg, OutputMode = OutputFolderMode.Same };
         Converter.Run(Converter.Plan(new[] { transparent }, opts), opts);
-        using (var img = Image.Load<Rgba32>(P("clear.jpg")))
-            check(img.Width == 10 && Near(img[5, 5], new Rgba32(255, 255, 255)), "サイズそのまま JPG へ（透過は白）");
+        {
+            var img = TestImage.Load(P("clear.jpg"));
+            check(img.Width == 10 && img[5, 5].Near(Px.White, 39), "サイズそのまま JPG へ（透過は白）");
+        }
 
         File.WriteAllText(P("broken.png"), "not an image");
         opts = new ConvertOptions { OutputMode = OutputFolderMode.Same, Suffix = "_x" };
@@ -174,31 +174,27 @@ static class EditingTests
         string second = Cropper.OutputPathFor(src, dir);
         check(second == P("photo_crop (2).jpg"), "切り抜き: 同名があれば (2) を付ける");
         Cropper.CropCarried(src, (0, 0, 100, 50), 200, 100, P("carried.png"));
-        using (var img = Image.Load<Rgba32>(P("carried.png")))
         {
+            var (cw2, ch2) = TestImage.SizeOf(P("carried.png"));
             using var whole = ImageViewer.Core.Imaging.ImageLoader.Load(src); // 回転を反映した大きさで比べる
             // 200 × 100 の画像での 100 × 50 の枠を、縦横同じ倍率（小さい方の比）で合わせた大きさになる
             double carry = Math.Min(whole.Width / 200.0, whole.Height / 100.0);
-            check(Math.Abs(img.Width - 100 * carry) <= 1 && Math.Abs(img.Height - 50 * carry) <= 1,
-                $"切り抜き: 一括で枠を引き継いで切り抜く（{whole.Width}x{whole.Height} → {img.Width}x{img.Height}）");
+            check(Math.Abs(cw2 - 100 * carry) <= 1 && Math.Abs(ch2 - 50 * carry) <= 1,
+                $"切り抜き: 一括で枠を引き継いで切り抜く（{whole.Width}x{whole.Height} → {cw2}x{ch2}）");
         }
-        using (var img = Image.Load<Rgba32>(P("photo_crop.jpg")))
-            check(img.Width == 1000 && img.Height == 1000, $"切り抜き: 回転を反映した画像の中央 1:1（{img.Width}x{img.Height}）");
+        var cropSize = TestImage.SizeOf(P("photo_crop.jpg"));
+        check(cropSize == (1000, 1000), $"切り抜き: 回転を反映した画像の中央 1:1（{cropSize}）");
 
         // 上書き（保存先が元のファイル）
-        using (var img = new Image<Rgba32>(200, 100, Red)) img.SaveAsPng(P("over.png"));
+        new TestImage(200, 100, Px.Red).Save(P("over.png"));
         Cropper.CropCenter(P("over.png"), 1.0, P("over.png"));
-        using (var img = Image.Load<Rgba32>(P("over.png")))
-            check(img.Width == 100 && img.Height == 100, $"切り抜き: 元のファイルに上書きできる（{img.Width}x{img.Height}）");
+        var overSize = TestImage.SizeOf(P("over.png"));
+        check(overSize == (100, 100), $"切り抜き: 元のファイルに上書きできる（{overSize}）");
         using (var whole = ImageViewer.Core.Imaging.ImageLoader.Load(P("over.png")))
             Cropper.SaveCrop(whole, new Rectangle(0, 0, 40, 30), P("over.png"), P("over.png"));
-        using (var img = Image.Load<Rgba32>(P("over.png")))
-            check(img.Width == 40 && img.Height == 30, $"切り抜き: 表示中の画像の範囲で上書きできる（{img.Width}x{img.Height}）");
-        using (var anim = new Image<Rgba32>(20, 20, Red))
-        {
-            anim.Frames.AddFrame(new Image<Rgba32>(20, 20, Blue).Frames.RootFrame);
-            anim.SaveAsGif(P("over.gif"));
-        }
+        overSize = TestImage.SizeOf(P("over.png"));
+        check(overSize == (40, 30), $"切り抜き: 表示中の画像の範囲で上書きできる（{overSize}）");
+        TestImage.SaveFrames(P("over.gif"), new[] { new TestImage(20, 20, Px.Red), new TestImage(20, 20, Px.Blue) }, new[] { 10, 10 });
         long gifSize = new FileInfo(P("over.gif")).Length;
         bool refused = false;
         try { Cropper.CropCenter(P("over.gif"), 1.0, P("over.gif")); }
@@ -294,7 +290,7 @@ static class EditingTests
         var moved = Masker.CarryRegions(new[] { triangle! }, 40, 40, 80, 80)[0];
         check(moved.Contains(10, 10) && !moved.Contains(70, 70), "自由な形: 大きさの違う画像へ引き継ぐと形ごと伸びる");
 
-        using (var img = new Image<Rgba32>(60, 30, Red)) img.SaveAsPng(P("mask.png"));
+        new TestImage(60, 30, Px.Red).Save(P("mask.png"));
         string maskOut = Masker.OutputPathFor(P("mask.png"), dir, MaskEffect.Mosaic);
         check(maskOut == P("mask_mosaic.png") && Masker.OutputPathFor(P("mask.png"), dir, MaskEffect.Blur) == P("mask_blur.png"),
             "モザイク: 保存先の名前は _mosaic / _blur");
@@ -305,8 +301,7 @@ static class EditingTests
         }
         check(File.Exists(maskOut), "モザイク: 別の名前で保存できる");
         Masker.MaskCarried(P("mask.png"), new[] { MaskRegion.Rect(0, 0, 10, 10) }, 60, 30, MaskEffect.Blur, 5, P("mask.png"));
-        using (var img = Image.Load<Rgba32>(P("mask.png")))
-            check(img.Width == 60 && img.Height == 30, "モザイク: 元のファイルに上書きできる（大きさはそのまま）");
+        check(TestImage.SizeOf(P("mask.png")) == (60, 30), "モザイク: 元のファイルに上書きできる（大きさはそのまま）");
         refused = false;
         try { Masker.MaskCarried(P("over.gif"), new[] { MaskRegion.Rect(0, 0, 10, 10) }, 20, 20, MaskEffect.Mosaic, 5, P("over.gif")); }
         catch (NotSupportedException) { refused = true; }
@@ -520,8 +515,10 @@ static class EditingTests
             Annotator.SaveAnnotated(whole, new[] { new Annotation(AnnotationKind.Frame, 2, 2, 20, 20, Blue, 4, 0, 4, true) }, P("mask.png"), markOut);
             check(whole[2, 10] == before, "枠・矢印: 保存しても表示中の画像は変えない");
         }
-        using (var img = Image.Load<Rgba32>(markOut))
-            check(img.Width == 60 && img[2, 10] == Blue, "枠・矢印: 別の名前で保存できる");
+        {
+            var img = TestImage.Load(markOut);
+            check(img.Width == 60 && img[2, 10] == Px.Blue, "枠・矢印: 別の名前で保存できる");
+        }
         refused = false;
         using (var gif = ImageViewer.Core.Imaging.ImageLoader.Load(P("over.gif")))
         {
@@ -553,8 +550,8 @@ static class EditingTests
 
         // プレビュー（縮小して組む）と原寸の結果の大きさがほぼ同じ
         string c1 = P("c1.png"), c2 = P("c2.png");
-        using (var img = new Image<Rgba32>(3000, 2000, Red)) img.SaveAsPng(c1);
-        using (var img = new Image<Rgba32>(1000, 1500, Blue)) img.SaveAsPng(c2);
+        new TestImage(3000, 2000, Px.Red).Save(c1);
+        new TestImage(1000, 1500, Px.Blue).Save(c2);
         var co = new CombineOptions { Normalize = CombineNormalize.Max, Spacing = 30, Padding = 60 };
         var (pre, scale) = Combiner.LoadForPreview(new[] { c1, c2 }, 1200, long.MaxValue);
         try
@@ -630,10 +627,10 @@ static class EditingTests
               && loaded.Combine?.Columns == 3, "リサイズ・連結の設定を保存して読み戻せる");
 
         // ---- 別の名前で保存: 保存先を決めた後に同じ名前のファイルができても、そのファイルは置き換えない ----
-        using (var img = new Image<Rgba32>(40, 20, Red)) img.SaveAsPng(P("late.png"));
+        new TestImage(40, 20, Px.Red).Save(P("late.png"));
         var region = new[] { MaskRegion.Rect(0, 0, 10, 10) };
         var mark = new[] { new Annotation(AnnotationKind.Frame, 2, 2, 20, 18, Blue, 2, 0, 4, false) };
-        using (var whole = Image.Load<Rgba32>(P("late.png")))
+        using (var whole = TestImage.Load(P("late.png")).ToApi())
         {
             var saves = new (string Name, string Decided, Func<string, string> Save)[]
             {
@@ -648,7 +645,7 @@ static class EditingTests
             {
                 File.WriteAllText(decided, "other"); // 保存先を決めた後に、ほかの処理が同じ名前で作った
                 string actual = save(decided);
-                check(File.ReadAllText(decided) == "other" && actual != decided && Path.GetDirectoryName(actual) == dir && Image.Identify(actual).Width > 0,
+                check(File.ReadAllText(decided) == "other" && actual != decided && Path.GetDirectoryName(actual) == dir && TestImage.SizeOf(actual).Width > 0,
                     $"{name}: 決めた保存先に後からできたファイルは置き換えず、別の名前（{Path.GetFileName(actual)}）で保存する");
             }
         }
@@ -662,7 +659,7 @@ static class EditingTests
         // ---- 一括処理の進め方（リサイズ・まとめて補正・回転で共通）: 打ち切り・進み具合・数え方 ----
         Directory.CreateDirectory(P("batch"));
         string B(string name) => Path.Combine(P("batch"), name);
-        using (var img = new Image<Rgba32>(40, 20, Red)) { img.SaveAsPng(B("1.png")); img.SaveAsPng(B("2.png")); img.SaveAsPng(B("3.png")); }
+        foreach (var name in new[] { "1.png", "2.png", "3.png" }) new TestImage(40, 20, Px.Red).Save(B(name));
         Directory.CreateDirectory(B("resized"));
         File.WriteAllText(Path.Combine(B("resized"), "1.png"), "old"); // 計画の時点で同名がある → 飛ばす
         File.WriteAllText(B("4.png"), "画像ではない");                    // 読めない → 失敗
@@ -718,19 +715,8 @@ static class EditingTests
         public void Report(ConvertProgress value) => report(value);
     }
 
-    static Image<Rgba32> SplitImage(int w, int h)
-    {
-        var img = new Image<Rgba32>(w, h, Blue);
-        img.ProcessPixelRows(a =>
-        {
-            for (int y = 0; y < h; y++)
-            {
-                var row = a.GetRowSpan(y);
-                for (int x = 0; x < w / 2; x++) row[x] = Red;
-            }
-        });
-        return img;
-    }
+    /// <summary>左半分が赤、右半分が青の画像</summary>
+    static TestImage SplitImage(int w, int h) => new TestImage(w, h, Px.Blue).Fill(Px.Red, 0, 0, w / 2, h);
 
     static bool Near(Rgba32 a, Rgba32 b) => Math.Abs(a.R - b.R) < 40 && Math.Abs(a.G - b.G) < 40 && Math.Abs(a.B - b.B) < 40;
 }

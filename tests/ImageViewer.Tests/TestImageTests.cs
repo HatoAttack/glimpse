@@ -45,5 +45,8 @@ static class TestImageTests
         TestImage.SaveFrames(P("t.tif"), frames.Take(2).ToList());
         check(TestImage.FrameCount(P("t.tif")) == 2 && TestImage.Load(P("t.tif"), 1)[0, 0] == Px.Green, "TestImage: TIFF のページ");
         check(TestImage.SizeOf(P("t.jpg")) == (64, 32) && TestImage.SizeOf(P("none.png")) == (-1, -1), "TestImage: 縦横（向きは反映しない）・無いファイル");
+        check(TestImage.HasExif(P("t.jpg")) && !TestImage.HasExif(P("t.png")), "TestImage: EXIF が入っているか");
+        // WebP の縦横はヘッダーを自分で読む（可逆の VP8L・拡張の VP8X）
+        check(TestImage.SizeOf(TestImage.Fixture("anim.webp", dir)) == (80, 40), $"TestImage: WebP（アニメ、VP8X）の縦横（{TestImage.SizeOf(P("anim.webp"))}）");
     }
 }
