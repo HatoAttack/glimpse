@@ -135,14 +135,25 @@ static class DialogTests
         ui.Radio("1:1").Checked = true;
         ui.Click("上書き保存");
         check(ui.Title.StartsWith("[2/2]") && ui.Title.Contains("100 × 100") && Width(b) == 100, $"切り抜き: 上書き保存（切り抜いた後の画像を出し直す）（{ui.Title}）");
-        ui.Click("全部を保存");
-        check(Width(Path.Combine(dir, "c1_crop (2).png")) == 100 && Width(Path.Combine(dir, "c2_crop.png")) == 100 && dialog.SavedCount == 4,
-            "切り抜き: 全部を保存（同じ比で中央から。同名があれば (2)）");
         ui.Click("次 ▶");
         check(ui.Title.StartsWith("[1/2]"), "切り抜き: 最後の次は最初に戻る");
         ui.Click("◀ 前");
         ui.Click("保存して次へ (Enter)");
-        check(ui.Form.IsDisposed && File.Exists(Path.Combine(dir, "c2_crop (2).png")) && dialog.SavedCount == 5, "切り抜き: 最後の 1 枚を保存して次へ → 閉じる");
+        check(ui.Form.IsDisposed && File.Exists(Path.Combine(dir, "c2_crop.png")) && dialog.SavedCount == 3, "切り抜き: 最後の 1 枚を保存して次へ → 閉じる");
+
+        using (var all = new Driver(new CropDialog(new[] { a, b })))
+        {
+            all.Radio("1:1").Checked = true;
+            all.Click("全部を保存");
+            check(all.Form.IsDisposed && Width(Path.Combine(dir, "c1_crop (2).png")) == 100 && Width(Path.Combine(dir, "c2_crop (2).png")) == 100
+                  && ((CropDialog)all.Form).SavedCount == 2, "切り抜き: 全部を保存（同じ比で中央から。同名があれば (2)）したら閉じる");
+        }
+        using (var one = new Driver(new CropDialog(new[] { a })))
+        {
+            one.Click("保存");
+            check(one.Form.IsDisposed && File.Exists(Path.Combine(dir, "c1_crop (3).png")) && ((CropDialog)one.Form).SavedCount == 1,
+                "切り抜き: 1 枚だけなら保存したら閉じる");
+        }
     }
 
     static int Width(string path) => File.Exists(path) ? Image.Identify(path).Width : -1;

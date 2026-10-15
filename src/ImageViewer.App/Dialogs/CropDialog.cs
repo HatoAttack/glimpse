@@ -2,6 +2,7 @@
 // - 画像の上をドラッグで範囲を選ぶ。枠の中をドラッグで移動、四隅で大きさを変える
 // - アスペクト比（自由 / 1:1 / 4:3 / 3:2 / 16:9 / 指定）と縦横の入れ替え
 // - 選択した画像を ◀ ▶（PageUp / PageDown）で切り替え。Enter で保存して次へ
+// - することが終わったら閉じる（1 枚だけなら保存したら、最後の 1 枚を「保存して次へ」したら、一括で 1 枚でも保存できたら）。結果はフッターに出る
 // - 「次の画像も同じ位置で切り抜く」なら、切り替えても枠を引き継ぐ（大きさが違う画像には割合で合わせる）。
 //   一括も「全部を今の範囲で切り抜き」になる（スクリーンショットのように構成が同じ画像向け）
 // - 「保存」は元の画像を残して別の名前で、「上書き保存」は元の画像を置き換える（確かめない。アニメ・書き出せない形式などは上書きしない）
@@ -408,6 +409,10 @@ public sealed class CropDialog : ThemedForm
             if (index + 1 < _stepper.Count) await ShowIndexAsync(index + 1);
             else Close(); // 最後の 1 枚を保存したら閉じる
         }
+        else if (_stepper.Count == 1)
+        {
+            Close(); // 1 枚だけなら、保存したらすることは終わり
+        }
         else if (overwrite)
         {
             await ShowIndexAsync(index, carry: false); // 切り抜いた後の画像を出し直す
@@ -435,6 +440,7 @@ public sealed class CropDialog : ThemedForm
     {
         int ok = await _saver.SaveAllAsync(_stepper.Paths, (src, folder) => crop(src, overwrite ? src : Cropper.OutputPathFor(src, folder)),
             overwrite, "切り抜き中", "切り抜けなかった画像");
-        if (overwrite && ok > 0 && _stepper.Index >= 0) await ShowIndexAsync(_stepper.Index, carry: false); // 表示中の画像も切り抜いた後のものにする
+        // 1 枚でも保存できたら閉じる（失敗した画像は保存の部品が知らせた）。全部失敗したら、設定を直してやり直せるように開いたまま
+        if (ok > 0) Close();
     }
 }
