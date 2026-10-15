@@ -15,7 +15,8 @@ public sealed class CopyPathsCommand : ImageCommandBase, IWorksOnAnyFile
 
     public override Task ExecuteAsync(CommandContext context)
     {
-        Clipboard.SetText(string.Join(Environment.NewLine, context.Paths));
+        // ほかのアプリがクリップボードを使用中でも、ファイルのコピーと同じく取り直す
+        FileClipboard.Retry(() => Clipboard.SetText(string.Join(Environment.NewLine, context.Paths)));
         context.Host.Notify($"{context.Paths.Count} 件のパスをコピーしました");
         return Task.CompletedTask;
     }
