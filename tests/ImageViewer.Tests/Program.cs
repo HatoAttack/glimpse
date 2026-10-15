@@ -122,6 +122,11 @@ Directory.CreateDirectory(dir);
 ArchiveTests.Run(Check, dir);
 Directory.Delete(dir, true);
 
+// ---- ファイルのコピー / 切り取り（クリップボード） ----
+Directory.CreateDirectory(dir);
+ClipboardTests.Run(Check, dir);
+Directory.Delete(dir, true);
+
 // ---- 更新の確認・exe の入れ替え ----
 UpdateTests.Run(Check, dir);
 Directory.Delete(dir, true);

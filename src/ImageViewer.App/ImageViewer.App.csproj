@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
@@ -11,6 +11,9 @@
     <Product>Glimpse</Product>
     <ApplicationIcon>Glimpse.ico</ApplicationIcon>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <!-- WFO1000: コントロールの公開プロパティに、デザイナーでの保存方法（DesignerSerializationVisibility）が無いという指摘。
+         画面はデザイナーを使わずすべてコードで組み立てていて（.Designer.cs も .resx も無い）、プロパティがデザイナーで保存されることは無いので抑制する -->
+    <NoWarn>$(NoWarn);WFO1000</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

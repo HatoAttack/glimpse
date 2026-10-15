@@ -3,7 +3,7 @@
 ## 必要なもの
 
 - Windows
-- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 
 ```
 dotnet run --project src/ImageViewer.App        # 起動
@@ -18,7 +18,7 @@ dotnet run --project tests/ImageViewer.Tests    # テスト
 | `src/ImageViewer.App` | WinForms の UI（ツールバー・一覧・1枚表示・メニュー・ダイアログ・配色） |
 | `tests/ImageViewer.Tests` | 動作テスト |
 
-.NET 8 + WinForms + ImageSharp。
+.NET 10 + WinForms + ImageSharp。
 
 アイコンの元は `docs/images/glimpse-icon.svg`（40px 以上）と、線を太くした `docs/images/glimpse-icon-small.svg`（16〜32px。タスクバーなど）。
 どちらも 512px の PNG にしてから縮小し、1 つの `src/ImageViewer.App/Glimpse.ico` にまとめる（exe とウィンドウのアイコン）。

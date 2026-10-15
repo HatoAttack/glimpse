@@ -56,7 +56,8 @@
 | C2 | A2 | `photo09.jpg` を選んで Ctrl+X、エクスプローラーで `other` に貼り付け | `other` に移動され、一覧から消える |
 | C3 | C2 | エクスプローラーで `other` の `photo09.jpg` を Ctrl+C、Glimpse で `images` を開いて Ctrl+V | `images` にコピーされ、一覧に出る |
 | C4 | A2 | `photo10.jpg` をエクスプローラーの `other` のウィンドウへドラッグ | 同じドライブなので移動になり、一覧から消える |
-| C5 | A2 | エクスプローラーで `other` の `other.png` を Glimpse の一覧へドラッグ | `images` に移動され、一覧に出る |
+| C5 | Glimpse で `glimpse-manual` を開く（`images` と `other` がフォルダのタイルで並ぶ） | エクスプローラーで `other` の `other.png` を、Glimpse の `images` のタイルの上へドラッグ | `images` に移動される（`images` を開くと一覧に出る）。一覧の空いた所に落としても取り込まない |
+| C5b | なし | エクスプローラーで `other` フォルダを Glimpse のウィンドウへドラッグ | `other` が開く |
 | C6 | 並び順を「手動」にする | 一覧の中でドラッグして並べ替え、別のフォルダへ移って戻る | 並べ替えた順のまま |
 | C7 | A2 | `photo11.jpg` を F2 で `renamed.jpg` に変える → Ctrl+Z | 名前が変わり、Ctrl+Z で `photo11.jpg` に戻る |
 | C8 | C5 | `photo07.jpg`・`photo08.jpg`・`other.png` を選び、F2 で連番（`snap##`）にして実行 | プレビューどおり `snap01`〜`snap03` になる |
@@ -88,7 +89,8 @@
 | E7 | A2 | `photo04.jpg` を Ctrl+K で切り抜き、保存先を「元と同じフォルダ」にして「保存」 | `images` に `photo04_crop.jpg` ができ、ダイアログが閉じる |
 | E8 | A2 | `photo05.jpg` を Ctrl+B でモザイクをかけて「上書き保存」 | 範囲にモザイクがかかって上書きされる |
 | E9 | A2 | `photo06.jpg` を Ctrl+D で枠・矢印・文字を描き、保存先を「元と同じフォルダ」にして「保存」 | `images` に `photo06_mark.jpg` ができ、描いたとおりに保存される |
-| E10 | `square.png`・`plain.bmp`・`alpha.png` を選ぶ | Ctrl+R で、サイズを長辺 600、形式を PNG、出力先を「中のフォルダ」の `resized`、ファイル名の置換・末尾に追加・小文字化をオフにして実行 | `imagesesized` に、元と同じ名前の PNG が 3 枚できる（設定は前回の値が残るので、毎回この値にしてから実行する） |
+| E10 | `square.png`・`plain.bmp`・`alpha.png` を選ぶ | Ctrl+R で、サイズを長辺 600、形式を PNG、出力先を「中のフォルダ」の `resized`、ファイル名の置換・末尾に追加・小文字化をオフにして実行 | `images
+esized` に、元と同じ名前の PNG が 3 枚できる（設定は前回の値が残るので、毎回この値にしてから実行する） |
 | E11 | `photo01.jpg` と `square.png` を選ぶ | Ctrl+M で横に連結して保存 | 1 枚にまとまった画像ができる |
 | E12 | アニメーション GIF | 1 枚表示で Ctrl+S（フレーム保存） | `元の名前_frame001.png` などができる |
 

@@ -20,7 +20,7 @@ internal static class FileWording
         : paths.All(ImageFormats.IsSupported) ? $"{paths.Count} 枚の画像" : $"{paths.Count} 件のファイル";
 }
 
-internal static class FileClipboard
+public static class FileClipboard
 {
     private const string DropEffectFormat = "Preferred DropEffect";
     private const int DropEffectCopy = 1, DropEffectMove = 2;
@@ -51,7 +51,7 @@ internal static class FileClipboard
     {
         var paths = Clipboard.GetFileDropList().Cast<string>().ToList();
         bool cut = false;
-        if (Clipboard.GetData(DropEffectFormat) is MemoryStream ms && ms.Length >= 4)
+        if (Clipboard.TryGetData<MemoryStream>(DropEffectFormat, out var ms) && ms.Length >= 4)
         {
             var bytes = new byte[4];
             ms.ReadExactly(bytes);

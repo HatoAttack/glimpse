@@ -180,7 +180,7 @@ static class ArchiveTests
 
         // ---- ドラッグ: 相手が求めたときだけ書き出す ----
         string lazyRoot = ArchiveExport.Root = Path.Combine(dir, "export-lazy");
-        var data = new ArchiveDragData(new[] { Z("001.jpg") });
+        var data = ArchiveDragData.Create(new[] { Z("001.jpg") });
         check(!Directory.Exists(lazyRoot) && data.GetDataPresent(DataFormats.FileDrop), "ドラッグを始めただけでは書き出さない（形式は出ている）");
         // エクスプローラーと同じく OLE で取り出す
         var format = new FORMATETC { cfFormat = 15, dwAspect = DVASPECT.DVASPECT_CONTENT, lindex = -1, tymed = TYMED.TYMED_HGLOBAL };
