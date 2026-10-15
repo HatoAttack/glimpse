@@ -61,6 +61,19 @@ public sealed class CopyPathsCommand : ImageCommandBase
 - メモリ上のサムネイルは合計 128MB を上限に古いものから破棄（1500 枚のフォルダを端までスクロールしてもプロセス全体で約 150MB）
 - 縮小デコードが効かない形式（PNG / WEBP 等）は同時に 2 枚までしか展開しない
 
+## PR の検証
+
+すべての PR と main への push で、GitHub Actions（`.github/workflows/ci.yml`、ワークフロー名「検証」）が Release ビルドと既存テストを実行する。
+チェック名は `build-and-test`。main のルールセットで必須のチェックに指定しているので、通らない PR はマージできない（ジョブ名を変えると必須チェックと合わなくなるので変えない）。
+
+失敗したときは PR の「Checks」から Actions のログを開く。ビルドエラーは「ビルド」の手順に、テストの失敗は「テスト」の手順に `NG` で始まる行として出る。
+手元で同じことをするには次のとおり:
+
+```
+dotnet build ImageViewer.sln -c Release
+dotnet run --project tests/ImageViewer.Tests -c Release --no-build
+```
+
 ## リリースの手順
 
 GitHub でリリースを公開すると、GitHub Actions（`.github/workflows/release.yml`）がテストしてから
