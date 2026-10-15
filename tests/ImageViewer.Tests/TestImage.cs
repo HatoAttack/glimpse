@@ -79,11 +79,26 @@ sealed class TestImage
 
     public Image<Rgba32> ToApi() => SixLabors.ImageSharp.Image.LoadPixelData<Rgba32>(Rgba, Width, Height);
 
+    /// <summary>Core の API が返した画像の frame 番目のコマ</summary>
+    public static TestImage FromApi(Image<Rgba32> image, int frame)
+    {
+        using var one = image.Frames.CloneFrame(frame);
+        return FromApi(one);
+    }
+
     public static TestImage FromApi(Image<Rgba32> image)
     {
         var rgba = new byte[image.Width * image.Height * 4];
         image.CopyPixelDataTo(rgba);
         return new TestImage(image.Width, image.Height, rgba);
+    }
+
+    /// <summary>コミットしてあるテスト用の画像（Fixtures フォルダ）を dir に写したパス。テストで書き換えても元は変わらない</summary>
+    public static string Fixture(string name, string dir)
+    {
+        string path = Path.Combine(dir, name);
+        File.Copy(Path.Combine(AppContext.BaseDirectory, "Fixtures", name), path, overwrite: true);
+        return path;
     }
 
     // ---- 保存（WIC） ----

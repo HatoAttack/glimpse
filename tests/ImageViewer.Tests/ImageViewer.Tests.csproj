@@ -17,6 +17,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- WIC で作れないテスト用の画像（アニメーション WebP など）。作り方は Fixtures/README.md -->
+    <None Include="Fixtures\**" CopyToOutputDirectory="PreserveNewest" LinkBase="Fixtures" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\ImageViewer.Core\ImageViewer.Core.csproj" />
     <ProjectReference Include="..\..\src\ImageViewer.App\ImageViewer.App.csproj" />
   </ItemGroup>
