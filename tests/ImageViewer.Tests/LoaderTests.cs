@@ -88,6 +88,25 @@ static class LoaderTests
         using (var img = ImageLoader.Load(gif, new LoadOptions { FirstFrameOnly = false }))
             check(img.Frames.Count == 3, $"アニメ GIF: 全フレーム指定で {img.Frames.Count} フレーム");
 
+        // ---- TIFF は WIC で読む（ImageSharp の TIFF デコーダの脆弱性を避けるため。テスト画像は ImageSharp で書く） ----
+        string tif = Path.Combine(dir, "split.tif");
+        using (var img = SplitImage(400, 200)) img.SaveAsTiff(tif);
+        using (var img = ImageLoader.Load(tif))
+            check(img.Width == 400 && img.Height == 200 && IsLeftRedRightBlue(img) && !ImageViewer.Core.Editing.Adjuster.KeepsMetadata(img),
+                "TIFF: WIC で読む（ImageSharp で読んでいればメタデータを持つ）");
+        using (var img = ImageLoader.Load(tif, LoadOptions.Thumbnail(100)))
+            check(img.Width == 100 && img.Height == 50 && IsLeftRedRightBlue(img), $"TIFF: 縮小読み込み 400x200 → {img.Width}x{img.Height}");
+        info = ImageLoader.Identify(tif);
+        check(info == new ImageHeader(400, 200, "TIFF"), $"Identify: TIFF（{info}）");
+        check(ImageFormats.IsSupported(tif) && !ImageFormats.IsImageSharpFormat(tif), "TIFF: 対応形式だが ImageSharp の形式ではない");
+        // 拡張子を変えた TIFF も ImageSharp の TIFF デコーダには渡さない（読めない扱いにして WIC で読み直す）
+        string disguised = Path.Combine(dir, "tiff_inside.png");
+        File.Copy(tif, disguised, overwrite: true);
+        using (var img = ImageLoader.Load(disguised))
+            check(img.Width == 400 && IsLeftRedRightBlue(img) && !ImageViewer.Core.Editing.Adjuster.KeepsMetadata(img),
+                "拡張子が PNG の TIFF: ImageSharp では読まず WIC で読む");
+        check(ImageLoader.Identify(disguised) is { Width: 400, Height: 200 }, "拡張子が PNG の TIFF: Identify も WIC で");
+
         // ---- WIC 経路 ----
         await WicCaseAsync(check, dir, ".heic", orientation: null);
         await WicCaseAsync(check, dir, ".heic", orientation: 6);

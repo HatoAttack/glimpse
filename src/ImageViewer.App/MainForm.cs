@@ -1566,12 +1566,13 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         return markMenu;
     }
 
-    /// <summary>ImageSharp で常に読める形式と、この PC の WIC 拡張機能で読める形式を表示</summary>
+    /// <summary>どの PC でも読める形式（ImageSharp と Windows 標準の WIC）と、この PC の WIC 拡張機能で読める形式を表示</summary>
     private void ShowSupportedFormats()
     {
-        string builtIn = string.Join(" ", ImageFormats.ImageSharpExtensions);
+        var builtInSet = ImageFormats.BuiltInExtensions.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        string builtIn = string.Join(" ", ImageFormats.BuiltInExtensions);
         var extra = WicCodecs.Decoders
-            .Select(d => (d.FriendlyName, Exts: d.Extensions.Where(e => !ImageFormats.ImageSharpExtensions.Contains(e)).ToList()))
+            .Select(d => (d.FriendlyName, Exts: d.Extensions.Where(e => !builtInSet.Contains(e)).ToList()))
             .Where(d => d.Exts.Count > 0)
             .Select(d => $"・{d.FriendlyName}\n    {string.Join(" ", d.Exts)}");
         string wic = string.Join("\n", extra);

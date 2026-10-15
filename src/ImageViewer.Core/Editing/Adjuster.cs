@@ -153,7 +153,7 @@ public static class Adjuster
 
     /// <summary>
     /// ファイルを読み、補正をかけて保存する（回転は反映する）。アニメや複数ページの画像（コマが 2 つ以上）は NotSupportedException。ImageSharp で読めた画像は EXIF などのメタデータを残す。
-    /// WIC で読んだ画像（HEIC / AVIF / RAW や、ImageSharp で読めない JPEG の亜種）は画素だけなので残せない
+    /// WIC で読んだ画像（TIFF / HEIC / AVIF / RAW や、ImageSharp で読めない JPEG の亜種）は画素だけなので残せない
     /// </summary>
     /// <param name="allowMetadataLoss">
     /// false なら、メタデータを残せないときは保存せずに MetadataLossException（ユーザーに確かめてから true で呼び直す）
@@ -179,7 +179,7 @@ public static class Adjuster
 
     /// <summary>
     /// コマ・ページの数（ヘッダーだけ読む）。GIF / WEBP のアニメ、複数ページの TIFF など。
-    /// ImageSharp で数えられなければ WIC で数える（ImageSharp で読めない TIFF の亜種・HEIC など）。どちらでも数えられなければ null
+    /// ImageSharp で数えられなければ WIC で数える（TIFF・HEIC など）。どちらでも数えられなければ null
     /// </summary>
     public static int? FrameCount(string path)
     {

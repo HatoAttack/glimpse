@@ -105,7 +105,7 @@ public static class Converter
 
     /// <summary>
     /// メタデータ（EXIF など）を残して変換できる形式か。
-    /// HEIC / AVIF / RAW などの WIC で読む形式は画素だけを取り出すので残せない
+    /// TIFF / HEIC / AVIF / RAW などの WIC で読む形式は画素だけを取り出すので残せない
     /// </summary>
     public static bool KeepsMetadata(string path) => ImageFormats.IsImageSharpFormat(path);
 

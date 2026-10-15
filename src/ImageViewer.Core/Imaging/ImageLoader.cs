@@ -1,10 +1,20 @@
 // 画像読み込みの窓口。サムネイル・1枚表示・編集機能はすべてここ経由で読む
 // - ImageSharp の形式: ImageSharp で読む（JPEG は縮小デコードが効く）。読めなければ WIC で再挑戦
-// - それ以外で WIC にデコーダがある形式（HEIC / AVIF / RAW / JPEG XL 等）: WPF の画像 API（中身は WIC）で読む
+// - それ以外で WIC にデコーダがある形式（TIFF / HEIC / AVIF / RAW / JPEG XL 等）: WPF の画像 API（中身は WIC）で読む
+// ImageSharp は拡張子でなく中身で形式を決めるので、TIFF を除いた設定（DecodeConfiguration）で読む。
+// 拡張子を変えた TIFF も ImageSharp の TIFF デコーダには渡らず、読めない扱いになって WIC で読み直す
 // どちらの経路でも「回転補正済み・sRGB・Rgba32」の画像を返す
 using System.Windows.Media;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats;
+using SixLabors.ImageSharp.Formats.Bmp;
+using SixLabors.ImageSharp.Formats.Gif;
+using SixLabors.ImageSharp.Formats.Jpeg;
+using SixLabors.ImageSharp.Formats.Pbm;
+using SixLabors.ImageSharp.Formats.Png;
+using SixLabors.ImageSharp.Formats.Qoi;
+using SixLabors.ImageSharp.Formats.Tga;
+using SixLabors.ImageSharp.Formats.Webp;
 using SixLabors.ImageSharp.Metadata.Profiles.Exif;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
@@ -36,6 +46,15 @@ public static class ImageLoader
     private static readonly HashSet<string> HeifExtensions = new(
         new[] { ".heic", ".heif", ".hif", ".heics", ".heifs", ".avif", ".avifs", ".avci", ".avcs" },
         StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// ImageSharp で読むときの設定。TIFF を入れない（ImageSharp 3.1 の TIFF デコーダに脆弱性 GHSA-wmxv-xphr-5c9g があるため。
+    /// TIFF は WIC で読む）。保存は Configuration.Default のまま
+    /// </summary>
+    internal static readonly Configuration DecodeConfiguration = new(
+        new PngConfigurationModule(), new JpegConfigurationModule(), new GifConfigurationModule(),
+        new BmpConfigurationModule(), new PbmConfigurationModule(), new TgaConfigurationModule(),
+        new WebpConfigurationModule(), new QoiConfigurationModule());
 
     public static Image<Rgba32> Load(string path, LoadOptions? options = null)
     {
@@ -141,15 +160,15 @@ public static class ImageLoader
 
     private static Image<Rgba32> LoadWithImageSharp(string path, LoadOptions options)
     {
-        var decoderOptions = new DecoderOptions { MaxFrames = options.FirstFrameOnly ? 1 : uint.MaxValue };
+        var decoderOptions = new DecoderOptions { Configuration = DecodeConfiguration, MaxFrames = options.FirstFrameOnly ? 1 : uint.MaxValue };
         using var stream = ImageSource.OpenRead(path);
         if (options.MaxEdge is int maxEdge)
         {
             // TargetSize は小さい画像を拡大してしまうので、上限を超えるときだけ指定する
-            var info = Image.Identify(stream);
+            var info = Image.Identify(decoderOptions, stream);
             stream.Position = 0;
             if (Math.Max(info.Width, info.Height) > maxEdge)
-                decoderOptions = new DecoderOptions { MaxFrames = decoderOptions.MaxFrames, TargetSize = new Size(maxEdge, maxEdge) };
+                decoderOptions = new DecoderOptions { Configuration = DecodeConfiguration, MaxFrames = decoderOptions.MaxFrames, TargetSize = new Size(maxEdge, maxEdge) };
         }
         var image = Image.Load<Rgba32>(decoderOptions, stream);
         AutoOrient(image, path, partial: options.FirstFrameOnly);
@@ -179,7 +198,7 @@ public static class ImageLoader
     internal static ImageInfo IdentifyImageSharp(string path)
     {
         using var stream = ImageSource.OpenRead(path);
-        return Image.Identify(stream);
+        return Image.Identify(new DecoderOptions { Configuration = DecodeConfiguration }, stream);
     }
 
     // ---- WIC（WPF の画像 API 経由） ----

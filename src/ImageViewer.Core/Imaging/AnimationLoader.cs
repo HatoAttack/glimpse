@@ -77,7 +77,7 @@ public static class AnimationLoader
         ct.ThrowIfCancellationRequested();
 
         Image<Rgba32> image;
-        using (var stream = ImageSource.OpenRead(path)) image = Image.Load<Rgba32>(new DecoderOptions(), stream);
+        using (var stream = ImageSource.OpenRead(path)) image = Image.Load<Rgba32>(new DecoderOptions { Configuration = ImageLoader.DecodeConfiguration }, stream);
         try
         {
             ct.ThrowIfCancellationRequested();
@@ -115,7 +115,7 @@ public static class AnimationLoader
     {
         // そのコマまでだけ展開する（重ね合わせのため、前のコマは読む必要がある）
         using var stream = ImageSource.OpenRead(path);
-        using var image = Image.Load<Rgba32>(new DecoderOptions { MaxFrames = (uint)index + 1 }, stream);
+        using var image = Image.Load<Rgba32>(new DecoderOptions { Configuration = ImageLoader.DecodeConfiguration, MaxFrames = (uint)index + 1 }, stream);
         if (index >= image.Frames.Count) throw new ArgumentOutOfRangeException(nameof(index), "そのコマはありません");
         ImageLoader.AutoOrient(image, path, partial: true); // 再生と同じ向きで（EXIF の回転を直す）
         return image.Frames.CloneFrame(index);
