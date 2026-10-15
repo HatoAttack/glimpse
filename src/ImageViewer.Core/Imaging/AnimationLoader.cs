@@ -8,20 +8,24 @@ using SixLabors.ImageSharp.Formats.Gif;
 using SixLabors.ImageSharp.Formats.Webp;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
+using SkiaSharp;
 
 namespace ImageViewer.Core.Imaging;
 
 /// <summary>再生用のコマ（画面に合わせて縮めたもの）と、それぞれの表示時間</summary>
 public sealed class AnimationFrames : IDisposable
 {
-    public AnimationFrames(Image<Rgba32> image, IReadOnlyList<int> delaysMs)
+    public AnimationFrames(IReadOnlyList<SKBitmap> frames, IReadOnlyList<int> delaysMs)
     {
-        Image = image;
+        Frames = frames;
         DelaysMs = delaysMs;
     }
 
-    /// <summary>全部のコマ（Frames[i] が i 番目のコマ）</summary>
-    public Image<Rgba32> Image { get; }
+    /// <summary>全部のコマ（Frames[i] が i 番目のコマ。どのコマも重ね合わせ済みの 1 枚の絵）</summary>
+    public IReadOnlyList<SKBitmap> Frames { get; }
+
+    public int Width => Frames[0].Width;
+    public int Height => Frames[0].Height;
 
     /// <summary>それぞれのコマを見せる時間（ミリ秒）</summary>
     public IReadOnlyList<int> DelaysMs { get; }
@@ -31,7 +35,10 @@ public sealed class AnimationFrames : IDisposable
     /// <summary>元の大きさより縮めて読んだ（表示できる場所が広がったら読み直す価値がある）</summary>
     public bool Downscaled { get; init; }
 
-    public void Dispose() => Image.Dispose();
+    public void Dispose()
+    {
+        foreach (var frame in Frames) frame.Dispose();
+    }
 }
 
 public static class AnimationLoader
@@ -93,12 +100,25 @@ public static class AnimationLoader
                 var size = new Size(Math.Max(1, (int)(image.Width * scale)), Math.Max(1, (int)(image.Height * scale)));
                 image.Mutate(x => x.Resize(size));
             }
-            return new AnimationFrames(image, delays) { Downscaled = scale < 1.0 };
+            var frames = new List<SKBitmap>(image.Frames.Count);
+            try
+            {
+                foreach (var frame in image.Frames)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    frames.Add(ImageSharpBridge.ToSkia(frame));
+                }
+            }
+            catch
+            {
+                foreach (var f in frames) f.Dispose();
+                throw;
+            }
+            return new AnimationFrames(frames, delays) { Downscaled = scale < 1.0 };
         }
-        catch
+        finally
         {
             image.Dispose();
-            throw;
         }
     }
 
@@ -110,8 +130,14 @@ public static class AnimationLoader
         return ms < MinDelayMs ? DefaultDelayMs : ms;
     }
 
-    /// <summary>index 番目（0 から）のコマを原寸で読む</summary>
-    public static Image<Rgba32> LoadFrame(string path, int index)
+    /// <summary>index 番目（0 から）のコマを原寸で読む（重ね合わせ済み・EXIF の回転を直したもの）</summary>
+    public static SKBitmap LoadFrame(string path, int index)
+    {
+        using var frame = LoadFrameImageSharp(path, index);
+        return ImageSharpBridge.ToSkia(frame);
+    }
+
+    private static Image<Rgba32> LoadFrameImageSharp(string path, int index)
     {
         // そのコマまでだけ展開する（重ね合わせのため、前のコマは読む必要がある）
         using var stream = ImageSource.OpenRead(path);
@@ -135,7 +161,7 @@ public static class AnimationLoader
     /// <summary>index 番目（0 から）のコマを原寸の PNG で保存し、保存先を返す</summary>
     public static string SaveFrame(string source, int index, int count)
     {
-        using var frame = LoadFrame(source, index);
+        using var frame = LoadFrameImageSharp(source, index);
         for (int attempt = 0; ; attempt++)
         {
             string path = FramePath(source, index, count);

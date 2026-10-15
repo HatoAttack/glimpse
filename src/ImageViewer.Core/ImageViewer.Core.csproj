@@ -10,6 +10,8 @@
     <UseWPF>true</UseWPF>
     <!-- サムネイルを GDI+ の Bitmap で持つため System.Drawing を参照する（WinForms の UI 部品は使わない） -->
     <UseWindowsForms>true</UseWindowsForms>
+    <!-- SKBitmap の画素を、コピーを増やさずに Span で読み書きするため -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
@@ -20,6 +22,9 @@
 
   <ItemGroup>
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.*" />
+    <!-- ImageSharp から移行中（#81）。画像は SKBitmap で受け渡す。SkiaSharp 本体と、Windows 用のネイティブのライブラリ -->
+    <PackageReference Include="SkiaSharp" Version="4.153.1" />
+    <PackageReference Include="SkiaSharp.NativeAssets.Win32" Version="4.153.1" />
   </ItemGroup>
 
 </Project>

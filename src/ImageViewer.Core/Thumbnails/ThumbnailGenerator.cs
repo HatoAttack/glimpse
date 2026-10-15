@@ -5,6 +5,7 @@ using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using ImageViewer.Core.Imaging;
 using SixLabors.ImageSharp.PixelFormats;
+using SkiaSharp;
 
 namespace ImageViewer.Core.Thumbnails;
 
@@ -38,7 +39,28 @@ public static class ThumbnailGenerator
         }
     }
 
-    /// <summary>ImageSharp の画像を GDI+ の 32bppPArgb（乗算済みアルファ）Bitmap に変換</summary>
+    /// <summary>SKBitmap を GDI+ の 32bppPArgb（乗算済みアルファ）Bitmap に変換（Skia が BGRA・乗算済みに直して書き込む）</summary>
+    public static Bitmap ToPArgbBitmap(SKBitmap image)
+    {
+        int w = image.Width, h = image.Height;
+        var bmp = new Bitmap(w, h, PixelFormat.Format32bppPArgb);
+        var data = bmp.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.WriteOnly, PixelFormat.Format32bppPArgb);
+        try
+        {
+            // GDI+ の PArgb はメモリ上 BGRA の順で、乗算済み
+            var info = new SKImageInfo(w, h, SKColorType.Bgra8888, SKAlphaType.Premul);
+            using var pixmap = image.PeekPixels();
+            if (!pixmap.ReadPixels(info, data.Scan0, data.Stride, 0, 0))
+                throw new InvalidOperationException($"画素を読み出せません（{image.ColorType} / {image.AlphaType}）");
+        }
+        finally
+        {
+            bmp.UnlockBits(data);
+        }
+        return bmp;
+    }
+
+    /// <summary>ImageSharp の画像を GDI+ の 32bppPArgb（乗算済みアルファ）Bitmap に変換（移行中だけ。編集のダイアログ用）</summary>
     public static Bitmap ToPArgbBitmap(SixLabors.ImageSharp.Image<Rgba32> image) => ToPArgbBitmap(image.Frames.RootFrame);
 
     /// <summary>1 コマ分を変換（アニメのコマ用）</summary>

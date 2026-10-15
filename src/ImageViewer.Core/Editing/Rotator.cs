@@ -16,7 +16,7 @@ public static class Rotator
     public static void RotateFile(string path, RotateDirection direction)
     {
         SourceGuard.EnsureReplaceable(path, "回転");
-        using var image = ImageLoader.Load(path); // EXIF の向きは反映済み（向きの値は「そのまま」になっている）
+        using var image = ImageLoader.LoadForEdit(path); // EXIF の向きは反映済み（向きの値は「そのまま」になっている）
         SourceGuard.EnsureKeepsMetadata(image, "回転");
         image.Mutate(x => x.Rotate(direction switch
         {

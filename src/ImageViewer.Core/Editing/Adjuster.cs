@@ -168,7 +168,7 @@ public static class Adjuster
         // 数えられなかった画像は、ページが消えるかもしれないので上書きしない（別のファイルに書くならよい）
         if (frames == null && SourceGuard.IsSameFile(src, dst))
             throw new NotSupportedException("ページの数を確かめられない画像なので、上書きしませんでした");
-        using var image = ImageLoader.Load(src); // 回転補正済み
+        using var image = ImageLoader.LoadForEdit(src); // 回転補正済み
         if (!allowMetadataLoss && !KeepsMetadata(image)) throw new MetadataLossException(src);
         if (autoLevels) options = options.WithLevels(Auto(image));
         Apply(image, options);

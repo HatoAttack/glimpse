@@ -79,6 +79,25 @@ sealed class TestImage
 
     public Image<Rgba32> ToApi() => SixLabors.ImageSharp.Image.LoadPixelData<Rgba32>(Rgba, Width, Height);
 
+    /// <summary>Core の API が返した画像（SKBitmap）。どの形式でも RGBA・乗算しない値に読み出す</summary>
+    public static TestImage FromApi(SkiaSharp.SKBitmap bitmap)
+    {
+        var info = new SkiaSharp.SKImageInfo(bitmap.Width, bitmap.Height, SkiaSharp.SKColorType.Rgba8888, SkiaSharp.SKAlphaType.Unpremul);
+        var rgba = new byte[info.BytesSize];
+        var handle = System.Runtime.InteropServices.GCHandle.Alloc(rgba, System.Runtime.InteropServices.GCHandleType.Pinned);
+        try
+        {
+            using var pixmap = bitmap.PeekPixels();
+            if (!pixmap.ReadPixels(info, handle.AddrOfPinnedObject(), info.RowBytes, 0, 0))
+                throw new InvalidOperationException($"画素を読み出せません（{bitmap.ColorType}）");
+        }
+        finally
+        {
+            handle.Free();
+        }
+        return new TestImage(bitmap.Width, bitmap.Height, rgba);
+    }
+
     /// <summary>Core の API が返した画像の frame 番目のコマ</summary>
     public static TestImage FromApi(Image<Rgba32> image, int frame)
     {
