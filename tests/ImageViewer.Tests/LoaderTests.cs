@@ -105,7 +105,10 @@ static class LoaderTests
         using (var img = ImageLoader.Load(disguised))
             check(img.Width == 400 && IsLeftRedRightBlue(img) && !ImageViewer.Core.Editing.Adjuster.KeepsMetadata(img),
                 "拡張子が PNG の TIFF: ImageSharp では読まず WIC で読む");
-        check(ImageLoader.Identify(disguised) is { Width: 400, Height: 200 }, "拡張子が PNG の TIFF: Identify も WIC で");
+        info = ImageLoader.Identify(disguised);
+        check(info == new ImageHeader(400, 200, "TIFF"), $"拡張子が PNG の TIFF: Identify も WIC で、形式は中身の TIFF（{info}）");
+        check(!ImageViewer.Core.Editing.Converter.KeepsMetadata(disguised) && ImageViewer.Core.Editing.Converter.KeepsMetadata(small),
+            "拡張子が PNG の TIFF: 変換でメタデータを残せない（中身で判断する。本物の PNG は残せる）");
 
         // ---- WIC 経路 ----
         await WicCaseAsync(check, dir, ".heic", orientation: null);

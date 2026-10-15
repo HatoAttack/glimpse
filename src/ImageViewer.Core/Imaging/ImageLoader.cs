@@ -106,7 +106,7 @@ public static class ImageLoader
             var frame = decoder.Frames[0];
             // HEIF 系はデコーダが回転済みの大きさを返す（ImageLoader.Load と同じ扱い）
             ushort orientation = HeifExtensions.Contains(Path.GetExtension(path)) ? (ushort)1 : ReadOrientation(frame);
-            string fmt = FormatFromExtension(path);
+            string fmt = WicFormat(decoder, path);
             return (Rotated(orientation)
                 ? new ImageHeader(frame.PixelHeight, frame.PixelWidth, fmt)
                 : new ImageHeader(frame.PixelWidth, frame.PixelHeight, fmt)) with { Photo = ReadWicPhoto(frame) };
@@ -152,6 +152,48 @@ public static class ImageLoader
         "HEIF" or "HIF" => "HEIC",
         var e => e,
     };
+
+    /// <summary>
+    /// WIC が選んだデコーダの形式名。拡張子がそのデコーダのものなら拡張子から（RAW のデコーダは多くの拡張子を持つので、
+    /// デコーダの名前より拡張子のほうが正確）、違えば（拡張子を変えた TIFF など）デコーダの最初の拡張子から
+    /// </summary>
+    private static string WicFormat(Wpf.BitmapDecoder decoder, string path)
+    {
+        try
+        {
+            var exts = decoder.CodecInfo?.FileExtensions?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (exts is { Length: > 0 } && !exts.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
+                return FormatFromExtension(exts[0]);
+        }
+        catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException or System.Runtime.InteropServices.COMException)
+        {
+            // デコーダの情報を読めなければ拡張子で
+        }
+        return FormatFromExtension(path);
+    }
+
+    /// <summary>
+    /// 中身が ImageSharp で読む形式か（先頭の数バイトだけ読む）。拡張子を変えた TIFF などは false（WIC で読むので画素だけになる）。
+    /// ファイルを開けなければ拡張子で判断する
+    /// </summary>
+    public static bool IsImageSharpContent(string path)
+    {
+        if (!ImageFormats.IsImageSharpFormat(path)) return false;
+        try
+        {
+            using var stream = ImageSource.OpenRead(path);
+            Image.DetectFormat(new DecoderOptions { Configuration = DecodeConfiguration }, stream);
+            return true;
+        }
+        catch (UnknownImageFormatException)
+        {
+            return false;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or NotSupportedException)
+        {
+            return true;
+        }
+    }
 
     private static bool IsDecodeFailure(Exception ex) =>
         ex is UnknownImageFormatException or InvalidImageContentException or NotSupportedException;

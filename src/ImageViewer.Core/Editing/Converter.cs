@@ -1,5 +1,6 @@
 // リサイズ・形式変換（image-sizechange のリサイズタブから移植）。
 // 読み込みは ImageLoader 経由なので HEIC / AVIF / RAW なども入力にできる
+using ImageViewer.Core.Archives;
 using ImageViewer.Core.Imaging;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats.Png;
@@ -105,9 +106,23 @@ public static class Converter
 
     /// <summary>
     /// メタデータ（EXIF など）を残して変換できる形式か。
-    /// TIFF / HEIC / AVIF / RAW などの WIC で読む形式は画素だけを取り出すので残せない
+    /// TIFF / HEIC / AVIF / RAW などの WIC で読む形式は画素だけを取り出すので残せない。
+    /// 拡張子でなく中身で判断する（拡張子を変えた TIFF も WIC で読むので残せない）。
+    /// プレビューは設定を変えるたびに作り直すので、ファイルの更新日時が変わらない間は結果を覚えておく
     /// </summary>
-    public static bool KeepsMetadata(string path) => ImageFormats.IsImageSharpFormat(path);
+    public static bool KeepsMetadata(string path)
+    {
+        if (!ImageFormats.IsImageSharpFormat(path)) return false;
+        var stamp = ArchivePath.IsInside(path) ? DateTime.MinValue : File.GetLastWriteTimeUtc(path);
+        if (_keepsMetadata.TryGetValue(path, out var cached) && cached.Stamp == stamp) return cached.Keeps;
+        bool keeps = ImageLoader.IsImageSharpContent(path);
+        if (_keepsMetadata.Count >= 4096) _keepsMetadata.Clear();
+        _keepsMetadata[path] = (stamp, keeps);
+        return keeps;
+    }
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (DateTime Stamp, bool Keeps)> _keepsMetadata =
+        new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>計画の Ok のものを 1 枚ずつ変換する（重い処理なので呼び出し側で別スレッドへ）</summary>
     /// <param name="createOnly">
