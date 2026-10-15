@@ -174,6 +174,19 @@ static class LoaderTests
         else
             check(img.Width == 100 && img.Height == 50 && IsLeftRedRightBlue(img),
                 $"{label} 縮小読み込み 400x200 → {img.Width}x{img.Height}");
+
+        // 拡張子を .qoi に変えた HEIC も、HEIC と同じ向き・大きさで読む。
+        // （ここで作る HEIC は回転をコンテナにだけ持ち EXIF の向きが無いので、二重の回転そのものは再現しない）
+        if (ext == ".heic" && orientation == 6)
+        {
+            string renamed = Path.ChangeExtension(path, ".qoi");
+            File.Copy(path, renamed, overwrite: true);
+            var renamedInfo = ImageLoader.Identify(renamed);
+            check(renamedInfo == expected, $"{label} 拡張子が QOI でも同じ向き（Identify: {renamedInfo}）");
+            using var renamedImg = ImageLoader.Load(renamed, LoadOptions.Thumbnail(100));
+            check(renamedImg.Width == 50 && renamedImg.Height == 100 && Near(renamedImg[25, 10], Red) && Near(renamedImg[25, 90], Blue),
+                $"{label} 拡張子が QOI でも同じ向き（読み込み {renamedImg.Width}x{renamedImg.Height}）");
+        }
     }
 
     /// <summary>WinRT のエンコーダで左半分が赤・右半分が青の画像を作る（WIC で読む形式のテスト画像用）</summary>

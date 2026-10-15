@@ -109,7 +109,7 @@ public static class ImageLoader
                 Wpf.BitmapCreateOptions.DelayCreation | Wpf.BitmapCreateOptions.IgnoreColorProfile, Wpf.BitmapCacheOption.None);
             var frame = decoder.Frames[0];
             // HEIF 系はデコーダが回転済みの大きさを返す（ImageLoader.Load と同じ扱い）
-            ushort orientation = HeifExtensions.Contains(Path.GetExtension(path)) ? (ushort)1 : ReadOrientation(frame);
+            ushort orientation = IsHeif(decoder, path) ? (ushort)1 : ReadOrientation(frame);
             string fmt = WicFormat(decoder, path);
             return (Rotated(orientation)
                 ? new ImageHeader(frame.PixelHeight, frame.PixelWidth, fmt)
@@ -163,17 +163,32 @@ public static class ImageLoader
     /// </summary>
     private static string WicFormat(Wpf.BitmapDecoder decoder, string path)
     {
+        var exts = DecoderExtensions(decoder);
+        if (exts is { Length: > 0 } && !exts.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
+            return FormatFromExtension(exts[0]);
+        return FormatFromExtension(path);
+    }
+
+    /// <summary>
+    /// HEIF 系（HEIC / AVIF）のデコーダが選ばれたか。拡張子を変えた HEIC も、選ばれたデコーダで判断する。
+    /// デコーダの情報を読めなければ拡張子で
+    /// </summary>
+    private static bool IsHeif(Wpf.BitmapDecoder decoder, string path) =>
+        DecoderExtensions(decoder) is { Length: > 0 } exts
+            ? exts.Any(HeifExtensions.Contains)
+            : HeifExtensions.Contains(Path.GetExtension(path));
+
+    /// <summary>WIC が選んだデコーダの拡張子（".tiff" 形式）。読めなければ null</summary>
+    private static string[]? DecoderExtensions(Wpf.BitmapDecoder decoder)
+    {
         try
         {
-            var exts = decoder.CodecInfo?.FileExtensions?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            if (exts is { Length: > 0 } && !exts.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
-                return FormatFromExtension(exts[0]);
+            return decoder.CodecInfo?.FileExtensions?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         }
         catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException or System.Runtime.InteropServices.COMException)
         {
-            // デコーダの情報を読めなければ拡張子で
+            return null;
         }
-        return FormatFromExtension(path);
     }
 
     /// <summary>
@@ -259,7 +274,7 @@ public static class ImageLoader
         var frame = decoder.Frames[0];
         // HEIF 系は回転をコンテナ（irot / imir）で持ち、Windows のデコーダが適用済みで返す。
         // HEIF の仕様上 EXIF の Orientation は無視すべきもので、適用すると iPhone の写真等が二重に回転する
-        ushort orientation = HeifExtensions.Contains(Path.GetExtension(path)) ? (ushort)1 : ReadOrientation(frame);
+        ushort orientation = IsHeif(decoder, path) ? (ushort)1 : ReadOrientation(frame);
 
         Wpf.BitmapSource source = ToSrgb(frame);
         if (options.MaxEdge is int maxEdge && Math.Max(source.PixelWidth, source.PixelHeight) > maxEdge)
