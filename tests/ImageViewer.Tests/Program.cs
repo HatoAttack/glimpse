@@ -105,6 +105,10 @@ Directory.Delete(dir, true);
 SkBitmapEditingTests.Run(Check, dir);
 Directory.Delete(dir, true);
 
+// ---- 保存（形式ごとの書き出し・EXIF の書き戻し）と QOI・PNM ----
+SaveTests.Run(Check, dir);
+Directory.Delete(dir, true);
+
 // ---- 編集ダイアログ（切り抜き / モザイク・ぼかし / 枠・矢印）の操作 ----
 Directory.CreateDirectory(dir);
 DialogTests.Run(Check, dir);

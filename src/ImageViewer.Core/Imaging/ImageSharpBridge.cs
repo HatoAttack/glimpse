@@ -2,7 +2,6 @@
 // 画像は SKBitmap（RGBA・乗算しない。ImageSharp の Rgba32 と同じ並び）で受け渡し、まだ ImageSharp で処理する所とは、ここで変換する。
 // 画素の値は変わらない。ImageSharp を外すとき（#81 手順8）に、このファイルごと消す
 using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Metadata;
 using SixLabors.ImageSharp.PixelFormats;
 using SkiaSharp;
 
@@ -32,40 +31,18 @@ internal static class ImageSharpBridge
         return bitmap;
     }
 
-    /// <summary>
-    /// SKBitmap を ImageSharp の画像にする（どの形式の SKBitmap でも、RGBA・乗算しない値に読み出す）。
-    /// metadata があれば、その写しを付ける（保存するときに元のファイルのメタデータを書くため）
-    /// </summary>
-    public static Image<Rgba32> ToImageSharp(SKBitmap bitmap, ImageMetadata? metadata = null)
+    /// <summary>SKBitmap を ImageSharp の画像にする（どの形式の SKBitmap でも、RGBA・乗算しない値に読み出す。メタデータは付けない）</summary>
+    public static Image<Rgba32> ToImageSharp(SKBitmap bitmap)
     {
         if (bitmap.ColorType == SKColorType.Rgba8888 && bitmap.AlphaType is SKAlphaType.Unpremul or SKAlphaType.Opaque
             && bitmap.RowBytes == bitmap.Width * 4)
-            return FromRgba(bitmap.GetPixelSpan(), bitmap.Width, bitmap.Height, metadata);
+            return SixLabors.ImageSharp.Image.LoadPixelData<Rgba32>(bitmap.GetPixelSpan(), bitmap.Width, bitmap.Height);
         using var converted = new SKBitmap(Info(bitmap.Width, bitmap.Height));
         using (var source = bitmap.PeekPixels())
         using (var target = converted.PeekPixels())
             if (!source.ReadPixels(target))
                 throw new InvalidOperationException($"画素を読み出せません（{bitmap.ColorType} / {bitmap.AlphaType}）");
-        return FromRgba(converted.GetPixelSpan(), converted.Width, converted.Height, metadata);
-    }
-
-    /// <summary>同じ画素で、メタデータだけを metadata の写しに置き換えた画像（metadata が null ならメタデータ無し）</summary>
-    internal static Image<Rgba32> WithMetadata(Image<Rgba32> image, ImageMetadata? metadata)
-    {
-        var rgba = new byte[image.Width * image.Height * 4];
-        image.CopyPixelDataTo(rgba);
-        return FromRgba(rgba, image.Width, image.Height, metadata);
-    }
-
-    /// <summary>
-    /// 画素を写した画像を作る。metadata があれば、その写しを形式ごとの情報（PNG の色の種類など）も含めて付ける
-    /// （ImageMetadata を受け取るコンストラクタは公開されていないので、写した配列を WrapMemory で包む）
-    /// </summary>
-    private static Image<Rgba32> FromRgba(ReadOnlySpan<byte> rgba, int width, int height, ImageMetadata? metadata)
-    {
-        if (metadata == null) return SixLabors.ImageSharp.Image.LoadPixelData<Rgba32>(rgba, width, height);
-        var pixels = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, Rgba32>(rgba).ToArray();
-        return SixLabors.ImageSharp.Image.WrapMemory(Configuration.Default, pixels.AsMemory(), width, height, metadata.DeepClone());
+        return SixLabors.ImageSharp.Image.LoadPixelData<Rgba32>(converted.GetPixelSpan(), converted.Width, converted.Height);
     }
 
     /// <summary>Skia の範囲を ImageSharp の範囲にする</summary>

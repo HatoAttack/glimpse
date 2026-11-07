@@ -1,16 +1,17 @@
 // 対応画像形式の判定
-// ImageSharp で読める形式（どの PC でも確実）＋ Windows 標準の WIC で読む形式（TIFF）
+// Skia と自前で読める形式（どの PC でも確実）＋ Windows 標準の WIC で読む形式（TIFF）
 // ＋ WIC で読める形式（HEIC / AVIF / RAW 等、PC の拡張機能次第）
+// （名前の ImageSharp は、#81 で ImageSharp から移るまで読んでいた形式の意味。手順8 で名前を変える）
 namespace ImageViewer.Core.Imaging;
 
 public static class ImageFormats
 {
-    /// <summary>ImageSharp で読める拡張子</summary>
+    /// <summary>Skia（JPEG・PNG・GIF・WebP・BMP・ICO）と自前（QOI・PNM）で読む拡張子。TGA は #81 で対応をやめた</summary>
     public static readonly IReadOnlySet<string> ImageSharpExtensions = new HashSet<string>(
         new[]
         {
             ".jpg", ".jpeg", ".jfif", ".png", ".gif", ".webp", ".bmp",
-            ".tga", ".ico", ".cur", ".pbm", ".pgm", ".ppm", ".qoi",
+            ".ico", ".cur", ".pbm", ".pgm", ".ppm", ".qoi",
         },
         StringComparer.OrdinalIgnoreCase);
 
