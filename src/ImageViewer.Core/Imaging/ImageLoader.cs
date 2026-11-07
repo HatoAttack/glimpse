@@ -1,25 +1,13 @@
 // 画像読み込みの窓口。サムネイル・1枚表示・編集機能はすべてここ経由で読む
 // - JPEG・PNG・GIF・WebP・BMP・ICO の中身: Skia で読む（SkiaDecoder。JPEG は縮小デコードが効く）
-// - QOI・TGA・PNM の中身: まだ ImageSharp で読む（#81 の手順6 で自前の読み込みに替える）
+// - QOI・PNM の中身: 自前で読む（SimpleFormats）
 // - どちらでも読めなければ・それ以外で WIC にデコーダがある形式（TIFF / HEIC / AVIF / RAW / JPEG XL 等）: WPF の画像 API（中身は WIC）で読む
-// Skia も ImageSharp も拡張子でなく中身で形式を決める。ImageSharp は TIFF を除いた設定（DecodeConfiguration）で読むので、
-// 拡張子を変えた TIFF も ImageSharp の TIFF デコーダには渡らず、読めない扱いになって WIC で読み直す
+// 形式は拡張子でなく中身で決める。拡張子を変えた TIFF なども、Skia・自前の形式でなければ WIC で読み直す
 // どの経路でも「回転補正済み・sRGB・RGBA・乗算しない」SKBitmap を返す
 // Core の中の編集の処理（ファイルを読んで保存するもの）は、まだ ImageSharp の画像を使うので LoadForEdit で読む（#81 の手順7 で消す）
 using System.Windows.Media;
 using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats;
-using SixLabors.ImageSharp.Formats.Bmp;
-using SixLabors.ImageSharp.Formats.Gif;
-using SixLabors.ImageSharp.Formats.Jpeg;
-using SixLabors.ImageSharp.Formats.Pbm;
-using SixLabors.ImageSharp.Formats.Png;
-using SixLabors.ImageSharp.Formats.Qoi;
-using SixLabors.ImageSharp.Formats.Tga;
-using SixLabors.ImageSharp.Formats.Webp;
-using SixLabors.ImageSharp.Metadata.Profiles.Exif;
 using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
 using Wpf = System.Windows.Media.Imaging;
 
 namespace ImageViewer.Core.Imaging;
@@ -36,6 +24,10 @@ public sealed record LoadOptions
     public static LoadOptions Thumbnail(int maxEdge) => new() { MaxEdge = maxEdge };
 }
 
+/// <summary>編集した画像を保存するときに書く、元のファイルのメタデータ（いまは撮影情報（EXIF）だけ。#81 の決定）</summary>
+/// <param name="Exif">EXIF（TIFF の形）。元のファイルに無ければ null</param>
+public sealed record SaveMetadata(byte[]? Exif);
+
 /// <summary>画像の大きさ（回転補正後の見た目どおりの縦横）と形式、あれば撮影情報</summary>
 public sealed record ImageHeader(int Width, int Height, string Format)
 {
@@ -49,49 +41,46 @@ public static class ImageLoader
         new[] { ".heic", ".heif", ".hif", ".heics", ".heifs", ".avif", ".avifs", ".avci", ".avcs" },
         StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>
-    /// ImageSharp で読むときの設定。TIFF を入れない（ImageSharp 3.1 の TIFF デコーダに脆弱性 GHSA-wmxv-xphr-5c9g があるため。
-    /// TIFF は WIC で読む）。保存は Configuration.Default のまま
-    /// </summary>
-    internal static readonly Configuration DecodeConfiguration = new(
-        new PngConfigurationModule(), new JpegConfigurationModule(), new GifConfigurationModule(),
-        new BmpConfigurationModule(), new PbmConfigurationModule(), new TgaConfigurationModule(),
-        new WebpConfigurationModule(), new QoiConfigurationModule());
-
     /// <summary>画像を読む（回転補正済み・sRGB・RGBA・乗算しない。アニメーションは先頭のコマ）。読めなければ例外</summary>
     public static SkiaSharp.SKBitmap Load(string path, LoadOptions? options = null)
     {
         options ??= LoadOptions.Full;
         if (ImageFormats.IsImageSharpFormat(path))
         {
+            SkiaSharp.SKBitmap? bitmap;
             try
             {
-                if (SkiaDecoder.TryDecode(path, options.MaxEdge) is SkiaSharp.SKBitmap bitmap) return bitmap;
-                using var image = LoadWithImageSharp(path, options with { FirstFrameOnly = true }); // QOI・TGA・PNM
-                return ImageSharpBridge.ToSkia(image);
+                bitmap = SkiaDecoder.TryDecode(path, options.MaxEdge) ?? FitTo(SimpleFormats.TryDecode(path), options.MaxEdge);
             }
-            catch (Exception ex) when (IsDecodeFailure(ex) && (ex is UnknownImageFormatException || ImageFormats.IsWicFormat(path)))
+            catch (Exception ex) when (IsDecodeFailure(ex) && ImageFormats.IsWicFormat(path))
             {
-                // ImageSharp が対応しない亜種（CMYK の一部など）は WIC に任せる。
-                // 中身が ImageSharp の形式でないもの（拡張子を .qoi などに変えた TIFF）は、拡張子に関わらず WIC で読み直す
+                // Skia が画素を読めない亜種（CMYK の一部など）は WIC に任せる
                 return LoadWithWic(path, options);
             }
+            // 中身が Skia・自前の形式でないもの（拡張子を .qoi などに変えた TIFF）は、拡張子に関わらず WIC で読み直す
+            return bitmap ?? LoadWithWic(path, options);
         }
         if (ImageFormats.IsWicFormat(path)) return LoadWithWic(path, options);
         throw new NotSupportedException($"この形式は読み込めません: {Path.GetExtension(path)}");
     }
 
+    /// <summary>長辺が maxEdge を超えていれば縮める（元は捨てる）</summary>
+    private static SkiaSharp.SKBitmap? FitTo(SkiaSharp.SKBitmap? bitmap, int? maxEdge)
+    {
+        if (bitmap == null || maxEdge is not int edge || Math.Max(bitmap.Width, bitmap.Height) <= edge) return bitmap;
+        double scale = (double)edge / Math.Max(bitmap.Width, bitmap.Height);
+        using (bitmap)
+            return SkiaDecoder.Resize(bitmap, Math.Max(1, (int)Math.Round(bitmap.Width * scale)), Math.Max(1, (int)Math.Round(bitmap.Height * scale)));
+    }
+
     /// <summary>
-    /// 編集用に、保存するときのメタデータ（MetadataForSave）を付けた ImageSharp の画像として読む。
+    /// 編集用に ImageSharp の画像として読む（メタデータは付けない。保存するときに元のファイルから読み直す）。
     /// 移行中（#81）だけ使う。編集の処理を SKBitmap に移したら消す（手順7）
     /// </summary>
     internal static Image<Rgba32> LoadForEdit(string path, LoadOptions? options = null)
     {
         using var bitmap = Load(path, options);
-        // メタデータ付きの画像は配列を包んだもの（WrapMemory）で、大きさを変える処理（切り抜き・縮小・回転）をかけられない。
-        // 写して、普通の画像にする（メタデータも写る）
-        using var wrapped = ImageSharpBridge.ToImageSharp(bitmap, MetadataForSave(path));
-        return wrapped.Clone();
+        return ImageSharpBridge.ToImageSharp(bitmap);
     }
 
     /// <summary>
@@ -115,19 +104,10 @@ public static class ImageLoader
                             with { Photo = PhotoInfo.Read(path) };
                     }
                 }
-                try
-                {
-                    // QOI・TGA・PNM（撮影情報は持たない）
-                    var info = IdentifyImageSharp(path);
-                    ushort o = info.Metadata.ExifProfile?.TryGetValue(ExifTag.Orientation, out var v) == true ? v.Value : (ushort)1;
-                    string format = info.Metadata.DecodedImageFormat?.Name ?? FormatFromExtension(path);
-                    return Rotated(o) ? new ImageHeader(info.Height, info.Width, format) : new ImageHeader(info.Width, info.Height, format);
-                }
-                catch (Exception ex) when (IsDecodeFailure(ex) && (ex is UnknownImageFormatException || ImageFormats.IsWicFormat(path)))
-                {
-                    // ImageSharp で読めない亜種は WIC で（中身が ImageSharp の形式でなければ、拡張子に関わらず。Load と同じ）
-                    unknownContent = ex is UnknownImageFormatException;
-                }
+                // QOI・PNM（撮影情報は持たない）
+                if (SimpleFormats.Identify(path) is var (format, width, height)) return new ImageHeader(width, height, format);
+                // 中身が Skia・自前の形式でなければ、拡張子に関わらず WIC で（Load と同じ）
+                unknownContent = true;
             }
             if (!unknownContent && !ImageFormats.IsWicFormat(path)) return null;
 
@@ -143,7 +123,7 @@ public static class ImageLoader
                 : new ImageHeader(frame.PixelWidth, frame.PixelHeight, fmt)) with { Photo = ReadWicPhoto(frame) };
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException
-                                       or UnknownImageFormatException or InvalidImageContentException or FileFormatException or InvalidDataException
+                                       or FileFormatException or InvalidDataException
                                        or ArgumentException or InvalidOperationException or System.Runtime.InteropServices.COMException)
         {
             return null;
@@ -219,21 +199,17 @@ public static class ImageLoader
     }
 
     /// <summary>
-    /// 中身が ImageSharp で読む形式か（先頭の数バイトだけ読む）。拡張子を変えた TIFF などは false（WIC で読むので画素だけになる）。
+    /// 中身が Skia か自前で読む形式か（ヘッダーだけ読む）。拡張子を変えた TIFF などは false（WIC で読むので画素だけになる）。
     /// ファイルを開けなければ拡張子で判断する
     /// </summary>
-    public static bool IsImageSharpContent(string path)
+    public static bool IsBuiltInContent(string path)
     {
         if (!ImageFormats.IsImageSharpFormat(path)) return false;
         try
         {
-            using var stream = ImageSource.OpenRead(path);
-            Image.DetectFormat(new DecoderOptions { Configuration = DecodeConfiguration }, stream);
-            return true;
-        }
-        catch (UnknownImageFormatException)
-        {
-            return false;
+            using (var codec = SkiaDecoder.TryOpen(path))
+                if (codec != null) return true;
+            return SimpleFormats.Detect(path) != null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException or NotSupportedException)
         {
@@ -242,83 +218,18 @@ public static class ImageLoader
     }
 
     /// <summary>
-    /// 読めなかった例外か（WIC で読み直す候補）。InvalidDataException は Skia が画素を読めなかったとき（CMYK の亜種など）
+    /// 読めなかった例外か（WIC で読み直す候補）。InvalidDataException は Skia・自前の読み込みが画素を読めなかったとき（CMYK の亜種など）
     /// </summary>
-    private static bool IsDecodeFailure(Exception ex) =>
-        ex is UnknownImageFormatException or InvalidImageContentException or NotSupportedException or InvalidDataException;
-
-    // ---- ImageSharp ----
-
-    private static Image<Rgba32> LoadWithImageSharp(string path, LoadOptions options)
-    {
-        var decoderOptions = new DecoderOptions { Configuration = DecodeConfiguration, MaxFrames = options.FirstFrameOnly ? 1 : uint.MaxValue };
-        using var stream = ImageSource.OpenRead(path);
-        if (options.MaxEdge is int maxEdge)
-        {
-            // TargetSize は小さい画像を拡大してしまうので、上限を超えるときだけ指定する
-            var info = Image.Identify(decoderOptions, stream);
-            stream.Position = 0;
-            if (Math.Max(info.Width, info.Height) > maxEdge)
-                decoderOptions = new DecoderOptions { Configuration = DecodeConfiguration, MaxFrames = decoderOptions.MaxFrames, TargetSize = new Size(maxEdge, maxEdge) };
-        }
-        var image = Image.Load<Rgba32>(decoderOptions, stream);
-        AutoOrient(image, path, partial: options.FirstFrameOnly);
-        // JPEG の縮小デコードは 1/2・1/4・1/8 単位なので、上限を超えた分はここで合わせる
-        if (options.MaxEdge is int edge && Math.Max(image.Width, image.Height) > edge)
-            image.Mutate(x => x.Resize(new ResizeOptions { Size = new Size(edge, edge), Mode = ResizeMode.Max }));
-        return image;
-    }
+    private static bool IsDecodeFailure(Exception ex) => ex is NotSupportedException or InvalidDataException;
 
     /// <summary>
-    /// EXIF の回転を直す。アニメ WEBP は EXIF を全部のコマの後ろに置くので、途中のコマまでしか読まない（partial）と
-    /// 読み込んだ画像に EXIF が入らない。そのときはヘッダーから向きを調べる（Identify は最後まで見る）
+    /// 編集した画像を保存するときに書くメタデータ（撮影情報（EXIF））を、元のファイルから読み直す。
+    /// 向き・縦横・縮小画像は、保存するときに画像に合わせて直す（ExifBlock.ForSave）。
+    /// 画素は読むときに sRGB に変換してあるので、色プロファイル（ICC）は書かない。XMP・IPTC も書かない（#81 の決定）。
+    /// 中身が Skia・自前の形式でない（TIFF・HEIC など WIC で読むもの）なら null（撮影情報を残せない。画素だけを保存する）
     /// </summary>
-    internal static void AutoOrient(Image<Rgba32> image, string path, bool partial)
-    {
-        if (partial && image.Metadata.ExifProfile == null
-            && string.Equals(Path.GetExtension(path), ".webp", StringComparison.OrdinalIgnoreCase)
-            && IdentifyImageSharp(path).Metadata.ExifProfile?.TryGetValue(ExifTag.Orientation, out var o) == true && o.Value is > 1 and <= 8)
-        {
-            image.Metadata.ExifProfile = new ExifProfile();
-            image.Metadata.ExifProfile.SetValue(ExifTag.Orientation, o.Value);
-        }
-        image.Mutate(x => x.AutoOrient());
-    }
-
-    /// <summary>
-    /// 編集した画像を保存するときに付けるメタデータ（EXIF・XMP・IPTC など）を、元のファイルから読み直す。
-    /// 読み込んだ画像は EXIF の回転を直してあるので、向きは「そのまま」（1）にする。
-    /// 画素は読むときに sRGB に変換してあるので、色プロファイル（ICC）と PNG のガンマは付けない（#81 の決定）。
-    /// CMYK の JPEG も RGB に直して読む（保存するときは CMYK で書かない。ImageSaver）。
-    /// ImageSharp で読めない形式・中身（TIFF・HEIC など WIC で読むもの）は null（画素だけを保存する）
-    /// </summary>
-    internal static SixLabors.ImageSharp.Metadata.ImageMetadata? MetadataForSave(string path)
-    {
-        if (!ImageFormats.IsImageSharpFormat(path)) return null;
-        ImageInfo info;
-        try
-        {
-            info = IdentifyImageSharp(path);
-        }
-        catch (Exception ex) when (IsDecodeFailure(ex))
-        {
-            return null; // 拡張子を変えた TIFF や、ImageSharp では読めず WIC で読み直す壊れたファイルなど
-        }
-        var metadata = info.Metadata.DeepClone();
-        if (metadata.ExifProfile?.TryGetValue(ExifTag.Orientation, out _) == true)
-            metadata.ExifProfile.SetValue(ExifTag.Orientation, (ushort)1);
-        metadata.IccProfile = null;
-        // PNG のガンマ（gAMA）も色の情報。Skia はこれを見て sRGB に変換するので、元の値を付けると明るさが変わる
-        metadata.GetPngMetadata().Gamma = 0;
-        return metadata;
-    }
-
-    /// <summary>ImageSharp でヘッダーを読む（ZIP の中の画像も。読めなければ例外）</summary>
-    internal static ImageInfo IdentifyImageSharp(string path)
-    {
-        using var stream = ImageSource.OpenRead(path);
-        return Image.Identify(new DecoderOptions { Configuration = DecodeConfiguration }, stream);
-    }
+    internal static SaveMetadata? MetadataForSave(string path) =>
+        IsBuiltInContent(path) ? new SaveMetadata(ExifBlock.Read(path)) : null;
 
     // ---- WIC（WPF の画像 API 経由） ----
 

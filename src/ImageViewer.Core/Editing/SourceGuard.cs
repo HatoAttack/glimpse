@@ -25,7 +25,7 @@ public static class SourceGuard
     }
 
     /// <summary>
-    /// 撮影情報（EXIF など）を残せない画像（TIFF・HEIC など、WIC で読む形式）は、置き換えると失われるので NotSupportedException。
+    /// 撮影情報（EXIF）を残せない画像（TIFF・HEIC など、WIC で読む形式）は、置き換えると失われるので NotSupportedException。
     /// 保存するときに元のファイルからメタデータを読み直すので、元のファイルで判断する（ImageLoader.MetadataForSave と同じ条件）
     /// </summary>
     public static void EnsureKeepsMetadata(string src, string action = "上書き")
@@ -46,12 +46,10 @@ public static class SourceGuard
         return dst;
     }
 
-    /// <summary>ImageSharp の画像を保存する（移行中だけ）。メタデータは SKBitmap 版と同じく、元のファイルから読み直す</summary>
+    /// <summary>ImageSharp の画像を保存する（移行中だけ。#81 の手順7 で消す）。メタデータは SKBitmap 版と同じく、元のファイルから読み直す</summary>
     internal static string Save(Image<Rgba32> image, string src, string dst)
     {
-        using var withMetadata = Imaging.ImageSharpBridge.WithMetadata(image, Imaging.ImageLoader.MetadataForSave(src));
-        if (!IsSameFile(src, dst)) return ImageSaver.SaveNew(withMetadata, dst);
-        ImageSaver.Save(withMetadata, dst);
-        return dst;
+        using var bitmap = Imaging.ImageSharpBridge.ToSkia(image);
+        return Save(bitmap, src, dst);
     }
 }

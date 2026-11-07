@@ -188,7 +188,7 @@ public static class Adjuster
 
     /// <summary>
     /// コマ・ページの数（ヘッダーだけ読む）。GIF / WEBP のアニメ、複数ページの TIFF など。
-    /// 読み込みと同じ順に Skia・ImageSharp（QOI など）で数え、どちらでも読めない中身は WIC で数える（TIFF・HEIC など）。
+    /// 読み込みと同じ順に Skia・自前の形式（QOI・PNM。いつも 1 枚）で数え、どちらでもない中身は WIC で数える（TIFF・HEIC など）。
     /// どれでも数えられなければ null
     /// </summary>
     public static int? FrameCount(string path)
@@ -199,10 +199,9 @@ public static class Adjuster
             {
                 using (var codec = SkiaDecoder.TryOpen(path))
                     if (codec != null) return Math.Max(1, codec.FrameCount);
-                return Math.Max(1, ImageLoader.IdentifyImageSharp(path).FrameMetadataCollection.Count);
+                if (SimpleFormats.Detect(path) != null) return 1;
             }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException
-                                           or UnknownImageFormatException or InvalidImageContentException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or InvalidDataException)
             {
                 // WIC で数え直す
             }
@@ -210,8 +209,6 @@ public static class Adjuster
         return ImageLoader.WicFrameCount(path);
     }
 
-    /// <summary>読み込んだ画像がメタデータを持っているか（ImageSharp で読めたか。WIC で読んだものは画素だけ）</summary>
-    internal static bool KeepsMetadata(Image image) => image.Metadata.DecodedImageFormat != null;
 
     /// <summary>
     /// 自動補正の値（レベル補正だけを決め、ほかは 0）。明るさの分布の両端 AutoClip ずつを黒・白にし、

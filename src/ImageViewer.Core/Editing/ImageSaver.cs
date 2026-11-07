@@ -1,13 +1,14 @@
 // 編集結果の保存。拡張子で形式を決め、一時ファイルに書き切ってから差し替える
 // （保存に失敗しても・途中で落ちても、中途半端なファイルや壊れた元画像は残らない）
+// - JPEG・PNG・WebP: Skia で書く。撮影情報（EXIF）は、元のファイルから取り出して書き戻す（ExifBlock）
+// - GIF・BMP・TIFF: WIC（WPF の画像 API）で書く。QOI: 自前で書く
+// - 色プロファイルは付けない（画素は読むときに sRGB に変換してある。#81 の決定）
+using System.Windows.Media.Imaging;
+using ImageViewer.Core.Imaging;
 using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats;
-using SixLabors.ImageSharp.Formats.Jpeg;
-using SixLabors.ImageSharp.Formats.Png;
-using SixLabors.ImageSharp.Formats.Webp;
 using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
 using SkiaSharp;
+using Wpf = System.Windows.Media;
 
 namespace ImageViewer.Core.Editing;
 
@@ -45,9 +46,9 @@ public static class ImageSaver
     /// <summary>WEBP で保存できる最大の縦横</summary>
     public const int WebpMaxEdge = 16383;
 
-    /// <summary>書き出せる拡張子（HEIC / AVIF / RAW などは読めても書けない）</summary>
+    /// <summary>書き出せる拡張子（HEIC / AVIF / RAW・PNM などは読めても書けない）</summary>
     private static readonly HashSet<string> WritableExtensions = new(
-        new[] { ".jpg", ".jpeg", ".jfif", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".tga", ".qoi" },
+        new[] { ".jpg", ".jpeg", ".jfif", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff", ".qoi" },
         StringComparer.OrdinalIgnoreCase);
 
     /// <summary>JPEG で保存できる最大の縦横</summary>
@@ -72,73 +73,128 @@ public static class ImageSaver
         _ => CanWrite(sourceExtension) ? sourceExtension : ".jpg",
     };
 
-    /// <summary>
-    /// dst の拡張子の形式で保存する。JPEG は透過を扱えないので image 自体を白背景に合成してから書く
-    /// （呼び出し側の画像が変わる点に注意）
-    /// </summary>
+    /// <summary>dst の拡張子の形式で保存する。JPEG は透過を扱えないので、白い背景に重ねて書く（image は変えない）</summary>
     /// <param name="overwrite">
     /// false なら、書き終えて差し替える時点で dst があれば保存せずに DestinationExistsException
     /// （事前に無いことを確かめていても、書いている間に別の処理が作ることがあるため、最後の差し替えで確かめる）
     /// </param>
     /// <param name="metadataFrom">
-    /// このファイルのメタデータ（EXIF・ICC など）を読み直して書く（編集した画像の元のファイル）。null ならメタデータを書かない。
-    /// ImageSharp で読めない形式（TIFF・HEIC など）は画素だけになる
+    /// このファイルの撮影情報（EXIF）を読み直して書く（編集した画像の元のファイル）。null なら書かない。
+    /// EXIF を書けるのは JPEG・PNG・WebP（ほかの形式に保存すると画素だけになる）
     /// </param>
     public static void Save(SKBitmap image, string dst, bool overwrite = true, string? metadataFrom = null)
     {
-        using var converted = Imaging.ImageSharpBridge.ToImageSharp(image, metadataFrom == null ? null : Imaging.ImageLoader.MetadataForSave(metadataFrom));
-        Save(converted, dst, overwrite);
+        byte[] data = Encode(image, Path.GetExtension(dst), metadataFrom == null ? null : ImageLoader.MetadataForSave(metadataFrom)?.Exif);
+        WriteAtomically(dst, data, overwrite);
+    }
+
+    /// <summary>ImageSharp の画像を保存する（移行中だけ。#81 の手順7 で消す）。メタデータは SKBitmap 版と同じく metadataFrom から</summary>
+    internal static void Save(Image<Rgba32> image, string dst, bool overwrite = true, string? metadataFrom = null)
+    {
+        using var bitmap = ImageSharpBridge.ToSkia(image);
+        Save(bitmap, dst, overwrite, metadataFrom);
     }
 
     /// <summary>
-    /// ImageSharp の画像を保存する（移行中だけ）。metadataFrom があれば、画像についているメタデータの代わりに、そのファイルのメタデータを書く
+    /// 拡張子 extension の形式に書いたバイト列。exif（TIFF の形）があれば、画像の大きさに合わせて直して入れる（JPEG・PNG・WebP だけ）
     /// </summary>
-    internal static void Save(Image<Rgba32> image, string dst, bool overwrite, string metadataFrom)
+    internal static byte[] Encode(SKBitmap image, string extension, byte[]? exif)
     {
-        using var withMetadata = Imaging.ImageSharpBridge.WithMetadata(image, Imaging.ImageLoader.MetadataForSave(metadataFrom));
-        Save(withMetadata, dst, overwrite);
-    }
-
-    /// <summary>ImageSharp の画像を、画像についているメタデータごと保存する（移行中だけ。連結など）</summary>
-    internal static void Save(Image<Rgba32> image, string dst, bool overwrite = true)
-    {
-        string ext = Path.GetExtension(dst).ToLowerInvariant();
+        string ext = extension.ToLowerInvariant();
         if (ext == ".webp" && Math.Max(image.Width, image.Height) > WebpMaxEdge)
             throw new NotSupportedException($"WEBP は縦横 {WebpMaxEdge}px までしか保存できません（{image.Width}×{image.Height}）");
+        if (ext is ".jpg" or ".jpeg" or ".jfif" && Math.Max(image.Width, image.Height) > JpegMaxEdge)
+            throw new NotSupportedException($"JPEG は縦横 {JpegMaxEdge}px までしか保存できません（{image.Width}×{image.Height}）");
+        if (!CanWrite(ext)) throw new NotSupportedException($"この形式では保存できません: {ext}");
 
-        IImageEncoder encoder;
+        byte[]? fixedExif = exif == null ? null : ExifBlock.ForSave(exif, image.Width, image.Height);
+        // 色空間を付けずに書く（付けると Skia が sRGB のプロファイルを埋め込む）。画素は RGBA・乗算しない
+        using var rgba = SkiaDecoder.Convert(image, SKColorType.Rgba8888, SKAlphaType.Unpremul);
+        var info = new SKImageInfo(rgba.Width, rgba.Height, SKColorType.Rgba8888, IsOpaque(rgba) ? SKAlphaType.Opaque : SKAlphaType.Unpremul);
+        using var pixmap = new SKPixmap(info, rgba.GetPixels(), rgba.RowBytes);
         switch (ext)
         {
             case ".jpg" or ".jpeg" or ".jfif":
-                image.Mutate(x => x.BackgroundColor(Color.White));
-                // 画素はいつも RGB で持つ（CMYK の JPEG も RGB に直して読む）。元が CMYK でも、CMYK では書かない
-                encoder = new JpegEncoder
-                {
-                    Quality = JpegQuality,
-                    ColorType = image.Metadata.GetJpegMetadata().ColorType is JpegEncodingColor.Cmyk or JpegEncodingColor.Ycck
-                        ? JpegEncodingColor.YCbCrRatio420 : null,
-                };
-                break;
-            case ".webp":
-                encoder = new WebpEncoder { Quality = WebpQuality };
-                break;
+            {
+                using var flat = FlattenOnWhite(pixmap);
+                using var flatPixmap = flat.PeekPixels();
+                var jpeg = EncodeWith(flatPixmap.Encode(new SKJpegEncoderOptions(JpegQuality, SKJpegEncoderDownsample.Downsample420, SKJpegEncoderAlphaOption.Ignore)), ext);
+                return fixedExif == null ? jpeg : ExifBlock.AddToJpeg(jpeg, fixedExif);
+            }
             case ".png":
-                encoder = new PngEncoder();
-                break;
+            {
+                var png = EncodeWith(pixmap.Encode(SKPngEncoderOptions.Default), ext);
+                return fixedExif == null ? png : ExifBlock.AddToPng(png, fixedExif);
+            }
+            case ".webp":
+            {
+                var webp = EncodeWith(pixmap.Encode(new SKWebpEncoderOptions(SKWebpEncoderCompression.Lossy, WebpQuality)), ext);
+                return fixedExif == null ? webp : ExifBlock.AddToWebp(webp, fixedExif, image.Width, image.Height);
+            }
+            case ".qoi":
+                return SimpleFormats.EncodeQoi(rgba);
             default:
-                if (!CanWrite(ext) || !Configuration.Default.ImageFormatsManager.TryFindFormatByFileExtension(ext.TrimStart('.'), out var format))
-                    throw new NotSupportedException($"この形式では保存できません: {ext}");
-                encoder = Configuration.Default.ImageFormatsManager.GetEncoder(format);
-                break;
+                return EncodeWithWic(rgba, ext);
         }
+    }
 
+    private static byte[] EncodeWith(SKData? data, string ext)
+    {
+        using (data)
+            return data?.ToArray() ?? throw new InvalidOperationException($"{ext} に書き出せませんでした");
+    }
+
+    /// <summary>透明な画素が無いか（無ければ PNG・WebP を不透明として書く。PNG は RGB になって小さくなる）</summary>
+    private static bool IsOpaque(SKBitmap rgba)
+    {
+        var px = rgba.GetPixelSpan();
+        for (int i = 3; i < px.Length; i += 4)
+            if (px[i] != 255) return false;
+        return true;
+    }
+
+    /// <summary>白い背景に重ねた不透明な画像（JPEG 用）</summary>
+    private static SKBitmap FlattenOnWhite(SKPixmap source)
+    {
+        var flat = new SKBitmap(new SKImageInfo(source.Width, source.Height, SKColorType.Rgba8888, SKAlphaType.Premul));
+        using var image = SKImage.FromPixels(source);
+        using var canvas = new SKCanvas(flat);
+        canvas.Clear(SKColors.White);
+        canvas.DrawImage(image, 0, 0, SKSamplingOptions.Default);
+        return flat;
+    }
+
+    /// <summary>GIF・BMP・TIFF を WIC で書く（GIF は WIC が 256 色に減らす）</summary>
+    private static byte[] EncodeWithWic(SKBitmap rgba, string ext)
+    {
+        // WIC の Bgra32 は乗算しない BGRA。BMP は透明を持たない 24 ビットで書く（32 ビットの透明は、読むソフトによって扱いが違う）
+        using var bgra = SkiaDecoder.Convert(rgba, SKColorType.Bgra8888, SKAlphaType.Unpremul);
+        var source = BitmapSource.Create(bgra.Width, bgra.Height, 96, 96, Wpf.PixelFormats.Bgra32, null,
+            bgra.GetPixels(), bgra.ByteCount, bgra.RowBytes);
+        BitmapSource frame = ext == ".bmp" ? new FormatConvertedBitmap(source, Wpf.PixelFormats.Bgr24, null, 0) : source;
+        BitmapEncoder encoder = ext switch
+        {
+            ".gif" => new GifBitmapEncoder(),
+            ".bmp" => new BmpBitmapEncoder(),
+            ".tif" or ".tiff" => new TiffBitmapEncoder { Compression = TiffCompressOption.Lzw },
+            _ => throw new NotSupportedException($"この形式では保存できません: {ext}"),
+        };
+        encoder.Frames.Add(BitmapFrame.Create(frame));
+        using var output = new MemoryStream();
+        encoder.Save(output);
+        return output.ToArray();
+    }
+
+    /// <summary>一時ファイルに書き切ってから dst に差し替える</summary>
+    private static void WriteAtomically(string dst, byte[] data, bool overwrite)
+    {
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(dst))!);
         // 同じ保存先へ同時に書く処理があっても一時ファイルを取り合わないよう、一時ファイルの名前は毎回変える
         string temp = $"{dst}.{Guid.NewGuid():N}.tmp";
         try
         {
             using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-                image.Save(stream, encoder);
+                stream.Write(data);
             try
             {
                 File.Move(temp, dst, overwrite);
@@ -162,19 +218,12 @@ public static class ImageSaver
     /// <returns>実際に保存したパス</returns>
     public static string SaveNew(SKBitmap image, string path, string? metadataFrom = null)
     {
-        using var converted = Imaging.ImageSharpBridge.ToImageSharp(image, metadataFrom == null ? null : Imaging.ImageLoader.MetadataForSave(metadataFrom));
-        return SaveNew(converted, path);
-    }
-
-    /// <summary>ImageSharp の画像を新しいファイルとして保存する（移行中だけ。画像についているメタデータごと）</summary>
-    internal static string SaveNew(Image<Rgba32> image, string path)
-    {
         for (int attempt = 0; ; attempt++)
         {
             string dst = UniquePath(path);
             try
             {
-                Save(image, dst, overwrite: false);
+                Save(image, dst, overwrite: false, metadataFrom);
                 return dst;
             }
             catch (DestinationExistsException) when (attempt < 20)

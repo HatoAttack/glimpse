@@ -106,7 +106,7 @@ public static class Converter
     public const string MetadataLossNote = "メタデータは残せません";
 
     /// <summary>
-    /// メタデータ（EXIF など）を残して変換できる形式か。
+    /// 撮影情報（EXIF）を残して変換できる形式か（残すのは EXIF だけ。#81 の決定）。
     /// TIFF / HEIC / AVIF / RAW などの WIC で読む形式は画素だけを取り出すので残せない。
     /// 拡張子でなく中身で判断する（拡張子を変えた TIFF も WIC で読むので残せない）。
     /// プレビューは設定を変えるたびに作り直すので、ファイルの更新日時が変わらない間は結果を覚えておく
@@ -116,7 +116,7 @@ public static class Converter
         if (!ImageFormats.IsImageSharpFormat(path)) return false;
         var stamp = ArchivePath.IsInside(path) ? DateTime.MinValue : File.GetLastWriteTimeUtc(path);
         if (_keepsMetadata.TryGetValue(path, out var cached) && cached.Stamp == stamp) return cached.Keeps;
-        bool keeps = ImageLoader.IsImageSharpContent(path);
+        bool keeps = ImageLoader.IsBuiltInContent(path);
         if (_keepsMetadata.Count >= 4096) _keepsMetadata.Clear();
         _keepsMetadata[path] = (stamp, keeps);
         return keeps;
@@ -175,14 +175,8 @@ public static class Converter
         if (crop.Width != image.Width || crop.Height != image.Height) image.Mutate(x => x.Crop(ImageSharpBridge.ToRectangle(crop)));
         if (w != image.Width || h != image.Height) image.Mutate(x => x.Resize(w, h, ResamplerOf(options.Algorithm)));
 
-        if (options.StripMetadata)
-        {
-            image.Metadata.ExifProfile = null;
-            image.Metadata.XmpProfile = null;
-            image.Metadata.IptcProfile = null;
-            image.Metadata.GetPngMetadata().TextData.Clear();
-        }
-        ImageSaver.Save(image, dst, overwrite);
+        // 撮影情報（EXIF）は元のファイルから読み直して書く（メタデータを消す設定なら書かない）
+        ImageSaver.Save(image, dst, overwrite, metadataFrom: options.StripMetadata ? null : src);
     }
 
     /// <summary>設定の説明（1 行）</summary>
