@@ -4,6 +4,7 @@
 // 表示用の縮小した画像にも同じ処理で描けるので、見た目と保存したものが合う。文字の形は AnnotationText
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
+using SkiaSharp;
 
 namespace ImageViewer.Core.Editing;
 
@@ -400,6 +401,10 @@ public static class Annotator
     /// <summary>影のずれ（右下へ）とぼかしの幅（px）。線の太さに合わせる</summary>
     public static (double Offset, double Blur) ShadowOf(double thickness) => (Math.Max(1, thickness * 0.4), Math.Max(1.5, thickness * 0.6));
 
+    /// <summary>image に枠・矢印・文字を順に描く（後のものほど上。移行中は ImageSharp の画像に写して描く）</summary>
+    public static void Draw(SKBitmap image, IEnumerable<Annotation> items) =>
+        Imaging.ImageSharpBridge.Edit(image, img => Draw(img, items));
+
     /// <summary>image に枠・矢印・文字を順に描く（後のものほど上）</summary>
     public static void Draw(Image<Rgba32> image, IEnumerable<Annotation> items)
     {
@@ -508,12 +513,25 @@ public static class Annotator
 
     /// <summary>src から読み込み済みの画像に枠・矢印・文字を描いて保存する（image 自体は変えない。dst が src なら上書き）</summary>
     /// <returns>実際に保存したパス</returns>
+    public static string SaveAnnotated(SKBitmap image, IReadOnlyList<Annotation> items, string src, string dst)
+    {
+        if (SourceGuard.IsSameFile(src, dst))
+        {
+            SourceGuard.EnsureReplaceable(src);
+            SourceGuard.EnsureKeepsMetadata(src);
+        }
+        using var drawn = image.Copy();
+        Draw(drawn, items);
+        return SourceGuard.Save(drawn, src, dst);
+    }
+
+    /// <inheritdoc cref="SaveAnnotated(SKBitmap, IReadOnlyList{Annotation}, string, string)"/>
     public static string SaveAnnotated(Image<Rgba32> image, IReadOnlyList<Annotation> items, string src, string dst)
     {
         if (SourceGuard.IsSameFile(src, dst))
         {
             SourceGuard.EnsureReplaceable(src);
-            SourceGuard.EnsureKeepsMetadata(image);
+            SourceGuard.EnsureKeepsMetadata(src);
         }
         using var drawn = image.Clone();
         Draw(drawn, items);

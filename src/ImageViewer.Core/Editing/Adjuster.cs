@@ -3,6 +3,7 @@
 using ImageViewer.Core.Imaging;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
+using SkiaSharp;
 
 namespace ImageViewer.Core.Editing;
 
@@ -134,6 +135,13 @@ public static class Adjuster
         });
     }
 
+    /// <summary>SKBitmap に補正をかける（透明度はそのまま。移行中は ImageSharp の画像に写して処理する）</summary>
+    public static void Apply(SKBitmap image, AdjustOptions options)
+    {
+        if (options.IsIdentity) return;
+        ImageSharpBridge.Edit(image, img => Apply(img, options));
+    }
+
     /// <summary>
     /// BGRA（1 画素 4 バイト、Windows のビットマップの並び）の画素に補正をかける。
     /// stride は 1 行のバイト数（行の終わりに詰め物があってもよい）
@@ -169,10 +177,11 @@ public static class Adjuster
         if (frames == null && SourceGuard.IsSameFile(src, dst))
             throw new NotSupportedException("ページの数を確かめられない画像なので、上書きしませんでした");
         using var image = ImageLoader.LoadForEdit(src); // 回転補正済み
-        if (!allowMetadataLoss && !KeepsMetadata(image)) throw new MetadataLossException(src);
+        // メタデータは保存するときに元のファイルから読み直す（読めなければ画素だけ）
+        if (!allowMetadataLoss && ImageLoader.MetadataForSave(src) == null) throw new MetadataLossException(src);
         if (autoLevels) options = options.WithLevels(Auto(image));
         Apply(image, options);
-        ImageSaver.Save(image, dst, overwrite);
+        ImageSaver.Save(image, dst, overwrite, metadataFrom: src);
     }
 
     public const string MultiFrameMessage = "アニメーションや複数ページの画像は補正できません（保存すると先頭の 1 枚だけになるため）";
@@ -205,6 +214,13 @@ public static class Adjuster
     /// 自動補正の値（レベル補正だけを決め、ほかは 0）。明るさの分布の両端 AutoClip ずつを黒・白にし、
     /// 真ん中の明るさが中間の灰色になるようにガンマを決める（AutoMinGamma〜AutoMaxGamma の範囲で）
     /// </summary>
+    public static AdjustOptions Auto(SKBitmap image)
+    {
+        using var img = ImageSharpBridge.ToImageSharp(image);
+        return Auto(img);
+    }
+
+    /// <inheritdoc cref="Auto(SKBitmap)"/>
     public static AdjustOptions Auto(Image<Rgba32> image)
     {
         var histogram = new long[256];

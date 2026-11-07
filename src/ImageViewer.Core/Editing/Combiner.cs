@@ -4,6 +4,7 @@
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
+using SkiaSharp;
 
 namespace ImageViewer.Core.Editing;
 
@@ -132,6 +133,29 @@ public static class Combiner
         {
             foreach (var im in images) im.Dispose();
             throw;
+        }
+    }
+
+    /// <summary>連結した画像（原寸。移行中は ImageSharp の画像に写して処理する）</summary>
+    public static SKBitmap Combine(IReadOnlyList<SKBitmap> images, CombineOptions options) =>
+        WithImageSharp(images, list => Combine(list, options));
+
+    /// <summary>長辺が maxEdge 以下になるよう縮めて連結する（プレビュー用。移行中は ImageSharp の画像に写して処理する）</summary>
+    public static SKBitmap CombineBounded(IReadOnlyList<SKBitmap> images, CombineOptions options, int maxEdge) =>
+        WithImageSharp(images, list => CombineBounded(list, options, maxEdge));
+
+    private static SKBitmap WithImageSharp(IReadOnlyList<SKBitmap> images, Func<IReadOnlyList<Image<Rgba32>>, Image<Rgba32>> combine)
+    {
+        var list = new List<Image<Rgba32>>(images.Count);
+        try
+        {
+            foreach (var im in images) list.Add(Imaging.ImageSharpBridge.ToImageSharp(im));
+            using var result = combine(list);
+            return Imaging.ImageSharpBridge.ToSkia(result);
+        }
+        finally
+        {
+            foreach (var im in list) im.Dispose();
         }
     }
 

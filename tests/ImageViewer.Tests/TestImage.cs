@@ -79,6 +79,14 @@ sealed class TestImage
 
     public Image<Rgba32> ToApi() => SixLabors.ImageSharp.Image.LoadPixelData<Rgba32>(Rgba, Width, Height);
 
+    /// <summary>Core の API に渡す SKBitmap（RGBA・乗算しない）</summary>
+    public SkiaSharp.SKBitmap ToSkia()
+    {
+        var bitmap = new SkiaSharp.SKBitmap(new SkiaSharp.SKImageInfo(Width, Height, SkiaSharp.SKColorType.Rgba8888, SkiaSharp.SKAlphaType.Unpremul));
+        System.Runtime.InteropServices.Marshal.Copy(Rgba, 0, bitmap.GetPixels(), Rgba.Length);
+        return bitmap;
+    }
+
     /// <summary>Core の API が返した画像（SKBitmap）。どの形式でも RGBA・乗算しない値に読み出す</summary>
     public static TestImage FromApi(SkiaSharp.SKBitmap bitmap)
     {

@@ -101,6 +101,10 @@ Directory.Delete(dir, true);
 EditingTests.Run(Check, dir);
 Directory.Delete(dir, true);
 
+// ---- 編集の API を SKBitmap で受け渡す ----
+SkBitmapEditingTests.Run(Check, dir);
+Directory.Delete(dir, true);
+
 // ---- 編集ダイアログ（切り抜き / モザイク・ぼかし / 枠・矢印）の操作 ----
 Directory.CreateDirectory(dir);
 DialogTests.Run(Check, dir);

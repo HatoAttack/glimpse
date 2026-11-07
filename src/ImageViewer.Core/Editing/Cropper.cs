@@ -3,6 +3,7 @@ using ImageViewer.Core.Imaging;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
+using SkiaSharp;
 
 namespace ImageViewer.Core.Editing;
 
@@ -76,7 +77,7 @@ public static class Cropper
         bool overwrite = SourceGuard.IsSameFile(src, dst);
         if (overwrite) SourceGuard.EnsureReplaceable(src);
         using var image = ImageLoader.LoadForEdit(src);
-        if (overwrite) SourceGuard.EnsureKeepsMetadata(image);
+        if (overwrite) SourceGuard.EnsureKeepsMetadata(src);
         var (x0, y0, x1, y1) = CarryRect(rect, fromWidth, fromHeight, image.Width, image.Height);
         var box = ClampBox(x0, y0, x1, y1, image.Width, image.Height);
         image.Mutate(c => c.Crop(box));
@@ -90,12 +91,26 @@ public static class Cropper
 
     /// <summary>src から読み込み済みの画像の box の範囲を保存する（dst が src なら上書き）</summary>
     /// <returns>実際に保存したパス</returns>
+    public static string SaveCrop(SKBitmap image, SKRectI box, string src, string dst)
+    {
+        if (SourceGuard.IsSameFile(src, dst))
+        {
+            SourceGuard.EnsureReplaceable(src);
+            SourceGuard.EnsureKeepsMetadata(src);
+        }
+        using var cropped = new SKBitmap(); // image の画素をそのまま指す（写さない）
+        if (box.IsEmpty || !image.ExtractSubset(cropped, box))
+            throw new ArgumentException($"切り抜く範囲が画像の外です（{box}、画像 {image.Width}×{image.Height}）", nameof(box));
+        return SourceGuard.Save(cropped, src, dst);
+    }
+
+    /// <inheritdoc cref="SaveCrop(SKBitmap, SKRectI, string, string)"/>
     public static string SaveCrop(Image<Rgba32> image, Rectangle box, string src, string dst)
     {
         if (SourceGuard.IsSameFile(src, dst))
         {
             SourceGuard.EnsureReplaceable(src);
-            SourceGuard.EnsureKeepsMetadata(image);
+            SourceGuard.EnsureKeepsMetadata(src);
         }
         using var cropped = image.Clone(x => x.Crop(box));
         return SourceGuard.Save(cropped, src, dst);
@@ -108,7 +123,7 @@ public static class Cropper
         bool overwrite = SourceGuard.IsSameFile(src, dst);
         if (overwrite) SourceGuard.EnsureReplaceable(src);
         using var image = ImageLoader.LoadForEdit(src);
-        if (overwrite) SourceGuard.EnsureKeepsMetadata(image);
+        if (overwrite) SourceGuard.EnsureKeepsMetadata(src);
         var (x, y, w, h) = CenterRect(image.Width, image.Height, aspect);
         var box = ClampBox(x, y, x + w, y + h, image.Width, image.Height);
         image.Mutate(c => c.Crop(box));

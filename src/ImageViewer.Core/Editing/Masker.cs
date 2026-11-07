@@ -4,6 +4,7 @@ using ImageViewer.Core.Imaging;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
+using SkiaSharp;
 
 namespace ImageViewer.Core.Editing;
 
@@ -123,6 +124,13 @@ public static class Masker
     public static void Apply(Image<Rgba32> image, IEnumerable<Rectangle> boxes, MaskEffect effect, int size) =>
         Apply(image, boxes.Select(b => MaskRegion.Rect(b.Left, b.Top, b.Right, b.Bottom)), effect, size);
 
+    /// <summary>
+    /// image の regions の範囲に、マスの大きさ size でモザイク・ぼかしをかける（範囲の外は変えない。
+    /// 移行中は ImageSharp の画像に写して処理する）
+    /// </summary>
+    public static void Apply(SKBitmap image, IEnumerable<MaskRegion> regions, MaskEffect effect, int size) =>
+        ImageSharpBridge.Edit(image, img => Apply(img, regions, effect, size));
+
     /// <summary>image の regions の範囲に、マスの大きさ size でモザイク・ぼかしをかける（範囲の外は変えない）</summary>
     public static void Apply(Image<Rgba32> image, IEnumerable<MaskRegion> regions, MaskEffect effect, int size)
     {
@@ -235,12 +243,25 @@ public static class Masker
 
     /// <summary>src から読み込み済みの画像に、regions の範囲でかけて保存する（image 自体は変えない。dst が src なら上書き）</summary>
     /// <returns>実際に保存したパス</returns>
+    public static string SaveMasked(SKBitmap image, IReadOnlyList<MaskRegion> regions, MaskEffect effect, int level, string src, string dst)
+    {
+        if (SourceGuard.IsSameFile(src, dst))
+        {
+            SourceGuard.EnsureReplaceable(src);
+            SourceGuard.EnsureKeepsMetadata(src);
+        }
+        using var masked = image.Copy();
+        Apply(masked, regions, effect, EffectSize(image.Width, image.Height, level));
+        return SourceGuard.Save(masked, src, dst);
+    }
+
+    /// <inheritdoc cref="SaveMasked(SKBitmap, IReadOnlyList{MaskRegion}, MaskEffect, int, string, string)"/>
     public static string SaveMasked(Image<Rgba32> image, IReadOnlyList<MaskRegion> regions, MaskEffect effect, int level, string src, string dst)
     {
         if (SourceGuard.IsSameFile(src, dst))
         {
             SourceGuard.EnsureReplaceable(src);
-            SourceGuard.EnsureKeepsMetadata(image);
+            SourceGuard.EnsureKeepsMetadata(src);
         }
         using var masked = image.Clone();
         Apply(masked, regions, effect, EffectSize(image.Width, image.Height, level));
@@ -254,7 +275,7 @@ public static class Masker
         bool overwrite = SourceGuard.IsSameFile(src, dst);
         if (overwrite) SourceGuard.EnsureReplaceable(src);
         using var image = ImageLoader.LoadForEdit(src);
-        if (overwrite) SourceGuard.EnsureKeepsMetadata(image);
+        if (overwrite) SourceGuard.EnsureKeepsMetadata(src);
         Apply(image, CarryRegions(regions, fromWidth, fromHeight, image.Width, image.Height), effect, EffectSize(image.Width, image.Height, level));
         return SourceGuard.Save(image, src, dst);
     }

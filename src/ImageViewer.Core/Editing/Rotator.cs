@@ -17,14 +17,14 @@ public static class Rotator
     {
         SourceGuard.EnsureReplaceable(path, "回転");
         using var image = ImageLoader.LoadForEdit(path); // EXIF の向きは反映済み（向きの値は「そのまま」になっている）
-        SourceGuard.EnsureKeepsMetadata(image, "回転");
+        SourceGuard.EnsureKeepsMetadata(path, "回転");
         image.Mutate(x => x.Rotate(direction switch
         {
             RotateDirection.Right90 => RotateMode.Rotate90,
             RotateDirection.Left90 => RotateMode.Rotate270,
             _ => RotateMode.Rotate180,
         }));
-        ImageSaver.Save(image, path);
+        SourceGuard.Save(image, path, path);
     }
 
     /// <summary>選んだ画像を順に回す（重い処理なので呼び出し側で別スレッドへ）。失敗は「名前: 理由」で返す</summary>
