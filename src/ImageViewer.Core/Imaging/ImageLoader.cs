@@ -288,7 +288,7 @@ public static class ImageLoader
     /// <summary>
     /// 編集した画像を保存するときに付けるメタデータ（EXIF・XMP・IPTC など）を、元のファイルから読み直す。
     /// 読み込んだ画像は EXIF の回転を直してあるので、向きは「そのまま」（1）にする。
-    /// 画素は読むときに sRGB に変換してあるので、色プロファイル（ICC）は付けない（#81 の決定）。
+    /// 画素は読むときに sRGB に変換してあるので、色プロファイル（ICC）と PNG のガンマは付けない（#81 の決定）。
     /// CMYK の JPEG も RGB に直して読む（保存するときは CMYK で書かない。ImageSaver）。
     /// ImageSharp で読めない形式・中身（TIFF・HEIC など WIC で読むもの）は null（画素だけを保存する）
     /// </summary>
@@ -308,6 +308,8 @@ public static class ImageLoader
         if (metadata.ExifProfile?.TryGetValue(ExifTag.Orientation, out _) == true)
             metadata.ExifProfile.SetValue(ExifTag.Orientation, (ushort)1);
         metadata.IccProfile = null;
+        // PNG のガンマ（gAMA）も色の情報。Skia はこれを見て sRGB に変換するので、元の値を付けると明るさが変わる
+        metadata.GetPngMetadata().Gamma = 0;
         return metadata;
     }
 

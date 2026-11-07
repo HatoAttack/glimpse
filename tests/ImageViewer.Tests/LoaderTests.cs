@@ -80,6 +80,25 @@ static class LoaderTests
             check(!HasNonSrgbProfile(p3Jpg) && TestImage.FromApi(img)[10, 10].Near(expected, 10),
                 "編集して保存すると、sRGB の画素をプロファイルなしで書く（同じ色に見える）");
 
+        // PNG のガンマ（gAMA）も色の情報: 直線（ガンマ 1.0）の PNG は sRGB に変換して読み、保存するときはガンマを付けない
+        string linear = Path.Combine(dir, "linear.png");
+        // WIC で書く PNG は sRGB の印（sRGB の区切り）を持ち、そちらが優先されるので、印の無い PNG を Skia で書く
+        using (var gray = new SkiaSharp.SKBitmap(new SkiaSharp.SKImageInfo(20, 10, SkiaSharp.SKColorType.Rgba8888, SkiaSharp.SKAlphaType.Unpremul)))
+        {
+            gray.Erase(new SkiaSharp.SKColor(128, 128, 128));
+            using var encoded = gray.Encode(SkiaSharp.SKEncodedImageFormat.Png, 100);
+            File.WriteAllBytes(linear, WithPngChunk(encoded.ToArray(), "gAMA", new byte[] { 0, 1, 0x86, 0xA0 })); // 100000 = 1.0
+        }
+        using (var img = ImageLoader.Load(linear))
+        {
+            var got = TestImage.FromApi(img)[5, 5];
+            check(got.R is > 180 and < 195, $"ガンマ 1.0 の PNG は sRGB に変換して読む（128 → {got.R}）");
+        }
+        ImageViewer.Core.Editing.Rotator.RotateFile(linear, ImageViewer.Core.Editing.RotateDirection.Half);
+        using (var img = ImageLoader.Load(linear))
+            check(!HasPngChunk(linear, "gAMA") && TestImage.FromApi(img)[5, 5].R is > 180 and < 195,
+                "編集して保存すると、元のガンマを付けない（同じ明るさに見える）");
+
         string gif = Path.Combine(dir, "anim.gif");
         TestImage.SaveFrames(gif, new[] { new TestImage(40, 40, Red), new TestImage(40, 40, Blue), new TestImage(40, 40, Red) }, new[] { 10, 10, 10 });
         using (var img = ImageLoader.Load(gif))
@@ -236,6 +255,25 @@ static class LoaderTests
         var c = srgb.GetPixelSpan();
         return new Px(c[0], c[1], c[2]);
     }
+
+    /// <summary>PNG の先頭の区切り（IHDR）の後に、区切りを 1 つ入れる</summary>
+    static byte[] WithPngChunk(byte[] png, string type, byte[] data)
+    {
+        int ihdrEnd = 8 + 12 + 13;
+        var typeAndData = System.Text.Encoding.ASCII.GetBytes(type).Concat(data).ToArray();
+        uint crc = 0xFFFFFFFF;
+        foreach (byte b in typeAndData)
+        {
+            crc ^= b;
+            for (int k = 0; k < 8; k++) crc = (crc & 1) != 0 ? 0xEDB88320 ^ (crc >> 1) : crc >> 1;
+        }
+        crc ^= 0xFFFFFFFF;
+        byte[] Be(uint v) => new[] { (byte)(v >> 24), (byte)(v >> 16), (byte)(v >> 8), (byte)v };
+        return png.Take(ihdrEnd).Concat(Be((uint)data.Length)).Concat(typeAndData).Concat(Be(crc)).Concat(png.Skip(ihdrEnd)).ToArray();
+    }
+
+    static bool HasPngChunk(string path, string type) =>
+        File.ReadAllBytes(path).AsSpan().IndexOf(System.Text.Encoding.ASCII.GetBytes(type)) >= 0;
 
     /// <summary>sRGB でない色プロファイルが埋め込まれているか（Skia でヘッダーを読む）</summary>
     static bool HasNonSrgbProfile(string path)
