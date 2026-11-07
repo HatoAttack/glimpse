@@ -147,8 +147,8 @@ Directory.Delete(dir, true);
 // ---- ライセンスの表示 ----
 string licenses = ImageViewer.App.Dialogs.LicenseDialog.LicenseText;
 Check(licenses.StartsWith("MIT License") && licenses.Contains("Copyright (c) 2026 HatoAttack"), "ライセンス: Glimpse の LICENSE が先頭");
-Check(licenses.Contains("Six Labors Split License") && licenses.Contains("Apache License") && licenses.Contains(".NET Foundation"),
-    "ライセンス: 同梱しているソフトウェア（ImageSharp・.NET）のライセンスも入っている");
+Check(licenses.Contains("Apache License") && licenses.Contains(".NET Foundation"), "ライセンス: 同梱しているソフトウェア（.NET など）のライセンスも入っている");
+Check(!licenses.Contains("ImageSharp") && !licenses.Contains("Six Labors"), "ライセンス: もう含めていない ImageSharp のライセンスは載せない");
 Check(licenses.Contains("Copyright (c) 2017-2018 Microsoft Corporation.") && licenses.Contains("SkiaSharp - Third-party notices")
       && licenses.Contains("THIRD-PARTY SOFTWARE NOTICES AND INFORMATION") && licenses.Contains("libjpeg-turbo"),
     "ライセンス: SkiaSharp のライセンスと、使っている版のパッケージの Third-party notices が入っている");

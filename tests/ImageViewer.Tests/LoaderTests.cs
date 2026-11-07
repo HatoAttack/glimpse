@@ -16,7 +16,7 @@ static class LoaderTests
         Console.WriteLine("    この PC の WIC 拡張形式: " + string.Join(" ",
             new[] { ".heic", ".avif", ".jxl", ".cr2", ".nef", ".arw", ".dng" }.Where(exts.Contains)));
 
-        // ---- ImageSharp 経路 ----
+        // ---- Skia 経路 ----
         string jpg = Path.Combine(dir, "wide.jpg");
         SplitImage(2000, 1000).Save(jpg);
         using (var img = ImageLoader.Load(jpg, LoadOptions.Thumbnail(500)))
@@ -104,27 +104,27 @@ static class LoaderTests
         using (var img = ImageLoader.Load(gif))
             check(img.Width == 40 && TestImage.FromApi(img)[20, 20].Near(Red, 39), "アニメ GIF: 先頭のコマを読む");
 
-        // ---- TIFF は WIC で読む（ImageSharp の TIFF デコーダの脆弱性を避けるため） ----
+        // ---- TIFF は WIC で読む（Skia には TIFF のデコーダが無い） ----
         string tif = Path.Combine(dir, "split.tif");
         SplitImage(400, 200).Save(tif);
         using (var img = ImageLoader.Load(tif))
             check(img.Width == 400 && img.Height == 200 && IsLeftRedRightBlue(TestImage.FromApi(img)) && !ImageViewer.Core.Editing.Converter.KeepsMetadata(tif),
-                "TIFF: WIC で読む（ImageSharp で読む形式ならメタデータを残せる）");
+                "TIFF: WIC で読む（Skia・自前で読む形式ならメタデータを残せる）");
         using (var img = ImageLoader.Load(tif, LoadOptions.Thumbnail(100)))
             check(img.Width == 100 && img.Height == 50 && IsLeftRedRightBlue(TestImage.FromApi(img)), $"TIFF: 縮小読み込み 400x200 → {img.Width}x{img.Height}");
         info = ImageLoader.Identify(tif);
         check(info == new ImageHeader(400, 200, "TIFF"), $"Identify: TIFF（{info}）");
-        check(ImageFormats.IsSupported(tif) && !ImageFormats.IsImageSharpFormat(tif), "TIFF: 対応形式だが ImageSharp の形式ではない");
-        // 拡張子を変えた TIFF も ImageSharp の TIFF デコーダには渡さない（読めない扱いにして WIC で読み直す）
+        check(ImageFormats.IsSupported(tif) && !ImageFormats.IsEmbeddedFormat(tif), "TIFF: 対応形式だが exe に入っているデコーダの形式ではない");
+        // 拡張子を変えた TIFF は、Skia で読めない扱いにして WIC で読み直す
         string disguised = Path.Combine(dir, "tiff_inside.png");
         File.Copy(tif, disguised, overwrite: true);
         using (var img = ImageLoader.Load(disguised))
-            check(img.Width == 400 && IsLeftRedRightBlue(TestImage.FromApi(img)), "拡張子が PNG の TIFF: ImageSharp では読まず WIC で読む");
+            check(img.Width == 400 && IsLeftRedRightBlue(TestImage.FromApi(img)), "拡張子が PNG の TIFF: Skia では読まず WIC で読む");
         info = ImageLoader.Identify(disguised);
         check(info == new ImageHeader(400, 200, "TIFF"), $"拡張子が PNG の TIFF: Identify も WIC で、形式は中身の TIFF（{info}）");
         check(!ImageViewer.Core.Editing.Converter.KeepsMetadata(disguised) && ImageViewer.Core.Editing.Converter.KeepsMetadata(small),
             "拡張子が PNG の TIFF: 変換でメタデータを残せない（中身で判断する。本物の PNG は残せる）");
-        // WIC にデコーダが無い拡張子（.qoi など ImageSharp だけの形式）でも、中身が TIFF なら WIC で読む
+        // WIC にデコーダが無い拡張子（.qoi など自前で読む形式）でも、中身が TIFF なら WIC で読む
         string disguisedQoi = Path.Combine(dir, "tiff_inside.qoi");
         File.Copy(tif, disguisedQoi, overwrite: true);
         using (var img = ImageLoader.Load(disguisedQoi))

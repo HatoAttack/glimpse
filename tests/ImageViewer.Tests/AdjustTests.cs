@@ -64,7 +64,7 @@ static class AdjustTests
             check(p.R < 128 && p.B > 128, $"色温度 -: 青みが増える（{p}）");
         }
 
-        // ---- BGRA（プレビュー用）と ImageSharp の結果が同じ ----
+        // ---- BGRA（プレビュー用）と保存用（SKBitmap）の結果が同じ ----
         var opts = new AdjustOptions { Brightness = 30, Contrast = -20, Saturation = 40, Temperature = 25, BlackPoint = 10, WhitePoint = 240, Gamma = 1.3 };
         {
             var colors = new[] { new Px(255, 0, 0), new Px(10, 200, 90), new Px(128, 128, 128), new Px(0, 0, 0), new Px(250, 250, 5), new Px(33, 66, 99) };
@@ -146,7 +146,7 @@ static class AdjustTests
         Adjuster.ApplyToFile(P("one.tif"), P("one.tif"), new AdjustOptions { Brightness = 30 }, allowMetadataLoss: true);
         check(!File.ReadAllBytes(P("one.tif")).SequenceEqual(oneBefore), "ファイル: TIFF も確かめた後は上書きする");
         check(Adjuster.FrameCount(P("photo.jpg")) == 1, "コマの数: 静止画は 1");
-        check(ImageViewer.Core.Imaging.ImageLoader.WicFrameCount(P("pages.tif")) == 2, "コマの数: WIC でも複数ページの TIFF を数えられる（ImageSharp で読めない亜種用）");
+        check(ImageViewer.Core.Imaging.ImageLoader.WicFrameCount(P("pages.tif")) == 2, "コマの数: WIC でも複数ページの TIFF を数えられる（Skia で読めない亜種用）");
 
         // ---- まとめて補正 ----
         string batchDir = P("batch");

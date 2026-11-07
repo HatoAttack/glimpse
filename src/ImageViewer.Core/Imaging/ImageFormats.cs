@@ -1,13 +1,12 @@
 // 対応画像形式の判定
 // Skia と自前で読める形式（どの PC でも確実）＋ Windows 標準の WIC で読む形式（TIFF）
 // ＋ WIC で読める形式（HEIC / AVIF / RAW 等、PC の拡張機能次第）
-// （名前の ImageSharp は、#81 で ImageSharp から移るまで読んでいた形式の意味。手順8 で名前を変える）
 namespace ImageViewer.Core.Imaging;
 
 public static class ImageFormats
 {
-    /// <summary>Skia（JPEG・PNG・GIF・WebP・BMP・ICO）と自前（QOI・PNM）で読む拡張子。TGA は #81 で対応をやめた</summary>
-    public static readonly IReadOnlySet<string> ImageSharpExtensions = new HashSet<string>(
+    /// <summary>exe に入っているデコーダ（Skia の JPEG・PNG・GIF・WebP・BMP・ICO と、自前の QOI・PNM）で読む拡張子。TGA は #81 で対応をやめた</summary>
+    public static readonly IReadOnlySet<string> EmbeddedExtensions = new HashSet<string>(
         new[]
         {
             ".jpg", ".jpeg", ".jfif", ".png", ".gif", ".webp", ".bmp",
@@ -23,10 +22,10 @@ public static class ImageFormats
         StringComparer.OrdinalIgnoreCase);
 
     /// <summary>どの PC でも読める拡張子（Skia・自前 ＋ Windows 標準の WIC）</summary>
-    public static IEnumerable<string> BuiltInExtensions => ImageSharpExtensions.Concat(BuiltInWicExtensions);
+    public static IEnumerable<string> BuiltInExtensions => EmbeddedExtensions.Concat(BuiltInWicExtensions);
 
-    public static bool IsImageSharpFormat(string path) =>
-        ImageSharpExtensions.Contains(Path.GetExtension(path));
+    public static bool IsEmbeddedFormat(string path) =>
+        EmbeddedExtensions.Contains(Path.GetExtension(path));
 
     public static bool IsWicFormat(string path)
     {
@@ -34,7 +33,7 @@ public static class ImageFormats
         return BuiltInWicExtensions.Contains(ext) || WicCodecs.DecoderExtensions.Contains(ext);
     }
 
-    public static bool IsSupported(string path) => IsImageSharpFormat(path) || IsWicFormat(path);
+    public static bool IsSupported(string path) => IsEmbeddedFormat(path) || IsWicFormat(path);
 
     /// <summary>フォルダ直下の対応画像をファイル名順（エクスプローラーと同じ比較）で列挙。
     /// FileInfo のサイズ・更新日時は列挙時に取得済みなので追加のディスクアクセスは発生しない</summary>

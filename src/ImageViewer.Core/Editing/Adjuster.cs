@@ -182,7 +182,7 @@ public static class Adjuster
     /// </summary>
     public static int? FrameCount(string path)
     {
-        if (ImageFormats.IsImageSharpFormat(path))
+        if (ImageFormats.IsEmbeddedFormat(path))
         {
             try
             {

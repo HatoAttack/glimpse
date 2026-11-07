@@ -42,7 +42,7 @@ public static class ImageLoader
     public static SkiaSharp.SKBitmap Load(string path, LoadOptions? options = null)
     {
         options ??= LoadOptions.Full;
-        if (ImageFormats.IsImageSharpFormat(path))
+        if (ImageFormats.IsEmbeddedFormat(path))
         {
             SkiaSharp.SKBitmap? bitmap;
             try
@@ -79,7 +79,7 @@ public static class ImageLoader
         try
         {
             bool unknownContent = false;
-            if (ImageFormats.IsImageSharpFormat(path))
+            if (ImageFormats.IsEmbeddedFormat(path))
             {
                 using (var codec = SkiaDecoder.TryOpen(path))
                 {
@@ -191,7 +191,7 @@ public static class ImageLoader
     /// </summary>
     public static bool IsBuiltInContent(string path)
     {
-        if (!ImageFormats.IsImageSharpFormat(path)) return false;
+        if (!ImageFormats.IsEmbeddedFormat(path)) return false;
         try
         {
             using (var codec = SkiaDecoder.TryOpen(path))

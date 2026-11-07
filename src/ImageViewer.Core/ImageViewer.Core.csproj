@@ -15,15 +15,14 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- ImageSharp の Image / Size 等と名前が衝突するので、暗黙の using には入れない -->
+    <!-- System.Drawing・WinForms の Image / Size 等が Skia・WPF の型と紛れないよう、暗黙の using には入れない -->
     <Using Remove="System.Drawing" />
     <Using Remove="System.Windows.Forms" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="MetadataExtractor" Version="2.9.3" />
-    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.*" />
-    <!-- ImageSharp から移行中（#81）。画像は SKBitmap で受け渡す。SkiaSharp 本体と、Windows 用のネイティブのライブラリ -->
+    <!-- 画像の読み書きと編集（#81 で ImageSharp から移った）。画像は SKBitmap で受け渡す。SkiaSharp 本体と、Windows 用のネイティブのライブラリ -->
     <PackageReference Include="SkiaSharp" Version="4.153.1" />
     <PackageReference Include="SkiaSharp.NativeAssets.Win32" Version="4.153.1" />
   </ItemGroup>
