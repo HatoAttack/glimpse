@@ -148,6 +148,8 @@ Check(licenses.Contains("Six Labors Split License") && licenses.Contains("Apache
 Check(licenses.Contains("Copyright (c) 2017-2018 Microsoft Corporation.") && licenses.Contains("SkiaSharp - Third-party notices")
       && licenses.Contains("THIRD-PARTY SOFTWARE NOTICES AND INFORMATION") && licenses.Contains("libjpeg-turbo"),
     "ライセンス: SkiaSharp のライセンスと、使っている版のパッケージの Third-party notices が入っている");
+Check(licenses.Contains("Copyright 2002-2019 Drew Noakes") && licenses.Contains("Adobe Systems Incorporated") && licenses.Contains("BSD 3-Clause License"),
+    "ライセンス: MetadataExtractor（撮影情報の読み取り）と、それが使う XmpCore のライセンスが入っている");
 Check(licenses.Contains(".NET Runtime - Third-party notices"),"ライセンス: .NET Runtime の Third-party notices の欄がある（同梱しないビルドではその旨）");
 Check(!licenses.Replace("\r\n", "").Contains('\n'), "ライセンス: 改行は CRLF（TextBox で改行される）");
 

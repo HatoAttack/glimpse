@@ -59,6 +59,27 @@ static class LoaderTests
         check(PhotoInfo.CameraName("FUJIFILM", "X-T5") == "FUJIFILM X-T5", "カメラ名: 機種名にメーカー名が無ければ前に付ける");
         check(PhotoInfo.FormatExposure(2) == "2s" && PhotoInfo.FormatExposure(0.5) == "1/2", "シャッター速度の表示");
 
+        // ---- 色プロファイル（#81 の決定: 読むときに sRGB に変換し、保存はプロファイルなし） ----
+        var raw = new Px(40, 160, 90);
+        string p3Png = Path.Combine(dir, "p3.png");
+        var expected = SaveDisplayP3(p3Png, SkiaSharp.SKEncodedImageFormat.Png, raw);
+        check(HasNonSrgbProfile(p3Png) && !expected.Near(raw, 6), $"テスト画像: Display P3 のプロファイル付きの PNG（sRGB では {expected}）");
+        using (var img = ImageLoader.Load(p3Png))
+        {
+            var got = TestImage.FromApi(img)[10, 10];
+            check(got.Near(expected, 3), $"色プロファイル付きの PNG は sRGB に変換して読む（{got}、変換しなければ {raw}）");
+        }
+        using (var img = ImageLoader.Load(p3Png, LoadOptions.Thumbnail(16)))
+            check(img.Width == 16 && TestImage.FromApi(img)[5, 5].Near(expected, 3), "縮小して読むときも sRGB に変換する");
+        string p3Jpg = Path.Combine(dir, "p3.jpg");
+        expected = SaveDisplayP3(p3Jpg, SkiaSharp.SKEncodedImageFormat.Jpeg, raw);
+        using (var img = ImageLoader.Load(p3Jpg))
+            check(HasNonSrgbProfile(p3Jpg) && TestImage.FromApi(img)[10, 10].Near(expected, 8), "色プロファイル付きの JPEG も sRGB に変換して読む");
+        ImageViewer.Core.Editing.Rotator.RotateFile(p3Jpg, ImageViewer.Core.Editing.RotateDirection.Half);
+        using (var img = ImageLoader.Load(p3Jpg))
+            check(!HasNonSrgbProfile(p3Jpg) && TestImage.FromApi(img)[10, 10].Near(expected, 10),
+                "編集して保存すると、sRGB の画素をプロファイルなしで書く（同じ色に見える）");
+
         string gif = Path.Combine(dir, "anim.gif");
         TestImage.SaveFrames(gif, new[] { new TestImage(40, 40, Red), new TestImage(40, 40, Blue), new TestImage(40, 40, Red) }, new[] { 10, 10, 10 });
         using (var img = ImageLoader.Load(gif))
@@ -187,6 +208,40 @@ static class LoaderTests
                     new BitmapTypedValue(o, PropertyType.UInt16)),
             });
         await encoder.FlushAsync();
+    }
+
+    /// <summary>
+    /// 全体が raw（Display P3 の値）の画像を、Display P3 のプロファイル付きで保存する（Skia はプロファイルを埋め込む）。
+    /// その色を sRGB で表した値（Skia で変換したもの）を返す
+    /// </summary>
+    static Px SaveDisplayP3(string path, SkiaSharp.SKEncodedImageFormat format, Px raw)
+    {
+        var p3 = SkiaSharp.SKColorSpace.CreateRgb(SkiaSharp.SKColorSpaceTransferFn.Srgb, SkiaSharp.SKColorSpaceXyz.DisplayP3);
+        using var bitmap = new SkiaSharp.SKBitmap(new SkiaSharp.SKImageInfo(32, 24, SkiaSharp.SKColorType.Rgba8888, SkiaSharp.SKAlphaType.Unpremul, p3));
+        var pixels = bitmap.GetPixelSpan();
+        for (int i = 0; i < pixels.Length; i += 4)
+        {
+            pixels[i] = raw.R;
+            pixels[i + 1] = raw.G;
+            pixels[i + 2] = raw.B;
+            pixels[i + 3] = 255;
+        }
+        using (var stream = File.Create(path))
+            if (!bitmap.Encode(stream, format, 95)) throw new InvalidOperationException("テスト画像を保存できません");
+        using var srgb = new SkiaSharp.SKBitmap(new SkiaSharp.SKImageInfo(32, 24, SkiaSharp.SKColorType.Rgba8888, SkiaSharp.SKAlphaType.Unpremul,
+            SkiaSharp.SKColorSpace.CreateSrgb()));
+        using (var from = bitmap.PeekPixels())
+        using (var to = srgb.PeekPixels())
+            from.ReadPixels(to);
+        var c = srgb.GetPixelSpan();
+        return new Px(c[0], c[1], c[2]);
+    }
+
+    /// <summary>sRGB でない色プロファイルが埋め込まれているか（Skia でヘッダーを読む）</summary>
+    static bool HasNonSrgbProfile(string path)
+    {
+        using var codec = SkiaSharp.SKCodec.Create(path);
+        return codec?.Info.ColorSpace is { IsSrgb: false };
     }
 
     /// <summary>左半分が赤、右半分が青の画像</summary>

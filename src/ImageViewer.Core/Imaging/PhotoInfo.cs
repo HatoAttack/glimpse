@@ -1,6 +1,7 @@
 // 写真の撮影情報（EXIF）。詳細パネルに出す分だけ。無い項目は null
 using System.Globalization;
-using SixLabors.ImageSharp.Metadata.Profiles.Exif;
+using MetadataExtractor;
+using MetadataExtractor.Formats.Exif;
 
 namespace ImageViewer.Core.Imaging;
 
@@ -47,28 +48,61 @@ public sealed record PhotoInfo
         return model.StartsWith(firstWord, StringComparison.OrdinalIgnoreCase) ? model : $"{make} {model}";
     }
 
-    /// <summary>ImageSharp で読んだ EXIF から。撮影情報が 1 つも無ければ null</summary>
-    public static PhotoInfo? FromExif(ExifProfile? exif)
+    /// <summary>
+    /// ファイルの EXIF を MetadataExtractor で読む（JPEG・PNG・WebP など）。撮影情報が 1 つも無い・読めなければ null。
+    /// ヘッダーの部分だけを読む（画素はデコードしない）
+    /// </summary>
+    public static PhotoInfo? Read(string path)
     {
-        if (exif == null) return null;
-        string? Text(ExifTag<string> tag) => exif.TryGetValue(tag, out var v) ? Clean(v.Value) : null;
+        IReadOnlyList<MetadataExtractor.Directory> directories;
+        try
+        {
+            using var stream = ImageSource.OpenRead(path);
+            directories = MetadataExtractor.ImageMetadataReader.ReadMetadata(stream);
+        }
+        catch (Exception ex) when (ex is MetadataExtractor.ImageProcessingException or IOException or UnauthorizedAccessException
+                                       or NotSupportedException or ArgumentException or InvalidOperationException
+                                       or IndexOutOfRangeException or OverflowException)
+        {
+            return null; // 壊れた・EXIF の形がおかしいファイルは、撮影情報なしとして扱う
+        }
+        return FromExif(directories);
+    }
+
+    /// <summary>MetadataExtractor で読んだ EXIF から。撮影情報が 1 つも無ければ null</summary>
+    public static PhotoInfo? FromExif(IEnumerable<MetadataExtractor.Directory> directories)
+    {
+        var ifd0 = directories.OfType<ExifIfd0Directory>().FirstOrDefault();
+        var sub = directories.OfType<ExifSubIfdDirectory>().FirstOrDefault();
+        if (ifd0 == null && sub == null) return null;
+
+        string? Text(MetadataExtractor.Directory? dir, int tag) => dir == null ? null : Clean(dir.GetString(tag));
+        double? Ratio(int tag) => sub != null && sub.TryGetRational(tag, out var r) && r.Denominator != 0 ? r.ToDouble() : null;
 
         DateTime? taken = null;
-        foreach (var tag in new[] { ExifTag.DateTimeOriginal, ExifTag.DateTimeDigitized })
-            if (ParseExifDate(Text(tag)) is DateTime d)
+        foreach (int tag in new[] { ExifDirectoryBase.TagDateTimeOriginal, ExifDirectoryBase.TagDateTimeDigitized })
+            if (ParseExifDate(Text(sub, tag)) is DateTime d)
             {
                 taken = d;
                 break;
             }
-        double? fNumber = exif.TryGetValue(ExifTag.FNumber, out var fn) && fn.Value.Denominator != 0 ? fn.Value.ToDouble() : null;
-        double? exposure = exif.TryGetValue(ExifTag.ExposureTime, out var et) && et.Value.Denominator != 0 ? et.Value.ToDouble() : null;
-        int? iso = exif.TryGetValue(ExifTag.ISOSpeedRatings, out var isoValues) && isoValues.Value is { Length: > 0 } values ? values[0] : null;
+        double? fNumber = Ratio(ExifDirectoryBase.TagFNumber);
+        double? exposure = Ratio(ExifDirectoryBase.TagExposureTime);
+        // ISO は値が複数並ぶこともある（先頭を使う）
+        int? iso = sub?.GetObject(ExifDirectoryBase.TagIsoEquivalent) switch
+        {
+            ushort[] { Length: > 0 } values => values[0],
+            ushort v => v,
+            int v => v,
+            uint v => (int)Math.Min(v, int.MaxValue),
+            _ => null,
+        };
 
         var info = new PhotoInfo
         {
             TakenAt = taken,
-            Camera = CameraName(Text(ExifTag.Make), Text(ExifTag.Model)),
-            Lens = Text(ExifTag.LensModel),
+            Camera = CameraName(Text(ifd0, ExifDirectoryBase.TagMake), Text(ifd0, ExifDirectoryBase.TagModel)),
+            Lens = Text(sub, ExifDirectoryBase.TagLensModel),
             FNumber = fNumber is > 0 ? fNumber : null,
             ExposureSeconds = exposure is > 0 ? exposure : null,
             Iso = iso is > 0 ? iso : null,
