@@ -90,6 +90,14 @@ static class JumpTests
         check(moves.FrecencyOf(@"C:\画像", t0) == visits.FrecencyOf(@"C:\a", t0) && moves.FrecencyOf(@"C:\画像\旅行", t0) > 0
               && moves.FrecencyOf(@"C:\写真", t0) == 0 && moves.FrecencyOf(@"C:\写真2", t0) > 0,
             "開いた記録: フォルダー名の変更で中も含めて付け替える（回数は引き継ぐ・似た名前は変えない）");
+        var recent = new VisitHistory();
+        recent.Record(@"C:\古い", t0.AddDays(-3));
+        recent.Record(@"C:\新しい", t0);
+        recent.Record(@"C:\中", t0.AddDays(-1));
+        recent.Record(@"C:\古い", t0.AddDays(-2));
+        check(recent.Recent(10).SequenceEqual(new[] { @"C:\新しい", @"C:\中", @"C:\古い" }), "最近開いた順: 新しい順（開き直すと日時が新しくなる）");
+        check(recent.Recent(2).SequenceEqual(new[] { @"C:\新しい", @"C:\中" }), "最近開いた順: 件数で打ち切る");
+        check(recent.Recent(2, p => p == @"C:\新しい").SequenceEqual(new[] { @"C:\中", @"C:\古い" }), "最近開いた順: 除いたものは数えずに打ち切る");
         string visitsPath = Path.Combine(dir, "data", "visits.json");
         visits.Save(visitsPath);
         check(VisitHistory.Load(visitsPath).Count == 3, "記録を保存して読める");

@@ -60,6 +60,15 @@ public sealed class VisitHistory
         lock (_lock) return _visits.Values.ToList();
     }
 
+    /// <summary>最近開いた順のパス（新しい順。exclude に当たるものは除く）を最大 count 件</summary>
+    public List<string> Recent(int count, Func<string, bool>? exclude = null)
+    {
+        List<Visit> list;
+        lock (_lock) list = _visits.Values.ToList();
+        return list.OrderByDescending(v => v.LastUtc).Select(v => v.Path)
+            .Where(p => exclude?.Invoke(p) != true).Take(count).ToList();
+    }
+
     private static double Frecency(Visit v, DateTime now)
     {
         var age = now - v.LastUtc;

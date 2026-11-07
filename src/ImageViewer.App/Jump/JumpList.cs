@@ -53,7 +53,8 @@ public sealed class JumpList : ListBox
 
     public void SetResults(IReadOnlyList<JumpResult> results, string? message = null) => SetResults(Array.Empty<CommandCandidate>(), results, message);
 
-    public void SetResults(IReadOnlyList<CommandCandidate> commands, IReadOnlyList<JumpResult> results, string? message = null)
+    /// <param name="selectFirst">先頭を選んでおく（false なら何も選ばない。↓ で先頭から選ぶ）</param>
+    public void SetResults(IReadOnlyList<CommandCandidate> commands, IReadOnlyList<JumpResult> results, string? message = null, bool selectFirst = true)
     {
         _commands = commands;
         _results = results;
@@ -63,7 +64,7 @@ public sealed class JumpList : ListBox
         foreach (var r in results) Items.Add(r.Path);
         if (Count == 0 && message != null) Items.Add(message);
         EndUpdate();
-        if (Count > 0) SelectedIndex = 0;
+        SelectedIndex = Count > 0 && selectFirst ? 0 : -1;
         Height = Math.Max(1, Math.Min(Items.Count, MaxVisibleItems)) * ItemHeight + 2;
     }
 
@@ -71,7 +72,8 @@ public sealed class JumpList : ListBox
     public void MoveSelection(int delta)
     {
         if (Count == 0) return;
-        SelectedIndex = Math.Clamp(SelectedIndex + delta, 0, Count - 1);
+        // 何も選んでいなければ、↓ は先頭から・↑ は末尾から
+        SelectedIndex = SelectedIndex < 0 ? (delta > 0 ? 0 : Count - 1) : Math.Clamp(SelectedIndex + delta, 0, Count - 1);
     }
 
     /// <summary>選んでいるフォルダ（コマンドを選んでいれば null）</summary>
