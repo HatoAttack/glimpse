@@ -3,13 +3,15 @@ Glimpse に含まれる他のソフトウェアのライセンス
 Glimpse.exe には、次のソフトウェアが含まれています。それぞれのライセンス文と著作権表示を下に載せます。
 
 - ImageSharp（画像の読み書き）: Six Labors Split License（Glimpse はオープンソースなので Apache License 2.0 が適用されます）
+- SkiaSharp（画像の読み書き・表示）: MIT License
+- SkiaSharp のネイティブのライブラリが含むソフトウェア（Skia・libjpeg-turbo・libpng・libwebp など）: それぞれのライセンス（Third-party notices）
 - .NET Runtime: MIT License
 - Windows Forms for .NET: MIT License
 - WPF for .NET: MIT License
 - 上の .NET の部品が含むソフトウェア: それぞれのライセンス（Third-party notices）
 
-.NET Runtime の Third-party notices は、修正版ごとに中身（含まれるライブラリの版）が変わるので、このファイルには載せず、
-exe を作るときに、その exe に含めた .NET Runtime のものを埋め込みます（アプリの「ライセンス」で末尾に表示されます）。
+SkiaSharp と .NET Runtime の Third-party notices は、版ごとに中身（含まれるライブラリの版）が変わるので、このファイルには載せず、
+exe を作るときに、その exe に含めた版のものを埋め込みます（アプリの「ライセンス」で末尾に表示されます）。
 
 
 ================================================================================
@@ -267,6 +269,33 @@ Apache License, Version 2.0 (ImageSharp)
    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
    See the License for the specific language governing permissions and
    limitations under the License.
+
+
+================================================================================
+SkiaSharp - https://github.com/mono/SkiaSharp
+================================================================================
+
+The MIT License (MIT)
+
+Copyright (c) 2015-2016 Xamarin, Inc.
+Copyright (c) 2017-2018 Microsoft Corporation.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so,
+subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
 ================================================================================
