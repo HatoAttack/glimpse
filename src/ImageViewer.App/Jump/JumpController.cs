@@ -128,6 +128,8 @@ internal sealed class JumpController : IDisposable
         var cts = _cts = new CancellationTokenSource();
         if (query.Length == 0 || string.Equals(query, _currentFolder(), StringComparison.OrdinalIgnoreCase))
         {
+            // 前の検索の候補を出したまま履歴を待つと、その間の Enter・クリックで古い候補を開いてしまう。先に閉じておく
+            _list.Visible = false;
             await ShowHistoryAsync(cts);
             return;
         }
