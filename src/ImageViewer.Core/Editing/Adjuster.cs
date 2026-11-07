@@ -188,7 +188,8 @@ public static class Adjuster
 
     /// <summary>
     /// コマ・ページの数（ヘッダーだけ読む）。GIF / WEBP のアニメ、複数ページの TIFF など。
-    /// ImageSharp で数えられなければ WIC で数える（TIFF・HEIC など）。どちらでも数えられなければ null
+    /// 読み込みと同じ順に Skia・ImageSharp（QOI など）で数え、どちらでも読めない中身は WIC で数える（TIFF・HEIC など）。
+    /// どれでも数えられなければ null
     /// </summary>
     public static int? FrameCount(string path)
     {
@@ -196,6 +197,8 @@ public static class Adjuster
         {
             try
             {
+                using (var codec = SkiaDecoder.TryOpen(path))
+                    if (codec != null) return Math.Max(1, codec.FrameCount);
                 return Math.Max(1, ImageLoader.IdentifyImageSharp(path).FrameMetadataCollection.Count);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException

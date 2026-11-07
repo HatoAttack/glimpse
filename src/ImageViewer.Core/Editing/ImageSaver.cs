@@ -111,7 +111,13 @@ public static class ImageSaver
         {
             case ".jpg" or ".jpeg" or ".jfif":
                 image.Mutate(x => x.BackgroundColor(Color.White));
-                encoder = new JpegEncoder { Quality = JpegQuality };
+                // 画素はいつも RGB で持つ（CMYK の JPEG も RGB に直して読む）。元が CMYK でも、CMYK では書かない
+                encoder = new JpegEncoder
+                {
+                    Quality = JpegQuality,
+                    ColorType = image.Metadata.GetJpegMetadata().ColorType is JpegEncodingColor.Cmyk or JpegEncodingColor.Ycck
+                        ? JpegEncodingColor.YCbCrRatio420 : null,
+                };
                 break;
             case ".webp":
                 encoder = new WebpEncoder { Quality = WebpQuality };

@@ -21,6 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="MetadataExtractor" Version="2.9.3" />
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.*" />
     <!-- ImageSharp から移行中（#81）。画像は SKBitmap で受け渡す。SkiaSharp 本体と、Windows 用のネイティブのライブラリ -->
     <PackageReference Include="SkiaSharp" Version="4.153.1" />
