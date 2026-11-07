@@ -2,8 +2,7 @@
 // 文字（そのまま / 帯 / 吹き出し）と番号（丸の中の数字）を描く。影も付けられる。
 // 形は「点から形の縁までの距離」で表して画素ごとに塗る（縁は距離でなめらかに、影は同じ形をずらしてぼかす）。
 // 表示用の縮小した画像にも同じ処理で描けるので、見た目と保存したものが合う。文字の形は AnnotationText
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
+using ImageViewer.Core.Imaging;
 using SkiaSharp;
 
 namespace ImageViewer.Core.Editing;
@@ -401,12 +400,10 @@ public static class Annotator
     /// <summary>影のずれ（右下へ）とぼかしの幅（px）。線の太さに合わせる</summary>
     public static (double Offset, double Blur) ShadowOf(double thickness) => (Math.Max(1, thickness * 0.4), Math.Max(1.5, thickness * 0.6));
 
-    /// <summary>image に枠・矢印・文字を順に描く（後のものほど上。移行中は ImageSharp の画像に写して描く）</summary>
-    public static void Draw(SKBitmap image, IEnumerable<Annotation> items) =>
-        Imaging.ImageSharpBridge.Edit(image, img => Draw(img, items));
+    /// <summary>image に枠・矢印・文字を順に描く（その場で変える。後のものほど上）</summary>
+    public static void Draw(SKBitmap image, IEnumerable<Annotation> items) => SkiaEdit.Edit(image, rgba => DrawRgba(rgba, items));
 
-    /// <summary>image に枠・矢印・文字を順に描く（後のものほど上）</summary>
-    internal static void Draw(Image<Rgba32> image, IEnumerable<Annotation> items)
+    private static void DrawRgba(SKBitmap image, IEnumerable<Annotation> items)
     {
         foreach (var a in items)
         {
@@ -418,26 +415,26 @@ public static class Annotator
             }
             if (a.Thickness <= 0) continue;
             if (a.Kind == AnnotationKind.Arrow && a.Length <= 0) continue;
-            FillShape(image, a, a.Thickness, Rgba(a.Color), null, 0);
+            FillShape(image, a, a.Thickness, ToRgba(a.Color), null, 0);
         }
     }
 
     /// <summary>文字・番号: 帯・吹き出し・丸を塗ってから、その上に文字を描く</summary>
-    private static void DrawText(Image<Rgba32> image, Annotation a)
+    private static void DrawText(SKBitmap image, Annotation a)
     {
         if (a.FontSize < 1) return;
         var (x, y, w, h) = a.Body;
         bool number = a.Kind == AnnotationKind.Number, bare = !number && a.Background == TextBackground.None;
         if (number)
         {
-            FillShape(image, a, a.FontSize / 8, Rgba(a.Color), null, 0);
+            FillShape(image, a, a.FontSize / 8, ToRgba(a.Color), null, 0);
         }
         else if (!bare)
         {
             double border = Math.Max(0, a.Thickness);
             double basis = Math.Max(border, a.FontSize / 8);
-            if (border > 0) FillShape(image, a, basis, Rgba(a.Color), Rgba(a.Fill), border);
-            else FillShape(image, a, basis, Rgba(a.Fill), null, 0);
+            if (border > 0) FillShape(image, a, basis, ToRgba(a.Color), ToRgba(a.Fill), border);
+            else FillShape(image, a, basis, ToRgba(a.Fill), null, 0);
         }
         // 帯や丸が無い文字は、文字の形そのものに影を落とす
         // 本体が文字より広ければ、左・右に寄せる（余白は空ける）
@@ -445,22 +442,22 @@ public static class Annotator
         double pad = a.PaddingX + a.BorderWidth;
         double centerX = number || a.Align == TextLineAlign.Center ? x + w / 2
             : a.Align == TextLineAlign.Left ? x + pad + half : x + w - pad - half;
-        AnnotationText.Render(image, a.Text, a.FontName, a.Align, a.FontSize, centerX, y + h / 2, number ? ContrastOf(Rgba(a.Color)) : Rgba(a.TextColor ?? a.Color),
+        AnnotationText.Render(image, a.Text, a.FontName, a.Align, a.FontSize, centerX, y + h / 2, number ? ContrastOf(ToRgba(a.Color)) : ToRgba(a.TextColor ?? a.Color),
             bare && a.Shadow ? ShadowOf(a.FontSize / 8) : null, ShadowAlpha);
     }
 
-    /// <summary>描くときの色（移行中は ImageSharp で描くので、その色にする）</summary>
-    private static Rgba32 Rgba(SKColor c) => new(c.Red, c.Green, c.Blue, c.Alpha);
+    /// <summary>描くときの色</summary>
+    private static Rgba ToRgba(SKColor c) => new(c.Red, c.Green, c.Blue, c.Alpha);
 
     /// <summary>色の上に載せて読める文字の色（明るい色には黒、暗い色には白）</summary>
-    private static Rgba32 ContrastOf(Rgba32 c) =>
-        (0.299 * c.R + 0.587 * c.G + 0.114 * c.B) / 255 > 0.6 ? new Rgba32(24, 24, 24, c.A) : new Rgba32(255, 255, 255, c.A);
+    private static Rgba ContrastOf(Rgba c) =>
+        (0.299 * c.R + 0.587 * c.G + 0.114 * c.B) / 255 > 0.6 ? new Rgba(24, 24, 24, c.A) : new Rgba(255, 255, 255, c.A);
 
     /// <summary>
     /// 形を color で塗る（a.Shadow なら影も。影の大きさは shadowBasis から決める）。
     /// inner があれば、縁から inset だけ内側を inner で塗る（color が線、inner が中の色になる）
     /// </summary>
-    private static void FillShape(Image<Rgba32> image, Annotation a, double shadowBasis, Rgba32 color, Rgba32? inner, double inset)
+    private static void FillShape(SKBitmap image, Annotation a, double shadowBasis, Rgba color, Rgba? inner, double inset)
     {
         var shape = new AnnotationShape(a);
         bool shadow = a.Shadow;
@@ -471,11 +468,10 @@ public static class Annotator
         int top = Math.Max(0, (int)Math.Floor(t - margin)), bottom = Math.Min(image.Height, (int)Math.Ceiling(b + margin));
         if (left >= right || top >= bottom) return;
         double opacity = color.A / 255.0;
-        image.ProcessPixelRows(rows =>
         {
             for (int y = top; y < bottom; y++)
             {
-                var row = rows.GetRowSpan(y);
+                var row = image.Row(y);
                 for (int x = left; x < right; x++)
                 {
                     double px = x + 0.5, py = y + 0.5; // 画素の中心
@@ -494,15 +490,15 @@ public static class Annotator
                     if (inner is { } fill && d + inset < 0.5) Blend(ref row[x], fill.R, fill.G, fill.B, fill.A / 255.0 * Math.Min(1, 0.5 - d - inset));
                 }
             }
-        });
+        }
     }
 
     /// <summary>色を不透明度 alpha で重ねる（下が透けている画像でも正しく重なるように）</summary>
-    internal static void Blend(ref Rgba32 px, byte r, byte g, byte b, double alpha)
+    internal static void Blend(ref Rgba px, byte r, byte g, byte b, double alpha)
     {
         if (alpha <= 0) return;
         double da = px.A / 255.0 * (1 - alpha), outA = alpha + da;
-        px = new Rgba32(
+        px = new Rgba(
             (byte)Math.Round((r * alpha + px.R * da) / outA),
             (byte)Math.Round((g * alpha + px.G * da) / outA),
             (byte)Math.Round((b * alpha + px.B * da) / outA),

@@ -4,7 +4,8 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
-using SixLabors.ImageSharp.PixelFormats;
+using ImageViewer.Core.Imaging;
+using SkiaSharp;
 
 namespace ImageViewer.Core.Editing;
 
@@ -109,8 +110,9 @@ internal static class AnnotationText
     }
 
     /// <summary>(centerX, centerY) を文字全体の中心にして描く（行は align でそろえる）。shadow があれば、右下へずらしてぼかした影を先に落とす</summary>
-    public static void Render(SixLabors.ImageSharp.Image<Rgba32> image, string text, string font, TextLineAlign align, double fontSize, double centerX, double centerY,
-        Rgba32 color, (double Offset, double Blur)? shadow, double shadowAlpha)
+    /// <param name="image">RGBA・乗算しない画像（その場で変える）</param>
+    public static void Render(SKBitmap image, string text, string font, TextLineAlign align, double fontSize, double centerX, double centerY,
+        Rgba color, (double Offset, double Blur)? shadow, double shadowAlpha)
     {
         text = Normalize(text);
         if (string.IsNullOrWhiteSpace(text) || fontSize < 1 || color.A == 0) return;
@@ -171,11 +173,10 @@ internal static class AnnotationText
             BoxBlur(soft, width, height, blur);
         }
         double opacity = color.A / 255.0;
-        image.ProcessPixelRows(rows =>
         {
             for (int y = 0; y < height; y++)
             {
-                var row = rows.GetRowSpan(top + y);
+                var row = image.Row(top + y);
                 for (int x = 0; x < width; x++)
                 {
                     if (soft != null && x >= shift && y >= shift)
@@ -188,7 +189,7 @@ internal static class AnnotationText
                     if (m > 0) Annotator.Blend(ref row[left + x], color.R, color.G, color.B, opacity * m / 255.0);
                 }
             }
-        });
+        }
     }
 
     /// <summary>横・縦に前後 radius 画素の平均を取る（2 回かけると、なだらかなぼかしに近くなる）</summary>

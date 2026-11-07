@@ -2,10 +2,6 @@
 // 読み込みは ImageLoader 経由なので HEIC / AVIF / RAW なども入力にできる
 using ImageViewer.Core.Archives;
 using ImageViewer.Core.Imaging;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.Formats.Png;
-using SixLabors.ImageSharp.Processing;
-using SixLabors.ImageSharp.Processing.Processors.Transforms;
 using SkiaSharp;
 
 namespace ImageViewer.Core.Editing;
@@ -57,11 +53,15 @@ public sealed record ConvertOptions
 
 public static class Converter
 {
-    internal static IResampler ResamplerOf(ResizeAlgorithm algorithm) => algorithm switch
+    /// <summary>
+    /// 縮小の方法から Skia の補間へ。Skia に Lanczos は無いので、くっきりした 3 次補間（Catmull-Rom）で代える
+    /// （#81 の決定: 見た目がわずかに変わることは許す）
+    /// </summary>
+    internal static ResizeQuality QualityOf(ResizeAlgorithm algorithm) => algorithm switch
     {
-        ResizeAlgorithm.Bilinear => KnownResamplers.Triangle,
-        ResizeAlgorithm.Bicubic => KnownResamplers.Bicubic,
-        _ => KnownResamplers.Lanczos3,
+        ResizeAlgorithm.Bilinear => ResizeQuality.Fast,
+        ResizeAlgorithm.Bicubic => ResizeQuality.Smooth,
+        _ => ResizeQuality.Sharp,
     };
 
     /// <summary>出力ファイル名（置換 → 末尾に付ける → 小文字化。拡張子は出力形式に合わせる）</summary>
@@ -169,15 +169,27 @@ public static class Converter
     public static void ConvertOne(string src, string dst, ConvertOptions options, bool overwrite = true)
     {
         // 回転補正済み・先頭フレームだけ（アニメーションは静止画になる）
-        using var image = ImageLoader.LoadForEdit(src);
-
-        var (crop, w, h) = OutputGeometry(image.Width, image.Height, options);
-        if (crop.Width != image.Width || crop.Height != image.Height) image.Mutate(x => x.Crop(ImageSharpBridge.ToRectangle(crop)));
-        if (w != image.Width || h != image.Height) image.Mutate(x => x.Resize(w, h, ResamplerOf(options.Algorithm)));
-
-        // 撮影情報（EXIF）は元のファイルから読み直して書く（メタデータを消す設定なら書かない）
-        ImageSaver.Save(image, dst, overwrite, metadataFrom: options.StripMetadata ? null : src);
+        var image = ImageLoader.Load(src);
+        try
+        {
+            var (crop, w, h) = OutputGeometry(image.Width, image.Height, options);
+            if (crop.Width != image.Width || crop.Height != image.Height) Replace(ref image, SkiaEdit.Crop(image, crop));
+            if (w != image.Width || h != image.Height) Replace(ref image, SkiaEdit.Resize(image, w, h, QualityOf(options.Algorithm)));
+            // 撮影情報（EXIF）は元のファイルから読み直して書く（メタデータを消す設定なら書かない）
+            ImageSaver.Save(image, dst, overwrite, metadataFrom: options.StripMetadata ? null : src);
+        }
+        finally
+        {
+            image.Dispose();
+        }
     }
+
+    private static void Replace(ref SKBitmap image, SKBitmap next)
+    {
+        image.Dispose();
+        image = next;
+    }
+
 
     /// <summary>設定の説明（1 行）</summary>
     public static string Describe(ConvertOptions options)

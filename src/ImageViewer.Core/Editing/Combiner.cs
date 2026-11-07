@@ -1,9 +1,7 @@
 // 連結（image-sizechange の連結タブから移植）。複数の画像を横・縦・グリッドに並べて 1 枚にする
 // 先に画像の大きさだけから配置を計算し（Layout）、それから描く（Render）。
 // プレビューは配置を計算した後、はじめから縮めた大きさのキャンバスに描くので、何百枚並べても大きなキャンバスを作らない
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
+using ImageViewer.Core.Imaging;
 using SkiaSharp;
 
 namespace ImageViewer.Core.Editing;
@@ -63,13 +61,13 @@ public static class Combiner
     /// <summary>ファイルを原寸で読んで連結し、dst に保存する（重いので別スレッドで）</summary>
     public static (int Width, int Height) CombineFiles(IReadOnlyList<string> paths, CombineOptions options, string dst, CancellationToken ct = default)
     {
-        var images = new List<Image<Rgba32>>(paths.Count);
+        var images = new List<SKBitmap>(paths.Count);
         try
         {
             foreach (var p in paths)
             {
                 ct.ThrowIfCancellationRequested();
-                images.Add(Imaging.ImageLoader.LoadForEdit(p));
+                images.Add(Imaging.ImageLoader.Load(p));
             }
             // 形式の上限を超える大きさなら、大きなキャンバスを作る前にやめる
             var layout = Layout(SizesOf(images), options);
@@ -136,38 +134,15 @@ public static class Combiner
         }
     }
 
-    /// <summary>連結した画像（原寸。移行中は ImageSharp の画像に写して処理する）</summary>
-    public static SKBitmap Combine(IReadOnlyList<SKBitmap> images, CombineOptions options) =>
-        WithImageSharp(images, list => Combine(list, options));
-
-    /// <summary>長辺が maxEdge 以下になるよう縮めて連結する（プレビュー用。移行中は ImageSharp の画像に写して処理する）</summary>
-    public static SKBitmap CombineBounded(IReadOnlyList<SKBitmap> images, CombineOptions options, int maxEdge) =>
-        WithImageSharp(images, list => CombineBounded(list, options, maxEdge));
-
-    private static SKBitmap WithImageSharp(IReadOnlyList<SKBitmap> images, Func<IReadOnlyList<Image<Rgba32>>, Image<Rgba32>> combine)
-    {
-        var list = new List<Image<Rgba32>>(images.Count);
-        try
-        {
-            foreach (var im in images) list.Add(Imaging.ImageSharpBridge.ToImageSharp(im));
-            using var result = combine(list);
-            return Imaging.ImageSharpBridge.ToSkia(result);
-        }
-        finally
-        {
-            foreach (var im in list) im.Dispose();
-        }
-    }
-
     /// <summary>連結した画像（原寸）</summary>
-    internal static Image<Rgba32> Combine(IReadOnlyList<Image<Rgba32>> images, CombineOptions options) =>
+    public static SKBitmap Combine(IReadOnlyList<SKBitmap> images, CombineOptions options) =>
         Render(images, Layout(SizesOf(images), options), options, maxEdge: null);
 
     /// <summary>長辺が maxEdge 以下になるよう縮めて連結する（プレビュー用。はじめから縮めたキャンバスに描く）</summary>
-    internal static Image<Rgba32> CombineBounded(IReadOnlyList<Image<Rgba32>> images, CombineOptions options, int maxEdge) =>
+    public static SKBitmap CombineBounded(IReadOnlyList<SKBitmap> images, CombineOptions options, int maxEdge) =>
         Render(images, Layout(SizesOf(images), options), options, maxEdge);
 
-    private static List<SKSizeI> SizesOf(IReadOnlyList<Image<Rgba32>> images) => images.Select(im => new SKSizeI(im.Width, im.Height)).ToList();
+    private static List<SKSizeI> SizesOf(IReadOnlyList<SKBitmap> images) => images.Select(im => new SKSizeI(im.Width, im.Height)).ToList();
 
     /// <summary>画像の大きさだけから配置を計算する</summary>
     public static CombineLayoutResult Layout(IReadOnlyList<SKSizeI> sizes, CombineOptions options)
@@ -231,39 +206,35 @@ public static class Combiner
         _ => 0,
     };
 
-    /// <summary>配置どおりに描く。maxEdge を指定すると全体がその大きさに収まるよう縮めて描く</summary>
-    private static Image<Rgba32> Render(IReadOnlyList<Image<Rgba32>> images, CombineLayoutResult layout, CombineOptions options, int? maxEdge)
+    /// <summary>
+    /// 配置どおりに描く（RGBA・乗算しない画像を返す）。maxEdge を指定すると全体がその大きさに収まるよう縮めて描く。
+    /// 乗算済みのキャンバスに重ねてから、乗算しない形に戻す
+    /// </summary>
+    private static SKBitmap Render(IReadOnlyList<SKBitmap> images, CombineLayoutResult layout, CombineOptions options, int? maxEdge)
     {
-        var c = ParseColor(options.Background, options.Transparent);
-        var bg = new Rgba32(c.Red, c.Green, c.Blue, c.Alpha);
+        var background = ParseColor(options.Background, options.Transparent);
         int longest = Math.Max(layout.Canvas.Width, layout.Canvas.Height);
         double scale = maxEdge is int m && longest > m ? (double)m / longest : 1;
         int Scale(int v) => scale >= 1 ? v : (int)Math.Round(v * scale);
 
-        var canvas = new Image<Rgba32>(Math.Max(1, Scale(layout.Canvas.Width)), Math.Max(1, Scale(layout.Canvas.Height)), bg);
-        try
+        using var canvasBitmap = new SKBitmap(new SKImageInfo(Math.Max(1, Scale(layout.Canvas.Width)), Math.Max(1, Scale(layout.Canvas.Height)),
+            SKColorType.Rgba8888, SKAlphaType.Premul));
+        using (var canvas = new SKCanvas(canvasBitmap))
+        using (var paint = new SKPaint { BlendMode = SKBlendMode.SrcOver })
         {
+            canvas.Clear(background);
             for (int i = 0; i < images.Count; i++)
             {
                 var place = layout.Places[i];
                 int w = Math.Max(1, Scale(place.Width)), h = Math.Max(1, Scale(place.Height));
-                var at = new Point(Scale(place.Left), Scale(place.Top));
                 var image = images[i];
-                if (image.Width == w && image.Height == h)
-                {
-                    canvas.Mutate(x => x.DrawImage(image, at, 1f));
-                    continue;
-                }
-                // プレビューは速さ優先（Triangle）、原寸は画質優先（Lanczos3）
-                using var resized = image.Clone(x => x.Resize(w, h, maxEdge != null ? KnownResamplers.Triangle : KnownResamplers.Lanczos3));
-                canvas.Mutate(x => x.DrawImage(resized, at, 1f));
+                // プレビューは速さ優先（線形 + ミップマップ）、原寸は画質優先（Catmull-Rom。ImageSharp の Lanczos3 の代わり）
+                using var resized = image.Width == w && image.Height == h ? null
+                    : SkiaEdit.Resize(image, w, h, maxEdge != null ? ResizeQuality.Fast : ResizeQuality.Sharp);
+                using var drawn = SKImage.FromBitmap(resized ?? image);
+                canvas.DrawImage(drawn, Scale(place.Left), Scale(place.Top), SKSamplingOptions.Default, paint);
             }
-            return canvas;
         }
-        catch
-        {
-            canvas.Dispose();
-            throw;
-        }
+        return SkiaEdit.ToRgba(canvasBitmap);
     }
 }

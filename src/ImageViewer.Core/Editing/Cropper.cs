@@ -1,8 +1,5 @@
 // 切り抜き（image-sizechange の切り抜きタブから移植）。保存先が元のファイルなら上書きする（回転・補正の上書きと同じ条件で）
 using ImageViewer.Core.Imaging;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
 using SkiaSharp;
 
 namespace ImageViewer.Core.Editing;
@@ -76,12 +73,11 @@ public static class Cropper
     {
         bool overwrite = SourceGuard.IsSameFile(src, dst);
         if (overwrite) SourceGuard.EnsureReplaceable(src);
-        using var image = ImageLoader.LoadForEdit(src);
+        using var image = ImageLoader.Load(src);
         if (overwrite) SourceGuard.EnsureKeepsMetadata(src);
         var (x0, y0, x1, y1) = CarryRect(rect, fromWidth, fromHeight, image.Width, image.Height);
-        var box = ImageSharpBridge.ToRectangle(ClampBox(x0, y0, x1, y1, image.Width, image.Height));
-        image.Mutate(c => c.Crop(box));
-        return SourceGuard.Save(image, src, dst);
+        using var cropped = SkiaEdit.Crop(image, ClampBox(x0, y0, x1, y1, image.Width, image.Height));
+        return SourceGuard.Save(cropped, src, dst);
     }
 
     /// <summary>切り抜いた画像の保存先: 出力フォルダ\元の名前_crop.拡張子（書き出せない形式は .jpg）。既にあれば (2)… を付ける</summary>
@@ -111,11 +107,10 @@ public static class Cropper
     {
         bool overwrite = SourceGuard.IsSameFile(src, dst);
         if (overwrite) SourceGuard.EnsureReplaceable(src);
-        using var image = ImageLoader.LoadForEdit(src);
+        using var image = ImageLoader.Load(src);
         if (overwrite) SourceGuard.EnsureKeepsMetadata(src);
         var (x, y, w, h) = CenterRect(image.Width, image.Height, aspect);
-        var box = ImageSharpBridge.ToRectangle(ClampBox(x, y, x + w, y + h, image.Width, image.Height));
-        image.Mutate(c => c.Crop(box));
-        return SourceGuard.Save(image, src, dst);
+        using var cropped = SkiaEdit.Crop(image, ClampBox(x, y, x + w, y + h, image.Width, image.Height));
+        return SourceGuard.Save(cropped, src, dst);
     }
 }

@@ -1233,7 +1233,7 @@ public sealed class QuickLookView : Control
 
         /// <summary>
         /// region の画素を BGRA の並び（1 行 = stride バイト）で読む。表示用の Bitmap は乗算済みアルファなので、
-        /// 補正は保存のとき（ImageSharp の画像）と同じく乗算を外した色にかける（半透明のところで結果がずれないように）
+        /// 補正は保存のとき（乗算しない SKBitmap）と同じく乗算を外した色にかける（半透明のところで結果がずれないように）
         /// </summary>
         private static (byte[] Pixels, int Stride) ReadPixels(Bitmap source, Rectangle region)
         {

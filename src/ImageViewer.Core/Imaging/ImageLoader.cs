@@ -4,10 +4,7 @@
 // - どちらでも読めなければ・それ以外で WIC にデコーダがある形式（TIFF / HEIC / AVIF / RAW / JPEG XL 等）: WPF の画像 API（中身は WIC）で読む
 // 形式は拡張子でなく中身で決める。拡張子を変えた TIFF なども、Skia・自前の形式でなければ WIC で読み直す
 // どの経路でも「回転補正済み・sRGB・RGBA・乗算しない」SKBitmap を返す
-// Core の中の編集の処理（ファイルを読んで保存するもの）は、まだ ImageSharp の画像を使うので LoadForEdit で読む（#81 の手順7 で消す）
 using System.Windows.Media;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
 using Wpf = System.Windows.Media.Imaging;
 
 namespace ImageViewer.Core.Imaging;
@@ -71,16 +68,6 @@ public static class ImageLoader
         double scale = (double)edge / Math.Max(bitmap.Width, bitmap.Height);
         using (bitmap)
             return SkiaDecoder.Resize(bitmap, Math.Max(1, (int)Math.Round(bitmap.Width * scale)), Math.Max(1, (int)Math.Round(bitmap.Height * scale)));
-    }
-
-    /// <summary>
-    /// 編集用に ImageSharp の画像として読む（メタデータは付けない。保存するときに元のファイルから読み直す）。
-    /// 移行中（#81）だけ使う。編集の処理を SKBitmap に移したら消す（手順7）
-    /// </summary>
-    internal static Image<Rgba32> LoadForEdit(string path, LoadOptions? options = null)
-    {
-        using var bitmap = Load(path, options);
-        return ImageSharpBridge.ToImageSharp(bitmap);
     }
 
     /// <summary>
