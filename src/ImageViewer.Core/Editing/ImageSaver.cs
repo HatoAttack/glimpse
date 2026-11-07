@@ -100,7 +100,7 @@ public static class ImageSaver
     }
 
     /// <summary>ImageSharp の画像を、画像についているメタデータごと保存する（移行中だけ。連結など）</summary>
-    public static void Save(Image<Rgba32> image, string dst, bool overwrite = true)
+    internal static void Save(Image<Rgba32> image, string dst, bool overwrite = true)
     {
         string ext = Path.GetExtension(dst).ToLowerInvariant();
         if (ext == ".webp" && Math.Max(image.Width, image.Height) > WebpMaxEdge)
@@ -161,7 +161,7 @@ public static class ImageSaver
     }
 
     /// <summary>ImageSharp の画像を新しいファイルとして保存する（移行中だけ。画像についているメタデータごと）</summary>
-    public static string SaveNew(Image<Rgba32> image, string path)
+    internal static string SaveNew(Image<Rgba32> image, string path)
     {
         for (int attempt = 0; ; attempt++)
         {

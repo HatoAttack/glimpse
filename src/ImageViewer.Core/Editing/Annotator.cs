@@ -25,7 +25,7 @@ public enum TextBackground { None, Box, Balloon }
 /// 吹き出しは (X1, Y1) がしっぽの先。帯と吹き出しは Color が線、Fill が中の色、TextColor が文字の色。番号は Color が丸の色
 /// </summary>
 public sealed record Annotation(AnnotationKind Kind, double X0, double Y0, double X1, double Y1,
-    Rgba32 Color, double Thickness, double CornerRadius, double HeadSize, bool Shadow)
+    SKColor Color, double Thickness, double CornerRadius, double HeadSize, bool Shadow)
 {
     public double Width => Math.Abs(X1 - X0);
     public double Height => Math.Abs(Y1 - Y0);
@@ -76,10 +76,10 @@ public sealed record Annotation(AnnotationKind Kind, double X0, double Y0, doubl
     public TextBackground Background { get; init; }
 
     /// <summary>帯・吹き出しの中の色</summary>
-    public Rgba32 Fill { get; init; } = new(255, 255, 255);
+    public SKColor Fill { get; init; } = SKColors.White;
 
     /// <summary>文字の色（指定しなければ Color と同じ）。番号の数字には使わない（丸の色に合わせて白か黒）</summary>
-    public Rgba32? TextColor { get; init; }
+    public SKColor? TextColor { get; init; }
 
     /// <summary>書体の名前（空なら初めの書体。その PC に無い書体も初めの書体で描く）</summary>
     public string FontName { get; init; } = "";
@@ -406,11 +406,11 @@ public static class Annotator
         Imaging.ImageSharpBridge.Edit(image, img => Draw(img, items));
 
     /// <summary>image に枠・矢印・文字を順に描く（後のものほど上）</summary>
-    public static void Draw(Image<Rgba32> image, IEnumerable<Annotation> items)
+    internal static void Draw(Image<Rgba32> image, IEnumerable<Annotation> items)
     {
         foreach (var a in items)
         {
-            if (a.Color.A == 0) continue;
+            if (a.Color.Alpha == 0) continue;
             if (a.IsText)
             {
                 DrawText(image, a);
@@ -418,7 +418,7 @@ public static class Annotator
             }
             if (a.Thickness <= 0) continue;
             if (a.Kind == AnnotationKind.Arrow && a.Length <= 0) continue;
-            FillShape(image, a, a.Thickness, a.Color, null, 0);
+            FillShape(image, a, a.Thickness, Rgba(a.Color), null, 0);
         }
     }
 
@@ -430,14 +430,14 @@ public static class Annotator
         bool number = a.Kind == AnnotationKind.Number, bare = !number && a.Background == TextBackground.None;
         if (number)
         {
-            FillShape(image, a, a.FontSize / 8, a.Color, null, 0);
+            FillShape(image, a, a.FontSize / 8, Rgba(a.Color), null, 0);
         }
         else if (!bare)
         {
             double border = Math.Max(0, a.Thickness);
             double basis = Math.Max(border, a.FontSize / 8);
-            if (border > 0) FillShape(image, a, basis, a.Color, a.Fill, border);
-            else FillShape(image, a, basis, a.Fill, null, 0);
+            if (border > 0) FillShape(image, a, basis, Rgba(a.Color), Rgba(a.Fill), border);
+            else FillShape(image, a, basis, Rgba(a.Fill), null, 0);
         }
         // 帯や丸が無い文字は、文字の形そのものに影を落とす
         // 本体が文字より広ければ、左・右に寄せる（余白は空ける）
@@ -445,9 +445,12 @@ public static class Annotator
         double pad = a.PaddingX + a.BorderWidth;
         double centerX = number || a.Align == TextLineAlign.Center ? x + w / 2
             : a.Align == TextLineAlign.Left ? x + pad + half : x + w - pad - half;
-        AnnotationText.Render(image, a.Text, a.FontName, a.Align, a.FontSize, centerX, y + h / 2, number ? ContrastOf(a.Color) : a.TextColor ?? a.Color,
+        AnnotationText.Render(image, a.Text, a.FontName, a.Align, a.FontSize, centerX, y + h / 2, number ? ContrastOf(Rgba(a.Color)) : Rgba(a.TextColor ?? a.Color),
             bare && a.Shadow ? ShadowOf(a.FontSize / 8) : null, ShadowAlpha);
     }
+
+    /// <summary>描くときの色（移行中は ImageSharp で描くので、その色にする）</summary>
+    private static Rgba32 Rgba(SKColor c) => new(c.Red, c.Green, c.Blue, c.Alpha);
 
     /// <summary>色の上に載せて読める文字の色（明るい色には黒、暗い色には白）</summary>
     private static Rgba32 ContrastOf(Rgba32 c) =>
@@ -525,16 +528,4 @@ public static class Annotator
         return SourceGuard.Save(drawn, src, dst);
     }
 
-    /// <inheritdoc cref="SaveAnnotated(SKBitmap, IReadOnlyList{Annotation}, string, string)"/>
-    public static string SaveAnnotated(Image<Rgba32> image, IReadOnlyList<Annotation> items, string src, string dst)
-    {
-        if (SourceGuard.IsSameFile(src, dst))
-        {
-            SourceGuard.EnsureReplaceable(src);
-            SourceGuard.EnsureKeepsMetadata(src);
-        }
-        using var drawn = image.Clone();
-        Draw(drawn, items);
-        return SourceGuard.Save(drawn, src, dst);
-    }
 }

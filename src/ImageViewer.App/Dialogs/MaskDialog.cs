@@ -10,9 +10,9 @@
 using System.Drawing.Drawing2D;
 using ImageViewer.Core.Editing;
 using ImageViewer.Core.Thumbnails;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
 using ImageViewer.App.Theming;
+using ImageViewer.Core.Imaging;
+using SkiaSharp;
 
 namespace ImageViewer.App.Dialogs;
 
@@ -30,7 +30,7 @@ public sealed class MaskDialog : ThemedForm
     private readonly ImageStepper _stepper;  // 画像送りと、表示中の画像（原寸。保存元）
     private readonly EditSavePanel _saver;   // 保存先・保存のボタン・保存中の制御
     private readonly EditCanvas _canvas = new();
-    private SixLabors.ImageSharp.Image<Rgba32>? _small; // キャンバスの大きさに縮小した、かける前の画像
+    private SKBitmap? _small; // キャンバスの大きさに縮小した、かける前の画像
     private Bitmap? _display;                           // _small にかけた表示用
 
     // 範囲（画像座標）。後のものほど上（クリックで先に当たる）
@@ -297,8 +297,8 @@ public sealed class MaskDialog : ThemedForm
         {
             var size = _canvas.FitImage(_stepper.Image.Width, _stepper.Image.Height);
             _small = size.Width == _stepper.Image.Width && size.Height == _stepper.Image.Height
-                ? _stepper.Image.Clone()
-                : _stepper.Image.Clone(x => x.Resize(size.Width, size.Height, KnownResamplers.Triangle));
+                ? _stepper.Image.Copy()
+                : BitmapEdits.Resized(_stepper.Image, size.Width, size.Height);
         }
         RenderPreview();
     }
@@ -318,7 +318,7 @@ public sealed class MaskDialog : ThemedForm
             else
             {
                 int size = (int)Math.Round(Masker.EffectSize(_stepper.Image.Width, _stepper.Image.Height, _level.Value) * _canvas.Zoom);
-                using var preview = _small.Clone();
+                using var preview = _small.Copy();
                 try
                 {
                     Masker.Apply(preview, regions, CurrentEffect, Math.Max(2, size));

@@ -6,6 +6,7 @@ using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats.Png;
 using SixLabors.ImageSharp.Processing;
 using SixLabors.ImageSharp.Processing.Processors.Transforms;
+using SkiaSharp;
 
 namespace ImageViewer.Core.Editing;
 
@@ -56,7 +57,7 @@ public sealed record ConvertOptions
 
 public static class Converter
 {
-    public static IResampler ResamplerOf(ResizeAlgorithm algorithm) => algorithm switch
+    internal static IResampler ResamplerOf(ResizeAlgorithm algorithm) => algorithm switch
     {
         ResizeAlgorithm.Bilinear => KnownResamplers.Triangle,
         ResizeAlgorithm.Bicubic => KnownResamplers.Bicubic,
@@ -140,9 +141,9 @@ public static class Converter
     /// width × height の画像の出来上がりの大きさと、その前に切る範囲（切らないなら画像全体）。
     /// 長辺の指定は比率を保って縮める。幅 × 高さの指定は、その比率になるよう中央から切ってからぴったりの大きさにする
     /// </summary>
-    public static (Rectangle Crop, int Width, int Height) OutputGeometry(int width, int height, ConvertOptions options)
+    public static (SKRectI Crop, int Width, int Height) OutputGeometry(int width, int height, ConvertOptions options)
     {
-        var whole = new Rectangle(0, 0, width, height);
+        var whole = new SKRectI(0, 0, width, height);
         if (options.ExactSize)
         {
             int tw = Math.Max(1, options.ExactWidth), th = Math.Max(1, options.ExactHeight);
@@ -151,7 +152,7 @@ public static class Converter
             int cw = width, ch = height;
             if ((long)width * th > (long)height * tw) cw = Math.Clamp(RoundHalfUp((double)height * tw / th), 1, width);
             else ch = Math.Clamp(RoundHalfUp((double)width * th / tw), 1, height);
-            return (new Rectangle((width - cw) / 2, (height - ch) / 2, cw, ch), tw, th);
+            return (SKRectI.Create((width - cw) / 2, (height - ch) / 2, cw, ch), tw, th);
         }
 
         int longNow = Math.Max(width, height);
@@ -171,7 +172,7 @@ public static class Converter
         using var image = ImageLoader.LoadForEdit(src);
 
         var (crop, w, h) = OutputGeometry(image.Width, image.Height, options);
-        if (crop.Width != image.Width || crop.Height != image.Height) image.Mutate(x => x.Crop(crop));
+        if (crop.Width != image.Width || crop.Height != image.Height) image.Mutate(x => x.Crop(ImageSharpBridge.ToRectangle(crop)));
         if (w != image.Width || h != image.Height) image.Mutate(x => x.Resize(w, h, ResamplerOf(options.Algorithm)));
 
         if (options.StripMetadata)

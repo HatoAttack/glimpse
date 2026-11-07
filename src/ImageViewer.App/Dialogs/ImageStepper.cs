@@ -1,7 +1,7 @@
 // 編集ダイアログで、選んだ画像を 1 枚ずつ出す: ◀ ▶ と見出し、画像の読み込み（続けて送ったら古い読み込みは捨てる）、
 // 表示中の画像（原寸）の持ち主。読めた画像で何をするかは各ダイアログが決める
 using ImageViewer.Core.Imaging;
-using SixLabors.ImageSharp.PixelFormats;
+using SkiaSharp;
 
 namespace ImageViewer.App.Dialogs;
 
@@ -46,7 +46,7 @@ internal sealed class ImageStepper : IDisposable
     public string CurrentPath => _paths[Index];
 
     /// <summary>表示中の画像（回転補正済みの原寸。保存元）。読めなかったとき・まだ読んでいないときは null</summary>
-    public SixLabors.ImageSharp.Image<Rgba32>? Image { get; private set; }
+    public SKBitmap? Image { get; private set; }
 
     /// <summary>
     /// 画像を読み込み中（Index はもう次の画像なのに Image はまだ前の画像）。この間は保存しない（前の画像の画素で上書きしないように）
@@ -77,10 +77,10 @@ internal sealed class ImageStepper : IDisposable
         string path = _paths[index];
         string label = $"[{index + 1}/{_paths.Count}] {Path.GetFileName(path)}";
         _name.Text = $"{label}  （読み込み中…）";
-        SixLabors.ImageSharp.Image<Rgba32> image;
+        SKBitmap image;
         try
         {
-            image = await Task.Run(() => ImageLoader.LoadForEdit(path), cts.Token);
+            image = await Task.Run(() => ImageLoader.Load(path), cts.Token);
         }
         catch (OperationCanceledException)
         {

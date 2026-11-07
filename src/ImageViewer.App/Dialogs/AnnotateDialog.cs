@@ -13,9 +13,9 @@
 // - 表示は描いた後の見た目（縮小した画像に同じ処理で描く）
 using ImageViewer.Core.Editing;
 using ImageViewer.Core.Thumbnails;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
 using ImageViewer.App.Theming;
+using ImageViewer.Core.Imaging;
+using SkiaSharp;
 
 namespace ImageViewer.App.Dialogs;
 
@@ -45,7 +45,7 @@ public sealed class AnnotateDialog : ThemedForm
     private readonly ImageStepper _stepper;  // 画像送りと、表示中の画像（原寸。保存元）
     private readonly EditSavePanel _saver;   // 保存先・保存のボタン・保存中の制御
     private readonly EditCanvas _canvas = new();
-    private SixLabors.ImageSharp.Image<Rgba32>? _small; // キャンバスの大きさに縮小した、描く前の画像
+    private SKBitmap? _small; // キャンバスの大きさに縮小した、描く前の画像
     private Bitmap? _display;                           // _small に描いた表示用
 
     // 描いたもの（画像座標）。後のものほど上（クリックで先に当たる）
@@ -304,7 +304,7 @@ public sealed class AnnotateDialog : ThemedForm
 
     // ---- 見た目（色・太さ・角の丸み・先端の大きさ・影・文字） ----
 
-    private static Rgba32 ToRgba(Color c) => new(c.R, c.G, c.B, c.A);
+    private static SKColor ToSkColor(Color c) => new(c.R, c.G, c.B, c.A);
 
     /// <summary>部品の今の値で、枠か矢印を作る</summary>
     private Annotation NewItem(AnnotationKind kind, double x0, double y0, double x1, double y1) =>
@@ -313,8 +313,8 @@ public sealed class AnnotateDialog : ThemedForm
     /// <summary>部品の今の値を見た目に入れる（位置と種類はそのまま。番号の数字も変えない）</summary>
     private Annotation Styled(Annotation a) => a with
     {
-        Color = ToRgba(_color), Thickness = _thickness.Value, CornerRadius = _radius.Value, HeadSize = (double)_head.Value / HeadScale, Shadow = _shadow.Checked,
-        FontSize = _font.Value, Background = CurrentBackground, Fill = ToRgba(_fill), TextColor = ToRgba(_textColor), FontName = _fontBox.SelectedItem as string ?? "", Align = CurrentAlign,
+        Color = ToSkColor(_color), Thickness = _thickness.Value, CornerRadius = _radius.Value, HeadSize = (double)_head.Value / HeadScale, Shadow = _shadow.Checked,
+        FontSize = _font.Value, Background = CurrentBackground, Fill = ToSkColor(_fill), TextColor = ToSkColor(_textColor), FontName = _fontBox.SelectedItem as string ?? "", Align = CurrentAlign,
         Text = a.Kind == AnnotationKind.Text ? _text.Text : a.Text,
     };
 
@@ -336,7 +336,7 @@ public sealed class AnnotateDialog : ThemedForm
         swatch.Invalidate();
     }
 
-    private static Color ToColor(Rgba32 c) => Color.FromArgb(c.A, c.R, c.G, c.B);
+    private static Color ToColor(SKColor c) => Color.FromArgb(c.Alpha, c.Red, c.Green, c.Blue);
 
     /// <summary>書体の一覧で name を選ぶ（一覧に無い・空なら、初めの書体）</summary>
     private void SelectFont(string name)
@@ -584,8 +584,8 @@ public sealed class AnnotateDialog : ThemedForm
         {
             var size = _canvas.FitImage(_stepper.Image.Width, _stepper.Image.Height);
             _small = size.Width == _stepper.Image.Width && size.Height == _stepper.Image.Height
-                ? _stepper.Image.Clone()
-                : _stepper.Image.Clone(x => x.Resize(size.Width, size.Height, KnownResamplers.Triangle));
+                ? _stepper.Image.Copy()
+                : BitmapEdits.Resized(_stepper.Image, size.Width, size.Height);
         }
         RenderPreview();
     }
@@ -603,7 +603,7 @@ public sealed class AnnotateDialog : ThemedForm
             }
             else
             {
-                using var preview = _small.Clone();
+                using var preview = _small.Copy();
                 Annotator.Draw(preview, _items.Select(a => a.Scale(_canvas.Zoom)));
                 _display = ThumbnailGenerator.ToPArgbBitmap(preview);
             }

@@ -35,13 +35,13 @@ public static class Cropper
     }
 
     /// <summary>実数の矩形を画像の範囲内の整数の矩形に丸める</summary>
-    public static Rectangle ClampBox(double x0, double y0, double x1, double y1, int imageWidth, int imageHeight)
+    public static SKRectI ClampBox(double x0, double y0, double x1, double y1, int imageWidth, int imageHeight)
     {
         int ix0 = Math.Max(0, (int)Math.Round(x0));
         int iy0 = Math.Max(0, (int)Math.Round(y0));
         int ix1 = Math.Min(imageWidth, (int)Math.Round(x1));
         int iy1 = Math.Min(imageHeight, (int)Math.Round(y1));
-        return Rectangle.FromLTRB(ix0, iy0, ix1, iy1);
+        return new SKRectI(ix0, iy0, ix1, iy1);
     }
 
     /// <summary>
@@ -79,7 +79,7 @@ public static class Cropper
         using var image = ImageLoader.LoadForEdit(src);
         if (overwrite) SourceGuard.EnsureKeepsMetadata(src);
         var (x0, y0, x1, y1) = CarryRect(rect, fromWidth, fromHeight, image.Width, image.Height);
-        var box = ClampBox(x0, y0, x1, y1, image.Width, image.Height);
+        var box = ImageSharpBridge.ToRectangle(ClampBox(x0, y0, x1, y1, image.Width, image.Height));
         image.Mutate(c => c.Crop(box));
         return SourceGuard.Save(image, src, dst);
     }
@@ -104,17 +104,6 @@ public static class Cropper
         return SourceGuard.Save(cropped, src, dst);
     }
 
-    /// <inheritdoc cref="SaveCrop(SKBitmap, SKRectI, string, string)"/>
-    public static string SaveCrop(Image<Rgba32> image, Rectangle box, string src, string dst)
-    {
-        if (SourceGuard.IsSameFile(src, dst))
-        {
-            SourceGuard.EnsureReplaceable(src);
-            SourceGuard.EnsureKeepsMetadata(src);
-        }
-        using var cropped = image.Clone(x => x.Crop(box));
-        return SourceGuard.Save(cropped, src, dst);
-    }
 
     /// <summary>ファイルを読み、中央を指定の比で切り抜いて保存する（一括用。dst が src なら上書き）</summary>
     /// <returns>実際に保存したパス</returns>
@@ -125,7 +114,7 @@ public static class Cropper
         using var image = ImageLoader.LoadForEdit(src);
         if (overwrite) SourceGuard.EnsureKeepsMetadata(src);
         var (x, y, w, h) = CenterRect(image.Width, image.Height, aspect);
-        var box = ClampBox(x, y, x + w, y + h, image.Width, image.Height);
+        var box = ImageSharpBridge.ToRectangle(ClampBox(x, y, x + w, y + h, image.Width, image.Height));
         image.Mutate(c => c.Crop(box));
         return SourceGuard.Save(image, src, dst);
     }

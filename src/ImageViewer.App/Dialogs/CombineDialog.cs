@@ -1,10 +1,9 @@
 // 連結ダイアログ（image-sizechange の連結タブから移植）。設定を変えるとすぐプレビューに反映する
 // プレビューは縮小して読んだ画像で組む（全部同じ比率で縮小し、px の設定も同じ比率で縮める）。保存するときだけ原寸で読む
 using ImageViewer.Core.Editing;
+using ImageViewer.Core.Imaging;
 using ImageViewer.Core.Thumbnails;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
-using ISImage = SixLabors.ImageSharp.Image<SixLabors.ImageSharp.PixelFormats.Rgba32>;
+using SkiaSharp;
 using ImageViewer.App.Theming;
 
 namespace ImageViewer.App.Dialogs;
@@ -17,7 +16,7 @@ public sealed class CombineDialog : ThemedForm
     private const long LargeResultPixels = 200L * 1000 * 1000;   // これより大きい仕上がりは保存前に確認する（約 800MB 使う）
 
     private readonly List<string> _paths;
-    private readonly Dictionary<string, ISImage> _previewImages = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, SKBitmap> _previewImages = new(StringComparer.OrdinalIgnoreCase);
     private double _previewScale = 1;
     private Bitmap? _previewBitmap;
     private int _previewVersion;
@@ -244,7 +243,7 @@ public sealed class CombineDialog : ThemedForm
         try
         {
             var c = Combiner.ParseColor(_background.Text, false);
-            _swatch.BackColor = Color.FromArgb(c.R, c.G, c.B);
+            _swatch.BackColor = Color.FromArgb(c.Red, c.Green, c.Blue);
         }
         catch (ArgumentException)
         {
@@ -331,11 +330,11 @@ public sealed class CombineDialog : ThemedForm
             {
                 var scaled = options.Scaled(scale);
                 // 原寸での大きさの目安（縮小して読んだ画像から計算するので、丸めた分ずれることがある）
-                var layout = Combiner.Layout(images.Select(im => new SixLabors.ImageSharp.Size(im.Width, im.Height)).ToList(), scaled);
+                var layout = Combiner.Layout(images.Select(im => new SKSizeI(im.Width, im.Height)).ToList(), scaled);
                 int w = (int)Math.Round(layout.Canvas.Width / scale), h = (int)Math.Round(layout.Canvas.Height / scale);
                 // 長辺 PreviewMaxEdge のキャンバスに直接描く（何百枚並べても大きなキャンバスを作らない）
                 using var result = Combiner.CombineBounded(images, scaled, PreviewMaxEdge);
-                if (options.Format == OutputFormat.Jpeg) result.Mutate(x => x.BackgroundColor(SixLabors.ImageSharp.Color.White));
+                if (options.Format == OutputFormat.Jpeg) BitmapEdits.Flatten(result, SKColors.White);
                 return (ThumbnailGenerator.ToPArgbBitmap(result), w, h);
             });
             _renders.RemoveAll(t => t.IsCompleted);
@@ -391,7 +390,7 @@ public sealed class CombineDialog : ThemedForm
         }
         // プレビューの計算を待たずに、今の設定と画像のヘッダーから仕上がりの大きさを計算して確かめる
         var paths = _paths.ToList();
-        SixLabors.ImageSharp.Size? size;
+        SKSizeI? size;
         UseWaitCursor = true;
         try
         {

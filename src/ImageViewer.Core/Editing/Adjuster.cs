@@ -120,7 +120,7 @@ public static class Adjuster
     }
 
     /// <summary>画像に補正をかける（透明度はそのまま）</summary>
-    public static void Apply(Image<Rgba32> image, AdjustOptions options)
+    internal static void Apply(Image<Rgba32> image, AdjustOptions options)
     {
         if (options.IsIdentity) return;
         var (rt, gt, bt) = BuildChannelTables(options);
@@ -208,7 +208,7 @@ public static class Adjuster
     }
 
     /// <summary>読み込んだ画像がメタデータを持っているか（ImageSharp で読めたか。WIC で読んだものは画素だけ）</summary>
-    public static bool KeepsMetadata(Image image) => image.Metadata.DecodedImageFormat != null;
+    internal static bool KeepsMetadata(Image image) => image.Metadata.DecodedImageFormat != null;
 
     /// <summary>
     /// 自動補正の値（レベル補正だけを決め、ほかは 0）。明るさの分布の両端 AutoClip ずつを黒・白にし、
@@ -221,7 +221,7 @@ public static class Adjuster
     }
 
     /// <inheritdoc cref="Auto(SKBitmap)"/>
-    public static AdjustOptions Auto(Image<Rgba32> image)
+    internal static AdjustOptions Auto(Image<Rgba32> image)
     {
         var histogram = new long[256];
         image.ProcessPixelRows(rows =>

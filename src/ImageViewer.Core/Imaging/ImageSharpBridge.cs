@@ -8,7 +8,7 @@ using SkiaSharp;
 
 namespace ImageViewer.Core.Imaging;
 
-public static class ImageSharpBridge
+internal static class ImageSharpBridge
 {
     /// <summary>受け渡しに使う画素の形式（RGBA・乗算しない）</summary>
     public static SKImageInfo Info(int width, int height) =>
@@ -67,6 +67,9 @@ public static class ImageSharpBridge
         var pixels = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, Rgba32>(rgba).ToArray();
         return SixLabors.ImageSharp.Image.WrapMemory(Configuration.Default, pixels.AsMemory(), width, height, metadata.DeepClone());
     }
+
+    /// <summary>Skia の範囲を ImageSharp の範囲にする</summary>
+    internal static Rectangle ToRectangle(SKRectI r) => Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom);
 
     /// <summary>bitmap を ImageSharp の画像に写して edit で変え、bitmap に書き戻す（その場で変える API 用）</summary>
     public static void Edit(SKBitmap bitmap, Action<Image<Rgba32>> edit)

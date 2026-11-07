@@ -120,10 +120,6 @@ public static class Masker
     public static int EffectSize(int width, int height, int level) =>
         Math.Max(2, (int)Math.Round(Math.Max(width, height) * Math.Clamp(level, MinLevel, MaxLevel) / 300.0));
 
-    /// <summary>image の boxes（四角）の範囲に、マスの大きさ size でモザイク・ぼかしをかける（範囲の外は変えない）</summary>
-    public static void Apply(Image<Rgba32> image, IEnumerable<Rectangle> boxes, MaskEffect effect, int size) =>
-        Apply(image, boxes.Select(b => MaskRegion.Rect(b.Left, b.Top, b.Right, b.Bottom)), effect, size);
-
     /// <summary>
     /// image の regions の範囲に、マスの大きさ size でモザイク・ぼかしをかける（範囲の外は変えない。
     /// 移行中は ImageSharp の画像に写して処理する）
@@ -132,12 +128,12 @@ public static class Masker
         ImageSharpBridge.Edit(image, img => Apply(img, regions, effect, size));
 
     /// <summary>image の regions の範囲に、マスの大きさ size でモザイク・ぼかしをかける（範囲の外は変えない）</summary>
-    public static void Apply(Image<Rgba32> image, IEnumerable<MaskRegion> regions, MaskEffect effect, int size)
+    internal static void Apply(Image<Rgba32> image, IEnumerable<MaskRegion> regions, MaskEffect effect, int size)
     {
         if (size < 2 && effect != MaskEffect.Fill) return;
         foreach (var region in regions)
         {
-            var box = Cropper.ClampBox(region.X0, region.Y0, region.X1, region.Y1, image.Width, image.Height);
+            var box = ImageSharpBridge.ToRectangle(Cropper.ClampBox(region.X0, region.Y0, region.X1, region.Y1, image.Width, image.Height));
             if (box.Width <= 0 || box.Height <= 0) continue;
             if (effect == MaskEffect.Fill)
             {
@@ -255,18 +251,6 @@ public static class Masker
         return SourceGuard.Save(masked, src, dst);
     }
 
-    /// <inheritdoc cref="SaveMasked(SKBitmap, IReadOnlyList{MaskRegion}, MaskEffect, int, string, string)"/>
-    public static string SaveMasked(Image<Rgba32> image, IReadOnlyList<MaskRegion> regions, MaskEffect effect, int level, string src, string dst)
-    {
-        if (SourceGuard.IsSameFile(src, dst))
-        {
-            SourceGuard.EnsureReplaceable(src);
-            SourceGuard.EnsureKeepsMetadata(src);
-        }
-        using var masked = image.Clone();
-        Apply(masked, regions, effect, EffectSize(image.Width, image.Height, level));
-        return SourceGuard.Save(masked, src, dst);
-    }
 
     /// <summary>ファイルを読み、ほかの画像（fromWidth × fromHeight）で決めた範囲を引き継いでかけ、保存する（一括用。dst が src なら上書き）</summary>
     /// <returns>実際に保存したパス</returns>

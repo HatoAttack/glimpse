@@ -6,7 +6,7 @@ using ImageViewer.App.Viewer;
 using ImageViewer.Core.Editing;
 using ImageViewer.Core.Imaging;
 using ImageViewer.Core.Thumbnails;
-using SixLabors.ImageSharp.PixelFormats;
+using SkiaSharp;
 
 namespace ImageViewer.App.Dialogs;
 
@@ -22,7 +22,7 @@ public sealed class AdjustBatchDialog : ThemedForm
 
     // プレビュー
     private int _index = -1;
-    private SixLabors.ImageSharp.Image<Rgba32>? _source; // 縮小して読んだ代表の画像（補正前）
+    private SKBitmap? _source; // 縮小して読んだ代表の画像（補正前）
     private AdjustOptions? _auto;                        // その画像の自動補正の値
     private Bitmap? _original, _adjusted;                 // 補正前 / 補正後の表示用
     private AdjustOptions? _adjustedWith;
@@ -279,14 +279,14 @@ public sealed class AdjustBatchDialog : ThemedForm
         _index = index;
         string path = _paths[index];
         _name.Text = $"{NameLine()}  （読み込み中…）";
-        SixLabors.ImageSharp.Image<Rgba32> image;
+        SKBitmap image;
         AdjustOptions auto;
         Bitmap original;
         try
         {
             (image, auto, original) = await Task.Run(() =>
             {
-                var img = ImageLoader.LoadForEdit(path, LoadOptions.Thumbnail(PreviewEdge));
+                var img = ImageLoader.Load(path, LoadOptions.Thumbnail(PreviewEdge));
                 return (img, Adjuster.Auto(img), ThumbnailGenerator.ToPArgbBitmap(img));
             }, cts.Token);
         }
@@ -314,7 +314,7 @@ public sealed class AdjustBatchDialog : ThemedForm
         RebuildAdjusted();
     }
 
-    private void SetPreview(SixLabors.ImageSharp.Image<Rgba32>? image, AdjustOptions? auto, Bitmap? original)
+    private void SetPreview(SKBitmap? image, AdjustOptions? auto, Bitmap? original)
     {
         _source?.Dispose();
         _original?.Dispose();
@@ -342,7 +342,7 @@ public sealed class AdjustBatchDialog : ThemedForm
         _adjusted = null;
         if (!options.IsIdentity)
         {
-            using var copy = _source.Clone();
+            using var copy = _source.Copy();
             Adjuster.Apply(copy, options);
             _adjusted = ThumbnailGenerator.ToPArgbBitmap(copy);
         }

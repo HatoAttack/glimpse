@@ -1,15 +1,12 @@
 // リサイズ・形式変換 / 切り抜き / 連結（image-sizechange から移植した処理）の動作確認
 using ImageViewer.Core.Editing;
 using ImageViewer.Core.Settings;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-using Image = SixLabors.ImageSharp.Image;
-using Rectangle = SixLabors.ImageSharp.Rectangle;
-using Size = SixLabors.ImageSharp.Size;
+using ImageViewer.Core.Imaging;
+using SkiaSharp;
 
 static class EditingTests
 {
-    static readonly Rgba32 Red = new(255, 0, 0), Blue = new(0, 0, 255);
+    static readonly Px Red = Px.Red, Blue = Px.Blue;
 
     public static void Run(Action<bool, string> check, string dir)
     {
@@ -90,12 +87,12 @@ static class EditingTests
         check(Converter.OutputGeometry(1920, 1078, new ConvertOptions { LongEdge = 560 }) is (_, 560, 314),
             "長辺の指定: 16:9 より少し低い画像は短い辺が 1px 足りなくなる（比率を保つので）");
         check(Converter.OutputGeometry(1120, 629, new ConvertOptions { LongEdge = 560 }) is (_, 560, 315), "長辺の指定: ちょうど .5 は切り上げる（314.5 → 315）");
-        check(Converter.OutputGeometry(1920, 1078, exact) is ({ X: 2, Y: 0, Width: 1916, Height: 1078 }, 560, 315),
+        check(Converter.OutputGeometry(1920, 1078, exact) is ({ Left: 2, Top: 0, Width: 1916, Height: 1078 }, 560, 315),
             "幅 × 高さの指定: 比率が合わない分は中央から切って、ぴったりの大きさにする（横を切る）");
-        check(Converter.OutputGeometry(1920, 1080, exact) is ({ X: 0, Y: 0, Width: 1920, Height: 1080 }, 560, 315), "幅 × 高さの指定: 比率が同じなら切らない");
-        check(Converter.OutputGeometry(1000, 2000, exact) is ({ X: 0, Y: 718, Width: 1000, Height: 563 }, 560, 315), "幅 × 高さの指定: 縦長の画像は上下を切る");
+        check(Converter.OutputGeometry(1920, 1080, exact) is ({ Left: 0, Top: 0, Width: 1920, Height: 1080 }, 560, 315), "幅 × 高さの指定: 比率が同じなら切らない");
+        check(Converter.OutputGeometry(1000, 2000, exact) is ({ Left: 0, Top: 718, Width: 1000, Height: 563 }, 560, 315), "幅 × 高さの指定: 縦長の画像は上下を切る");
         check(Converter.OutputGeometry(400, 300, exact) is ({ Width: 400, Height: 300 }, 400, 300)
-              && Converter.OutputGeometry(400, 300, exact with { NoUpscale = false }) is ({ X: 0, Y: 37, Width: 400, Height: 225 }, 560, 315),
+              && Converter.OutputGeometry(400, 300, exact with { NoUpscale = false }) is ({ Left: 0, Top: 37, Width: 400, Height: 225 }, 560, 315),
             "幅 × 高さの指定: 指定より小さい画像は「拡大しない」ならそのまま、オフなら切って拡大");
         opts = new ConvertOptions { ExactSize = true, ExactWidth = 200, ExactHeight = 100, Suffix = "_exact", OutputMode = OutputFolderMode.Same };
         Converter.Run(Converter.Plan(new[] { src }, opts), opts);
@@ -127,7 +124,7 @@ static class EditingTests
         bool tooBig = false;
         try
         {
-            using var img = new Image<Rgba32>(ImageSaver.WebpMaxEdge + 1, 1);
+            using var img = new ApiImage(ImageSaver.WebpMaxEdge + 1, 1);
             ImageSaver.Save(img, P("wide.webp"));
         }
         catch (NotSupportedException) { tooBig = true; }
@@ -136,10 +133,10 @@ static class EditingTests
         // ---- 保存の画質 ----
         long SavedSize(string name)
         {
-            using var img = new Image<Rgba32>(64, 64);
+            using var img = new ApiImage(64, 64);
             for (int y = 0; y < 64; y++)
                 for (int x = 0; x < 64; x++)
-                    img[x, y] = new Rgba32((byte)(x * 4), (byte)(y * 4), (byte)((x * y) % 256));
+                    img[x, y] = new Px((byte)(x * 4), (byte)(y * 4), (byte)((x * y) % 256));
             ImageSaver.Save(img, P(name));
             return new FileInfo(P(name)).Length;
         }
@@ -157,7 +154,7 @@ static class EditingTests
         var (cx, cy, cw, ch) = Cropper.CenterRect(400, 300, 1.0);
         check(cx == 50 && cy == 0 && cw == 300 && ch == 300, "切り抜き: 中央の 1:1");
         check(Cropper.Flip(4.0 / 3, true) == 0.75, "切り抜き: 縦横の入れ替え");
-        check(Cropper.ClampBox(-3, 2.4, 500, 99.6, 400, 300) == Rectangle.FromLTRB(0, 2, 400, 100), "切り抜き: 画像の範囲に丸める");
+        check(Cropper.ClampBox(-3, 2.4, 500, 99.6, 400, 300) == new SKRectI(0, 2, 400, 100), "切り抜き: 画像の範囲に丸める");
 
         // 枠の引き継ぎ（iPhone のスクショを 1:2 で、中央より少し下を切り抜く例）
         var shot = (X0: 0.0, Y0: 150.0, X1: 1179.0, Y1: 2508.0); // 1179 × 2556 の画像の、中央より少し下の 1:2
@@ -176,7 +173,7 @@ static class EditingTests
         Cropper.CropCarried(src, (0, 0, 100, 50), 200, 100, P("carried.png"));
         {
             var (cw2, ch2) = TestImage.SizeOf(P("carried.png"));
-            using var whole = ImageViewer.Core.Imaging.ImageLoader.LoadForEdit(src); // 回転を反映した大きさで比べる
+            using var whole = ImageLoader.Load(src); // 回転を反映した大きさで比べる
             // 200 × 100 の画像での 100 × 50 の枠を、縦横同じ倍率（小さい方の比）で合わせた大きさになる
             double carry = Math.Min(whole.Width / 200.0, whole.Height / 100.0);
             check(Math.Abs(cw2 - 100 * carry) <= 1 && Math.Abs(ch2 - 50 * carry) <= 1,
@@ -190,8 +187,8 @@ static class EditingTests
         Cropper.CropCenter(P("over.png"), 1.0, P("over.png"));
         var overSize = TestImage.SizeOf(P("over.png"));
         check(overSize == (100, 100), $"切り抜き: 元のファイルに上書きできる（{overSize}）");
-        using (var whole = ImageViewer.Core.Imaging.ImageLoader.LoadForEdit(P("over.png")))
-            Cropper.SaveCrop(whole, new Rectangle(0, 0, 40, 30), P("over.png"), P("over.png"));
+        using (var whole = ImageLoader.Load(P("over.png")))
+            Cropper.SaveCrop(whole, new SKRectI(0, 0, 40, 30), P("over.png"), P("over.png"));
         overSize = TestImage.SizeOf(P("over.png"));
         check(overSize == (40, 30), $"切り抜き: 表示中の画像の範囲で上書きできる（{overSize}）");
         TestImage.SaveFrames(P("over.gif"), new[] { new TestImage(20, 20, Px.Red), new TestImage(20, 20, Px.Blue) }, new[] { 10, 10 });
@@ -208,13 +205,13 @@ static class EditingTests
         check(carried.Count == 1 && (carried[0].X0, carried[0].Y0, carried[0].X1, carried[0].Y1) == (20, 10, 60, 20),
             $"モザイク: 大きさが違う画像には縦横それぞれ割合で範囲を合わせる（{carried[0]}）");
         // 左半分が赤・右半分が青の画像。左の 20 × 20 だけにかけると、そこは市松から 1 色になり、外は変わらない
-        using (var img = new Image<Rgba32>(40, 40, Blue))
+        using (var img = new ApiImage(40, 40, Blue))
         {
             for (int y = 0; y < 20; y++)
                 for (int x = 0; x < 20; x++)
                     img[x, y] = (x + y) % 2 == 0 ? Red : Blue;
             var before = img[30, 30];
-            Masker.Apply(img, new[] { new Rectangle(0, 0, 20, 20) }, MaskEffect.Mosaic, 10);
+            Masker.Apply(img, new[] { MaskRegion.Rect(0, 0, 20, 20) }, MaskEffect.Mosaic, 10);
             check(img[0, 0] == img[9, 9] && img[0, 0] == img[1, 0], "モザイク: 範囲の中はマスごとに 1 色");
             check(img[30, 30] == before && img[20, 0] == Blue, "モザイク: 範囲の外は変えない");
             // マスより小さい範囲（ドラッグし始めの数 px など）でも例外にならず、マスを範囲に合わせてかける
@@ -224,8 +221,8 @@ static class EditingTests
             bool thrown = false;
             try
             {
-                Masker.Apply(img, new[] { new Rectangle(30, 30, 4, 4), new Rectangle(0, 30, 1, 5) }, MaskEffect.Mosaic, 10);
-                Masker.Apply(img, new[] { new Rectangle(30, 30, 4, 4) }, MaskEffect.Blur, 10);
+                Masker.Apply(img, new[] { MaskRegion.Rect(30, 30, 34, 34), MaskRegion.Rect(0, 30, 1, 35) }, MaskEffect.Mosaic, 10);
+                Masker.Apply(img, new[] { MaskRegion.Rect(30, 30, 34, 34) }, MaskEffect.Blur, 10);
                 // ぼかしも、差し渡しが範囲より大きいと例外になる（ボックスぼかしで実際に起きた）。1〜3px の範囲や円でも止まらない
                 foreach (var effect in new[] { MaskEffect.Blur, MaskEffect.BoxBlur })
                     foreach (int w in new[] { 1, 2, 3, 5 })
@@ -234,20 +231,20 @@ static class EditingTests
             catch (ArgumentException) { thrown = true; }
             check(!thrown && img[30, 30] == img[33, 33], "モザイク: マスより小さい範囲でも失敗せず、範囲を 1 マスにする");
         }
-        using (var img = new Image<Rgba32>(40, 40, Blue))
+        using (var img = new ApiImage(40, 40, Blue))
         {
             for (int y = 0; y < 40; y++)
                 for (int x = 0; x < 40; x++)
                     img[x, y] = (x + y) % 2 == 0 ? Red : Blue;
-            Masker.Apply(img, new[] { new Rectangle(0, 0, 20, 40), new Rectangle(-5, -5, 0, 0) }, MaskEffect.Blur, 8);
+            Masker.Apply(img, new[] { MaskRegion.Rect(0, 0, 20, 40), MaskRegion.Rect(-5, -5, -5, -5) }, MaskEffect.Blur, 8);
             var mid = img[10, 20];
             check(mid.R is > 60 and < 200 && mid.B is > 60 and < 200, $"ぼかし: 範囲の中は混ざる（{mid}）");
             check(img[30, 20] == ((30 + 20) % 2 == 0 ? Red : Blue), "ぼかし: 範囲の外は変えない（画像の外の範囲は無視する）");
         }
         // 円・楕円と自由な形: 外枠の中でも、形の外は変えない
-        static Image<Rgba32> Checker()
+        static ApiImage Checker()
         {
-            var c = new Image<Rgba32>(40, 40);
+            var c = new ApiImage(40, 40);
             for (int y = 0; y < 40; y++)
                 for (int x = 0; x < 40; x++)
                     c[x, y] = (x + y) % 2 == 0 ? Red : Blue;
@@ -280,7 +277,7 @@ static class EditingTests
         }
         using (var img = Checker())
         {
-            var black = new Rgba32(0, 0, 0);
+            var black = new Px(0, 0, 0);
             Masker.Apply(img, new[] { triangle!, MaskRegion.Rect(30, 30, 40, 40) }, MaskEffect.Fill, 0);
             check(img[5, 5] == black && img[35, 35] == black && img[29, 31] == Red && img[25, 25] == Red,
                 "塗りつぶし: 自由な形・四角の中を黒で塗り、外は変えない（強さは使わない）");
@@ -294,10 +291,10 @@ static class EditingTests
         string maskOut = Masker.OutputPathFor(P("mask.png"), dir, MaskEffect.Mosaic);
         check(maskOut == P("mask_mosaic.png") && Masker.OutputPathFor(P("mask.png"), dir, MaskEffect.Blur) == P("mask_blur.png"),
             "モザイク: 保存先の名前は _mosaic / _blur");
-        using (var whole = ImageViewer.Core.Imaging.ImageLoader.LoadForEdit(P("mask.png")))
+        using (var whole = ImageLoader.Load(P("mask.png")))
         {
             Masker.SaveMasked(whole, new[] { MaskRegion.Rect(0, 0, 10, 10) }, MaskEffect.Mosaic, 5, P("mask.png"), maskOut);
-            check(whole.Width == 60 && whole[0, 0] == Red, "モザイク: 保存しても表示中の画像は変えない");
+            check(whole.Width == 60 && TestImage.FromApi(whole)[0, 0] == Red, "モザイク: 保存しても表示中の画像は変えない");
         }
         check(File.Exists(maskOut), "モザイク: 別の名前で保存できる");
         Masker.MaskCarried(P("mask.png"), new[] { MaskRegion.Rect(0, 0, 10, 10) }, 60, 30, MaskEffect.Blur, 5, P("mask.png"));
@@ -309,13 +306,13 @@ static class EditingTests
 
         // ---- 枠・矢印 ----
         var frame = new Annotation(AnnotationKind.Frame, 20, 20, 80, 60, Red, 4, 0, 4, false);
-        using (var img = new Image<Rgba32>(100, 80, Blue))
+        using (var img = new ApiImage(100, 80, Blue))
         {
             Annotator.Draw(img, new[] { frame });
             check(img[20, 40] == Red && img[50, 20] == Red && img[79, 59] == Red && img[18, 18] == Red, "枠: 線の中心が四角の辺を通り、丸みが 0 なら外側の角まで塗る");
             check(img[50, 40] == Blue && img[10, 10] == Blue && img[50, 63] == Blue, "枠: 中と外は変えない");
         }
-        using (var img = new Image<Rgba32>(100, 80, Blue))
+        using (var img = new ApiImage(100, 80, Blue))
         {
             Annotator.Draw(img, new[] { frame with { CornerRadius = 20 } });
             check(img[18, 18] == Blue && img[20, 40] == Red && img[50, 20] == Red, "枠: 角の丸みを付けると角が丸くなる（辺はそのまま）");
@@ -327,7 +324,7 @@ static class EditingTests
         double half45 = (30 + 20) / Math.Sqrt(2); // 半分の大きさ 30 × 20 を 45° 傾けたときの、外枠の半分の幅・高さ
         check(Math.Abs(tl - (50 - half45)) < 1e-9 && Math.Abs(tr - (50 + half45)) < 1e-9 && Math.Abs(tt - (40 - half45)) < 1e-9 && Math.Abs(tb - (40 + half45)) < 1e-9,
             "枠: 傾けた枠の外枠は四隅が収まる四角");
-        using (var img = new Image<Rgba32>(100, 80, Blue))
+        using (var img = new ApiImage(100, 80, Blue))
         {
             Annotator.Draw(img, new[] { tilted });
             check(img[50, 10] == Red && img[20, 40] == Blue && img[50, 40] == Blue, "枠: 傾けた枠を描ける");
@@ -343,12 +340,12 @@ static class EditingTests
             "枠: 倒した枠も線の太さはどの辺も同じ（左右の辺から垂直に測る）");
         check((frame with { Skew = 999 }).Shear == Math.Tan(Annotator.MaxSkew * Math.PI / 180) && (frame with { Skew = 30, Kind = AnnotationKind.Arrow }).Shear == 0,
             "枠: 倒せるのは ±75° まで。枠のほかは倒さない");
-        using (var img = new Image<Rgba32>(100, 80, Blue))
+        using (var img = new ApiImage(100, 80, Blue))
         {
             Annotator.Draw(img, new[] { skewed });
             check(img[70, 20] == Red && img[19, 40] == Red && img[50, 40] == Blue && img[50, 30] == Blue && img[10, 25] == Blue, "枠: 倒した枠を描ける");
         }
-        using (var img = new Image<Rgba32>(200, 100, Blue))
+        using (var img = new ApiImage(200, 100, Blue))
         {
             // 75° 倒すと右上の角は 15° の尖った角になり、線の外側が角の先へ 3 / sin 7.5° ≒ 23px 伸びる（角は (137.3, 40)）
             Annotator.Draw(img, new[] { new Annotation(AnnotationKind.Frame, 60, 40, 100, 60, Red, 6, 0, 4, false) { Skew = 75 } });
@@ -356,32 +353,32 @@ static class EditingTests
         }
         check((frame with { CornerRadius = 999 }).Distance(19.5, 19.5) == (frame with { CornerRadius = 20 }).Distance(19.5, 19.5),
             "枠: 角の丸みは短い辺の半分まで");
-        using (var img = new Image<Rgba32>(100, 80, Blue))
+        using (var img = new ApiImage(100, 80, Blue))
         {
             Annotator.Draw(img, new[] { frame with { Thickness = 12 } });
             check(img[15, 40] == Red && img[25, 40] == Red && img[27, 40] == Blue, "枠: 太さを変えると線が両側に太る");
         }
-        using (var img = new Image<Rgba32>(100, 80, Blue))
+        using (var img = new ApiImage(100, 80, Blue))
         {
             Annotator.Draw(img, new[] { frame with { Shadow = true } });
             check(img[50, 63].B < 255 && img[50, 63].R == 0 && img[50, 16] == Blue && img[20, 40] == Red, "枠: 影は右下にだけ落ちる（線の色は変えない）");
         }
         var arrow = new Annotation(AnnotationKind.Arrow, 10, 40, 90, 40, Red, 4, 0, 4, false);
-        using (var img = new Image<Rgba32>(100, 80, Blue))
+        using (var img = new ApiImage(100, 80, Blue))
         {
             Annotator.Draw(img, new[] { arrow });
             check(img[50, 40] == Red && img[50, 45] == Blue && img[76, 45] == Red && img[86, 40] == Red, "矢印: 軸と、(X1, Y1) 側に先端の三角を描く");
             check(img[95, 40] == Blue && img[5, 40] == Blue && img[60, 50] == Blue, "矢印: 端より先と横は変えない");
         }
-        using (var img = new Image<Rgba32>(100, 80, Blue))
+        using (var img = new ApiImage(100, 80, Blue))
         {
             Annotator.Draw(img, new[] { arrow with { HeadSize = 8 }, arrow with { X0 = 50, Y0 = 70, X1 = 50, Y1 = 70 } });
             check(img[60, 50] == Red && img[50, 70] == Blue, "矢印: 先端の大きさを変えると三角が大きくなる（長さ 0 の矢印は描かない）");
         }
         // ---- 文字・番号・吹き出し（書体は PC によって違うので、文字の形そのものでなく位置と色で確かめる） ----
-        var White = new Rgba32(255, 255, 255);
+        var White = new Px(255, 255, 255);
         var label = new Annotation(AnnotationKind.Text, 20, 20, 0, 0, Red, 2, 4, 4, false) { Text = "AB", FontSize = 20 };
-        using (var img = new Image<Rgba32>(200, 120, Blue))
+        using (var img = new ApiImage(200, 120, Blue))
         {
             Annotator.Draw(img, new[] { label });
             var (bx, by, bw, bh) = label.Body;
@@ -397,16 +394,16 @@ static class EditingTests
         }
         var boxed = label with { Background = TextBackground.Box, Fill = White };
         var (ox, oy, ow, oh) = boxed.Body;
-        using (var img = new Image<Rgba32>(200, 120, Blue))
+        using (var img = new ApiImage(200, 120, Blue))
         {
             Annotator.Draw(img, new[] { boxed });
             int midY = (int)(oy + oh / 2);
             check(ow > label.Body.Width && img[(int)ox, midY] == Red && img[(int)ox + 4, midY] == White && img[(int)ox - 3, midY] == Blue,
                 "文字: 帯は余白を足した角丸の四角（線は色、中は中の色）");
         }
-        using (var img = new Image<Rgba32>(200, 120, Blue))
+        using (var img = new ApiImage(200, 120, Blue))
         {
-            var Green = new Rgba32(0, 128, 0);
+            var Green = new Px(0, 128, 0);
             Annotator.Draw(img, new[] { boxed with { TextColor = Green } });
             int green = 0, red = 0; // 縁から離れた中の画素（文字）の色
             for (int y = (int)oy + 4; y < oy + oh - 4; y++)
@@ -424,7 +421,7 @@ static class EditingTests
         var (lx, ly, lw, lh) = lines.Body;
         int InkAt(TextLineAlign align, bool left)
         {
-            using var img = new Image<Rgba32>(300, 120, Blue);
+            using var img = new ApiImage(300, 120, Blue);
             Annotator.Draw(img, new[] { lines with { Align = align } });
             int count = 0;
             for (int y = (int)(ly + lh / 2); y < ly + lh; y++)
@@ -437,9 +434,9 @@ static class EditingTests
             && InkAt(TextLineAlign.Center, left: true) == 0 && InkAt(TextLineAlign.Center, left: false) == 0
             && (lines with { Align = TextLineAlign.Left }).Body == lines.Body, "文字: 行を 左 / 中央 / 右 にそろえられる（本体の大きさは変わらない）");
         var thick = boxed with { Thickness = 12 };
-        using (var img = new Image<Rgba32>(200, 120, Blue))
+        using (var img = new ApiImage(200, 120, Blue))
         {
-            Annotator.Draw(img, new[] { thick with { TextColor = new Rgba32(0, 128, 0) } });
+            Annotator.Draw(img, new[] { thick with { TextColor = new Px(0, 128, 0) } });
             var (kx, ky, kw, kh) = thick.Body;
             int covered = 0; // 縁の内側にある、縁の色の画素（文字に被った縁）
             for (int y = (int)ky + 13; y < ky + kh - 13; y++)
@@ -454,8 +451,8 @@ static class EditingTests
             && roomy.Scale(0.5).Body is { Width: 75, Height: 30 }, "文字: 本体の大きさを文字と別に決められる（文字より小さくはならない）");
         int InkIn(TextLineAlign align, double from, double to)
         {
-            using var img = new Image<Rgba32>(200, 120, Blue);
-            Annotator.Draw(img, new[] { roomy with { Align = align, TextColor = new Rgba32(0, 128, 0) } });
+            using var img = new ApiImage(200, 120, Blue);
+            Annotator.Draw(img, new[] { roomy with { Align = align, TextColor = new Px(0, 128, 0) } });
             int count = 0;
             for (int y = (int)oy + 4; y < oy + 56; y++)
                 for (int x = (int)(ox + from); x < ox + to; x++)
@@ -466,14 +463,14 @@ static class EditingTests
             && InkIn(TextLineAlign.Center, 4, 40) == 0 && InkIn(TextLineAlign.Center, 110, 146) == 0 && InkIn(TextLineAlign.Center, 50, 100) > 0,
             "文字: 本体が文字より広ければ、左 / 中央 / 右 に寄せる");
         var balloon = boxed with { Background = TextBackground.Balloon, X1 = ox + ow / 2, Y1 = oy + oh + 30 };
-        using (var img = new Image<Rgba32>(200, 120, Blue))
+        using (var img = new ApiImage(200, 120, Blue))
         {
             Annotator.Draw(img, new[] { balloon });
             int tipX = (int)(ox + ow / 2), bottom = (int)(oy + oh);
             check(img[tipX, bottom + 10] == White && img[tipX, bottom + 34] == Blue && img[tipX + 20, bottom + 10] == Blue,
                 "吹き出し: 本体から (X1, Y1) へ向かうしっぽを付ける");
         }
-        using (var img = new Image<Rgba32>(200, 120, Blue))
+        using (var img = new ApiImage(200, 120, Blue))
         {
             Annotator.Draw(img, new[] { boxed with { Background = TextBackground.Balloon, X1 = ox + 5, Y1 = oy + 5 } });
             check(img[(int)(ox + ow / 2), (int)(oy + oh) + 6] == Blue, "吹き出し: しっぽの先が本体の中なら、しっぽは描かない");
@@ -484,7 +481,7 @@ static class EditingTests
         check(balloon.Distance(ox + ow / 2, oy + oh + 10) < 0 && balloon.Distance(ox + ow / 2, oy + oh / 2) < 0 && balloon.Distance(ox - 20, oy) > 10,
             "吹き出し: 本体としっぽの上は距離が負（クリックで選ぶ判定用）");
         var number = new Annotation(AnnotationKind.Number, 100, 20, 0, 0, Red, 2, 0, 4, false) { Text = "3", FontSize = 20 };
-        using (var img = new Image<Rgba32>(200, 120, Blue))
+        using (var img = new ApiImage(200, 120, Blue))
         {
             Annotator.Draw(img, new[] { number });
             var (nx, ny, nw, nh) = number.Body;
@@ -509,18 +506,18 @@ static class EditingTests
         check(Annotator.DefaultThickness(4000, 3000) == 20 && Annotator.DefaultThickness(100, 100) == 2, "枠・矢印: 太さの初めの値は長い辺に対する割合（最小 2px）");
         string markOut = Annotator.OutputPathFor(P("mask.png"), dir);
         check(markOut == P("mask_mark.png"), "枠・矢印: 保存先の名前は _mark");
-        using (var whole = ImageViewer.Core.Imaging.ImageLoader.LoadForEdit(P("mask.png")))
+        using (var whole = ImageLoader.Load(P("mask.png")))
         {
-            var before = whole[5, 5];
+            var before = TestImage.FromApi(whole)[5, 5];
             Annotator.SaveAnnotated(whole, new[] { new Annotation(AnnotationKind.Frame, 2, 2, 20, 20, Blue, 4, 0, 4, true) }, P("mask.png"), markOut);
-            check(whole[2, 10] == before, "枠・矢印: 保存しても表示中の画像は変えない");
+            check(TestImage.FromApi(whole)[2, 10] == before, "枠・矢印: 保存しても表示中の画像は変えない");
         }
         {
             var img = TestImage.Load(markOut);
             check(img.Width == 60 && img[2, 10] == Px.Blue, "枠・矢印: 別の名前で保存できる");
         }
         refused = false;
-        using (var gif = ImageViewer.Core.Imaging.ImageLoader.LoadForEdit(P("over.gif")))
+        using (var gif = ImageLoader.Load(P("over.gif")))
         {
             try { Annotator.SaveAnnotated(gif, new[] { frame }, P("over.gif"), P("over.gif")); }
             catch (NotSupportedException) { refused = true; }
@@ -528,19 +525,19 @@ static class EditingTests
         check(refused && new FileInfo(P("over.gif")).Length == gifSize, "枠・矢印: アニメーションは上書きしない（元のまま）");
 
         // ---- 連結 ----
-        using (var a = new Image<Rgba32>(100, 50, Red))
-        using (var b = new Image<Rgba32>(40, 100, Blue))
+        using (var a = new ApiImage(100, 50, Red))
+        using (var b = new ApiImage(40, 100, Blue))
         {
-            var imgs = new[] { a, b };
+            var imgs = new SKBitmap[] { a, b };
             using (var r = Combiner.Combine(imgs, new CombineOptions { Spacing = 10, Padding = 5 }))
-                check(r.Width == 100 + 40 + 10 + 10 && r.Height == 100 + 10 && Near(r[0, 0], new Rgba32(255, 255, 255)) && Near(r[5, 5], Red),
+                check(r.Width == 100 + 40 + 10 + 10 && r.Height == 100 + 10 && Near(TestImage.FromApi(r)[0, 0], new Px(255, 255, 255)) && Near(TestImage.FromApi(r)[5, 5], Red),
                     $"連結: 横・そのまま・間隔と余白（{r.Width}x{r.Height}）");
             using (var r = Combiner.Combine(imgs, new CombineOptions { Normalize = CombineNormalize.Min }))
                 check(r.Width == 100 + 20 && r.Height == 50, $"連結: 横・高さを小さい方に（{r.Width}x{r.Height}）");
             using (var r = Combiner.Combine(imgs, new CombineOptions { Layout = CombineLayout.Vertical, Normalize = CombineNormalize.Fixed, TargetPx = 200 }))
                 check(r.Width == 200 && r.Height == 100 + 500, $"連結: 縦・幅を指定 px に（{r.Width}x{r.Height}）");
-            using (var r = Combiner.Combine(new[] { a, b, a }, new CombineOptions { Layout = CombineLayout.Grid, Columns = 2, Transparent = true }))
-                check(r.Width == 200 && r.Height == 200 && r[199, 199].A == 0, $"連結: グリッド 2 列・透明（{r.Width}x{r.Height}）");
+            using (var r = Combiner.Combine(new SKBitmap[] { a, b, a }, new CombineOptions { Layout = CombineLayout.Grid, Columns = 2, Transparent = true }))
+                check(r.Width == 200 && r.Height == 200 && TestImage.FromApi(r)[199, 199] == Px.Transparent, $"連結: グリッド 2 列・透明（{r.Width}x{r.Height}）");
             using (var r = Combiner.Combine(imgs, new CombineOptions { Layout = CombineLayout.Grid, Columns = 5 }))
                 check(r.Width == 200, "連結: 列の数が枚数より多ければ枚数に合わせる");
         }
@@ -572,7 +569,7 @@ static class EditingTests
 
         // 保存の前に、画像を読まずに仕上がりの大きさを計算できる（プレビューの計算を待たない）
         var measured = Combiner.MeasureFiles(new[] { c1, c2 }, co);
-        check(measured == new Size(3000 + 1333 + 30 + 120, 2000 + 120), $"連結: ヘッダーだけから仕上がりの大きさを計算（{measured}）");
+        check(measured == new SKSizeI(3000 + 1333 + 30 + 120, 2000 + 120), $"連結: ヘッダーだけから仕上がりの大きさを計算（{measured}）");
         check(Combiner.MeasureFiles(new[] { c1, P("broken.png") }, co) == null, "連結: 大きさの分からない画像があれば計算しない");
 
         // 形式の上限を超えるなら、大きなキャンバスを作る前にやめる（WEBP は 16383px まで）
@@ -594,12 +591,12 @@ static class EditingTests
         }
 
         // 何百枚並べても、プレビューのキャンバスは上限の大きさ（原寸なら 60000 x 200 になる並び）
-        var many = Enumerable.Range(0, 300).Select(_ => new Image<Rgba32>(200, 200, Red)).ToList();
+        var many = Enumerable.Range(0, 300).Select(_ => new ApiImage(200, 200, Red)).ToList();
         try
         {
-            var layout = Combiner.Layout(many.Select(im => new Size(im.Width, im.Height)).ToList(), new CombineOptions());
-            using var bounded = Combiner.CombineBounded(many, new CombineOptions(), 2400);
-            check(layout.Canvas == new Size(60000, 200) && bounded.Width == 2400 && bounded.Height == 8,
+            var layout = Combiner.Layout(many.Select(im => new SKSizeI(im.Width, im.Height)).ToList(), new CombineOptions());
+            using var bounded = Combiner.CombineBounded(many.Select(im => im.Bitmap).ToList(), new CombineOptions(), 2400);
+            check(layout.Canvas == new SKSizeI(60000, 200) && bounded.Width == 2400 && bounded.Height == 8,
                 $"連結: 300 枚の横並び（原寸 {layout.Canvas.Width}x{layout.Canvas.Height}）もプレビューは {bounded.Width}x{bounded.Height} で描く");
         }
         finally
@@ -634,7 +631,7 @@ static class EditingTests
         {
             var saves = new (string Name, string Decided, Func<string, string> Save)[]
             {
-                ("切り抜き", Cropper.OutputPathFor(P("late.png"), dir), d => Cropper.SaveCrop(whole, new Rectangle(0, 0, 10, 10), P("late.png"), d)),
+                ("切り抜き", Cropper.OutputPathFor(P("late.png"), dir), d => Cropper.SaveCrop(whole, new SKRectI(0, 0, 10, 10), P("late.png"), d)),
                 ("切り抜き（中央・一括）", P("late_center.png"), d => Cropper.CropCenter(P("late.png"), 1.0, d)),
                 ("切り抜き（引き継ぎ・一括）", P("late_carried.png"), d => Cropper.CropCarried(P("late.png"), (0, 0, 20, 10), 40, 20, d)),
                 ("モザイク", Masker.OutputPathFor(P("late.png"), dir, MaskEffect.Mosaic), d => Masker.SaveMasked(whole, region, MaskEffect.Mosaic, 5, P("late.png"), d)),
@@ -650,7 +647,7 @@ static class EditingTests
             }
         }
         check(!Directory.GetFiles(dir, "*.tmp").Any(), "別の名前で保存し直したときも一時ファイルが残らない");
-        using (var fresh = new Image<Rgba32>(8, 8, Blue))
+        using (var fresh = new ApiImage(8, 8, Blue))
         {
             string savedFirst = ImageSaver.SaveNew(fresh, P("fresh.png")), savedAgain = ImageSaver.SaveNew(fresh, P("fresh.png"));
             check(savedFirst == P("fresh.png") && savedAgain == P("fresh (2).png"), "新しいファイルとして保存: 空いていればその名前、無ければ (2)…");
@@ -718,5 +715,5 @@ static class EditingTests
     /// <summary>左半分が赤、右半分が青の画像</summary>
     static TestImage SplitImage(int w, int h) => new TestImage(w, h, Px.Blue).Fill(Px.Red, 0, 0, w / 2, h);
 
-    static bool Near(Rgba32 a, Rgba32 b) => Math.Abs(a.R - b.R) < 40 && Math.Abs(a.G - b.G) < 40 && Math.Abs(a.B - b.B) < 40;
+    static bool Near(Px a, Px b) => Math.Abs(a.R - b.R) < 40 && Math.Abs(a.G - b.G) < 40 && Math.Abs(a.B - b.B) < 40;
 }
