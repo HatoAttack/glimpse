@@ -37,12 +37,29 @@ internal static class SimpleFormats
     {
         string? format = Detect(path);
         if (format == null) return null;
-        var data = ReadHead(path, format == "QOI" ? 14 : 4096);
         if (format == "QOI")
+        {
+            var data = ReadHead(path, 14);
             return ("QOI", (int)Math.Min(BinaryPrimitives.ReadUInt32BigEndian(data.AsSpan(4)), int.MaxValue),
                 (int)Math.Min(BinaryPrimitives.ReadUInt32BigEndian(data.AsSpan(8)), int.MaxValue));
-        var header = PnmHeader(data, out _);
-        return (PnmName(header.Kind), header.Width, header.Height);
+        }
+        // PNM のヘッダーは長さが決まっていない（コメントが入る）。読み切れるまで、読む量を増やす
+        for (int max = 4096; ; max *= 2)
+        {
+            var data = ReadHead(path, max);
+            bool more = data.Length == max; // ファイルにまだ続きがある
+            try
+            {
+                var header = PnmHeader(data, out int dataStart);
+                // 最後の数が読んだ所の終わりで切れていたら、続きにまだ数字があるかもしれない
+                if (more && dataStart >= data.Length) continue;
+                return (PnmName(header.Kind), header.Width, header.Height);
+            }
+            catch (InvalidDataException) when (more && max < 64 * 1024 * 1024)
+            {
+                // ヘッダーの途中で切れた。もっと読む
+            }
+        }
     }
 
     /// <summary>QOI か PNM なら読む。どちらでもなければ null。形がおかしければ InvalidDataException</summary>

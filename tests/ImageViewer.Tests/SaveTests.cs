@@ -90,6 +90,11 @@ static class SaveTests
             check(p6[0, 0] == Px.Red && p6[1, 0] == Px.Blue, "PNM: P6（バイトの RGB）");
             check(ImageLoader.Identify(P("p6.ppm")) == new ImageHeader(2, 1, "PPM") && ImageLoader.Identify(P("p1.pbm")) == new ImageHeader(3, 2, "PBM"),
                 "PNM: 大きさだけを読む（形式の名前は PBM・PGM・PPM）");
+            // コメントが長く、ヘッダーが先頭の 4096 バイトより後ろまで続くもの
+            Pnm("long_comment.ppm", Encoding.ASCII.GetBytes("P6\n# " + new string('x', 5000) + "\n2 1\n# " + new string('y', 3000) + "\n255\n")
+                .Concat(new byte[] { 255, 0, 0, 0, 0, 255 }).ToArray());
+            check(ImageLoader.Identify(P("long_comment.ppm")) == new ImageHeader(2, 1, "PPM") && L("long_comment.ppm")[1, 0] == Px.Blue,
+                "PNM: ヘッダーが長くても（コメントで 4096 バイトを超えても）大きさを読める");
             File.WriteAllBytes(P("broken.ppm"), Encoding.ASCII.GetBytes("P6 99999 99999 255\n"));
             check(Throws(() => ImageLoader.Load(P("broken.ppm")).Dispose()), "PNM: 大きさがおかしいものは読まない");
         }
