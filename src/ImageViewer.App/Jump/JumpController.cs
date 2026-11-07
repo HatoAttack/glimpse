@@ -1,4 +1,5 @@
 // フォルダジャンプ: アドレスバーの入力からフォルダ（とコマンド）の候補を探して、アドレスバーの下に出す。
+// 入力する前（空・今のフォルダのまま）は、最近開いたフォルダを新しい順に出す。
 // フォルダの索引と訪問の記録（FolderJumpService）・候補の一覧・検索の打ち切りは、ここが持つ。
 // 候補を選んだ後どうするか（フォルダを開く・コマンドを実行する）は、イベントで MainForm に任せる
 using ImageViewer.App.Chrome;
@@ -71,6 +72,11 @@ internal sealed class JumpController : IDisposable
             _delay.Stop();
             await UpdateListAsync();
         };
+        // Ctrl+L・クリックで入力を始めたら、最近開いたフォルダを出す
+        _address.GotFocus += async (_, _) =>
+        {
+            if (!_list.Visible) await UpdateListAsync();
+        };
         // 候補をクリックしたときはアドレスバーからフォーカスが移るので、それ以外で外れたときだけ閉じる
         _address.LostFocus += (_, _) => _host.BeginInvoke(() =>
         {
@@ -104,15 +110,15 @@ internal sealed class JumpController : IDisposable
 
     /// <summary>
     /// アドレスバーの入力から候補を出す: ☰ メニューのコマンド（先に数件）とフォルダ。
-    /// 「>」で始めるとコマンドだけ（「>」だけなら全部）。パスらしい入力・今のフォルダのままなら出さない
+    /// 「>」で始めるとコマンドだけ（「>」だけなら全部）。パスらしい入力なら出さない。
+    /// 空・今のフォルダのままなら、最近開いたフォルダ（履歴）を出す
     /// </summary>
     private async Task UpdateListAsync()
     {
         string query = _address.Text.Trim();
         bool commandsOnly = query.StartsWith('>');
         string text = commandsOnly ? query[1..].Trim() : query;
-        if (!_address.Focused || query.Length == 0
-            || (!commandsOnly && (FolderListing.LooksLikePath(query) || string.Equals(query, _currentFolder(), StringComparison.OrdinalIgnoreCase))))
+        if (!_address.Focused)
         {
             Hide();
             return;
@@ -120,6 +126,19 @@ internal sealed class JumpController : IDisposable
 
         _cts?.Cancel();
         var cts = _cts = new CancellationTokenSource();
+        if (query.Length == 0 || string.Equals(query, _currentFolder(), StringComparison.OrdinalIgnoreCase))
+        {
+            // 前の検索の候補を出したまま履歴を待つと、その間の Enter・クリックで古い候補を開いてしまう。先に閉じておく
+            _list.Visible = false;
+            await ShowHistoryAsync(cts);
+            return;
+        }
+        if (!commandsOnly && FolderListing.LooksLikePath(query))
+        {
+            Hide();
+            return;
+        }
+
         var commands = _findCommands(text, commandsOnly ? int.MaxValue : 5);
         IReadOnlyList<JumpResult> results = Array.Empty<JumpResult>();
         string? message = commandsOnly ? "コマンドが見つかりません" : null;
@@ -136,7 +155,47 @@ internal sealed class JumpController : IDisposable
         }
         if (cts.IsCancellationRequested || !_address.Focused) return;
 
-        _list.SetResults(commands, results, message);
+        ShowList(commands, results, message, selectFirst: true);
+    }
+
+    /// <summary>履歴として出す件数</summary>
+    private const int HistoryCount = 10;
+
+    /// <summary>
+    /// 最近開いたフォルダを新しい順に出す（今のフォルダと、もう無いフォルダは除く）。
+    /// 何も選ばずに出す（そのまま Enter なら、今までどおり入力したパスを開く。↓ で選ぶ）
+    /// </summary>
+    private async Task ShowHistoryAsync(CancellationTokenSource cts)
+    {
+        string? current = _currentFolder();
+        List<string> recent;
+        try
+        {
+            // ネットワーク上のフォルダは有無を確かめるのに時間がかかることがあるので、UI のスレッドでは確かめない
+            recent = await Task.Run(() => Service.Visits.Recent(HistoryCount,
+                p => string.Equals(p, current, StringComparison.OrdinalIgnoreCase) || cts.IsCancellationRequested || !Directory.Exists(p)), cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        if (cts.IsCancellationRequested || !_address.Focused) return;
+        if (recent.Count == 0)
+        {
+            Hide();
+            return;
+        }
+        var results = recent.Select(p =>
+        {
+            string name = Path.GetFileName(Path.TrimEndingDirectorySeparator(p));
+            return new JumpResult(p, name.Length > 0 ? name : p, 0);
+        }).ToList();
+        ShowList(Array.Empty<CommandCandidate>(), results, null, selectFirst: false);
+    }
+
+    private void ShowList(IReadOnlyList<CommandCandidate> commands, IReadOnlyList<JumpResult> results, string? message, bool selectFirst)
+    {
+        _list.SetResults(commands, results, message, selectFirst);
         var below = _host.PointToClient(_addressBox.Parent!.PointToScreen(new Point(_addressBox.Left, _addressBox.Bottom)));
         _list.SetBounds(below.X, below.Y + _host.LogicalToDeviceUnits(4), _addressBox.Width, _list.Height);
         _list.Visible = true;
