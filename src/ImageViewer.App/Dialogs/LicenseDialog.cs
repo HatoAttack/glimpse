@@ -1,5 +1,6 @@
 // ライセンスの表示（☰ → ヘルプ →「ライセンス」）。exe だけを持っている人にも見えるように、
 // Glimpse の LICENSE と同梱しているソフトウェアのライセンス（THIRD-PARTY-NOTICES.txt）を exe に埋め込んで出す。
+// SkiaSharp の Third-party notices は、使っている版のパッケージのものが埋め込まれる（csproj の EmbedSkiaNotices）。
 // .NET Runtime の Third-party notices は、.NET Runtime を同梱するビルドでだけ、同梱した版のものが埋め込まれる（csproj の EmbedRuntimeNotices）
 using System.Diagnostics;
 using ImageViewer.App.Theming;
@@ -13,7 +14,10 @@ public sealed class LicenseDialog : ThemedForm
 
     private const string Rule = "================================================================================";
 
-    /// <summary>表示する全文（Glimpse のライセンス → 同梱しているソフトウェアのライセンス → .NET Runtime の Third-party notices）。改行は CRLF にそろえる</summary>
+    /// <summary>
+    /// 表示する全文（Glimpse のライセンス → 同梱しているソフトウェアのライセンス → SkiaSharp の Third-party notices
+    /// → .NET Runtime の Third-party notices）。改行は CRLF にそろえる
+    /// </summary>
     public static string LicenseText
     {
         get
@@ -21,6 +25,7 @@ public sealed class LicenseDialog : ThemedForm
             string runtime = ReadResource("RUNTIME-THIRD-PARTY-NOTICES.txt")
                              ?? "このビルドには .NET Runtime が含まれていません（PC に入っている .NET で動いています）。";
             string text = $"{ReadResource("LICENSE.txt")}\n\n\n{ReadResource("THIRD-PARTY-NOTICES.txt")}\n\n\n"
+                          + $"{Rule}\nSkiaSharp - Third-party notices\n{Rule}\n\n{ReadResource("SKIA-THIRD-PARTY-NOTICES.txt")}\n\n\n"
                           + $"{Rule}\n.NET Runtime - Third-party notices\n{Rule}\n\n{runtime}";
             return text.Replace("\r\n", "\n").Replace("\n", "\r\n");
         }

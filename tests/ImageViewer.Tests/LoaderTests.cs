@@ -61,15 +61,15 @@ static class LoaderTests
 
         string gif = Path.Combine(dir, "anim.gif");
         TestImage.SaveFrames(gif, new[] { new TestImage(40, 40, Red), new TestImage(40, 40, Blue), new TestImage(40, 40, Red) }, new[] { 10, 10, 10 });
-        using (var img = ImageLoader.Load(gif))
+        using (var img = ImageLoader.LoadForEdit(gif))
             check(img.Frames.Count == 1, "アニメ GIF: 既定は先頭フレームのみ");
-        using (var img = ImageLoader.Load(gif, new LoadOptions { FirstFrameOnly = false }))
+        using (var img = ImageLoader.LoadForEdit(gif, new LoadOptions { FirstFrameOnly = false }))
             check(img.Frames.Count == 3, $"アニメ GIF: 全フレーム指定で {img.Frames.Count} フレーム");
 
         // ---- TIFF は WIC で読む（ImageSharp の TIFF デコーダの脆弱性を避けるため） ----
         string tif = Path.Combine(dir, "split.tif");
         SplitImage(400, 200).Save(tif);
-        using (var img = ImageLoader.Load(tif))
+        using (var img = ImageLoader.LoadForEdit(tif))
             check(img.Width == 400 && img.Height == 200 && IsLeftRedRightBlue(TestImage.FromApi(img)) && !ImageViewer.Core.Editing.Adjuster.KeepsMetadata(img),
                 "TIFF: WIC で読む（ImageSharp で読んでいればメタデータを持つ）");
         using (var img = ImageLoader.Load(tif, LoadOptions.Thumbnail(100)))
@@ -80,7 +80,7 @@ static class LoaderTests
         // 拡張子を変えた TIFF も ImageSharp の TIFF デコーダには渡さない（読めない扱いにして WIC で読み直す）
         string disguised = Path.Combine(dir, "tiff_inside.png");
         File.Copy(tif, disguised, overwrite: true);
-        using (var img = ImageLoader.Load(disguised))
+        using (var img = ImageLoader.LoadForEdit(disguised))
             check(img.Width == 400 && IsLeftRedRightBlue(TestImage.FromApi(img)) && !ImageViewer.Core.Editing.Adjuster.KeepsMetadata(img),
                 "拡張子が PNG の TIFF: ImageSharp では読まず WIC で読む");
         info = ImageLoader.Identify(disguised);

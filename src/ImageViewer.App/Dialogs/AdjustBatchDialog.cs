@@ -286,7 +286,7 @@ public sealed class AdjustBatchDialog : ThemedForm
         {
             (image, auto, original) = await Task.Run(() =>
             {
-                var img = ImageLoader.Load(path, LoadOptions.Thumbnail(PreviewEdge));
+                var img = ImageLoader.LoadForEdit(path, LoadOptions.Thumbnail(PreviewEdge));
                 return (img, Adjuster.Auto(img), ThumbnailGenerator.ToPArgbBitmap(img));
             }, cts.Token);
         }

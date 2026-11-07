@@ -16,16 +16,16 @@ static class AnimationTests
 
         using (var anim = AnimationLoader.Load(gif, maxEdge: 1000))
         {
-            check(anim != null && anim.Count == 3 && anim.Image.Width == 80, "GIF: 全部のコマを原寸のまま読む（画面より小さい）");
+            check(anim != null && anim.Count == 3 && anim.Width == 80, "GIF: 全部のコマを原寸のまま読む（画面より小さい）");
             check(anim != null && anim.DelaysMs.SequenceEqual(new[] { 100, 200, 500 }), $"GIF: 表示時間（{string.Join(",", anim?.DelaysMs ?? Array.Empty<int>())}）");
             // 2 コマ目は左半分だけ変えたもの。右半分は前のコマ（赤）が残っていること（重ね合わせ済み）
-            var f = anim == null ? null : TestImage.FromApi(anim.Image, 1);
+            var f = anim == null ? null : TestImage.FromApi(anim.Frames[1]);
             check(f != null && f[10, 20].Near(Blue) && f[70, 20].Near(Red), "GIF: 差分だけのコマも重ね合わせた絵になる");
-            check(anim != null && TestImage.FromApi(anim.Image, 2)[40, 20].Near(Green), "GIF: 3 コマ目");
+            check(anim != null && TestImage.FromApi(anim.Frames[2])[40, 20].Near(Green), "GIF: 3 コマ目");
         }
 
         using (var anim = AnimationLoader.Load(gif, maxEdge: 20))
-            check(anim != null && anim.Image.Width == 20 && anim.Image.Height == 10, $"GIF: 画面の大きさに縮める（{anim?.Image.Width}x{anim?.Image.Height}）");
+            check(anim != null && anim.Width == 20 && anim.Height == 10, $"GIF: 画面の大きさに縮める（{anim?.Width}x{anim?.Height}）");
 
         string still = Path.Combine(dir, "still.gif");
         new TestImage(20, 20, Red).Save(still);
@@ -39,7 +39,7 @@ static class AnimationTests
         {
             check(anim != null && anim.Count == 3, $"WEBP: コマ数（{anim?.Count}）");
             check(anim != null && anim.DelaysMs.SequenceEqual(new[] { 100, 200, 500 }), $"WEBP: 表示時間（{string.Join(",", anim?.DelaysMs ?? Array.Empty<int>())}）");
-            var f = anim == null ? null : TestImage.FromApi(anim.Image, 1);
+            var f = anim == null ? null : TestImage.FromApi(anim.Frames[1]);
             check(f != null && f[10, 20].Near(Blue) && f[70, 20].Near(Red), "WEBP: 2 コマ目");
         }
 
@@ -48,9 +48,9 @@ static class AnimationTests
         using (var first = ImageLoader.Load(rotated))
         using (var anim = AnimationLoader.Load(rotated, maxEdge: 1000))
         {
-            var f = anim == null ? null : TestImage.FromApi(anim.Image, 1);
-            check(anim != null && anim.Image.Width == first.Width && anim.Image.Height == first.Height && first.Width == 40,
-                $"EXIF の回転: 静止画と同じ向き（静止画 {first.Width}x{first.Height}・アニメ {anim?.Image.Width}x{anim?.Image.Height}）");
+            var f = anim == null ? null : TestImage.FromApi(anim.Frames[1]);
+            check(anim != null && anim.Width == first.Width && anim.Height == first.Height && first.Width == 40,
+                $"EXIF の回転: 静止画と同じ向き（静止画 {first.Width}x{first.Height}・アニメ {anim?.Width}x{anim?.Height}）");
             check(f != null && f[20, 10].Near(Blue) && f[20, 70].Near(Red), "EXIF の回転: 2 コマ目も回っている");
         }
         using (var loaded = AnimationLoader.LoadFrame(rotated, 1))

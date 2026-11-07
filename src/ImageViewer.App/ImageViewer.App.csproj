@@ -34,6 +34,18 @@
     <Error Condition="'@(_RuntimeNotices)' == '' Or !Exists('@(_RuntimeNotices)')" Text=".NET Runtime の THIRD-PARTY-NOTICES.TXT が runtime pack に見つかりません（@(_RuntimeNotices)）" />
   </Target>
 
+  <!-- SkiaSharp のネイティブのライブラリ（libSkiaSharp.dll）が含むソフトウェアの Third-party notices も埋め込む。
+       SkiaSharp の版ごとに中身が変わるので、THIRD-PARTY-NOTICES.txt に写さず、使っている版のパッケージのものをそのまま使う -->
+  <Target Name="EmbedSkiaNotices" AfterTargets="ResolvePackageAssets">
+    <ItemGroup>
+      <_SkiaNativeAssets Include="@(RuntimeTargetsCopyLocalItems);@(NativeCopyLocalItems)" Condition="'%(NuGetPackageId)' == 'SkiaSharp.NativeAssets.Win32'" />
+      <!-- 同じパッケージの dll が RID ごとにあるので、パッケージと版でまとめて 1 つにする -->
+      <_SkiaNotices Include="$(NuGetPackageRoot)%(_SkiaNativeAssets.NuGetPackageId)\%(_SkiaNativeAssets.NuGetPackageVersion)\THIRD-PARTY-NOTICES.txt" />
+      <EmbeddedResource Include="@(_SkiaNotices)" LogicalName="SKIA-THIRD-PARTY-NOTICES.txt" />
+    </ItemGroup>
+    <Error Condition="'@(_SkiaNotices)' == '' Or !Exists('@(_SkiaNotices)')" Text="SkiaSharp の THIRD-PARTY-NOTICES.txt がパッケージに見つかりません（@(_SkiaNotices)）" />
+  </Target>
+
   <ItemGroup>
     <ProjectReference Include="..\ImageViewer.Core\ImageViewer.Core.csproj" />
   </ItemGroup>

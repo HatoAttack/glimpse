@@ -80,7 +80,7 @@ internal sealed class ImageStepper : IDisposable
         SixLabors.ImageSharp.Image<Rgba32> image;
         try
         {
-            image = await Task.Run(() => ImageLoader.Load(path), cts.Token);
+            image = await Task.Run(() => ImageLoader.LoadForEdit(path), cts.Token);
         }
         catch (OperationCanceledException)
         {

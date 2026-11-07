@@ -287,6 +287,32 @@ static class ThumbnailTests
             check(bmp.PixelFormat == System.Drawing.Imaging.PixelFormat.Format32bppPArgb
                   && Math.Abs(p.R - 200) <= 2 && Math.Abs(p.G - 100) <= 2 && p.A == 128, $"PArgb 変換 {p}");
         }
+        using (var sk = ImageViewer.Core.Imaging.ImageLoader.Load(png))
+        using (var bmp = ThumbnailGenerator.ToPArgbBitmap(sk))
+        {
+            var left = bmp.GetPixel(bmp.Width / 5, bmp.Height / 2);
+            var right = bmp.GetPixel(bmp.Width * 4 / 5, bmp.Height / 2);
+            check(bmp.PixelFormat == System.Drawing.Imaging.PixelFormat.Format32bppPArgb && bmp.Width == 300 && IsRed(left) && left.A == 255 && right.A == 0,
+                $"PArgb 変換（SKBitmap から）: 透過のまま（左={left}, 右 A={right.A}）");
+        }
+        using (var sk = ImageViewer.Core.Imaging.ImageSharpBridge.ToSkia(new TestImage(4, 2, new Px(200, 100, 50, 128)).ToApi()))
+        using (var bmp = ThumbnailGenerator.ToPArgbBitmap(sk))
+        {
+            var p = bmp.GetPixel(0, 0);
+            check(Math.Abs(p.R - 200) <= 2 && Math.Abs(p.G - 100) <= 2 && p.A == 128, $"PArgb 変換（SKBitmap から）: 半透明 {p}");
+        }
+        // 移行中の受け渡し（ImageSharp ⇔ SKBitmap）は、半透明も含めて画素の値を変えない
+        {
+            var src = new TestImage(256, 4);
+            for (int x = 0; x < 256; x++)
+                for (int y = 0; y < 4; y++)
+                    src[x, y] = new Px((byte)x, (byte)(255 - x), (byte)(x * 7), (byte)(y * 60 + 15));
+            using var sk = ImageViewer.Core.Imaging.ImageSharpBridge.ToSkia(src.ToApi());
+            using var back = ImageViewer.Core.Imaging.ImageSharpBridge.ToImageSharp(sk);
+            check(sk.ColorType == SkiaSharp.SKColorType.Rgba8888 && sk.AlphaType == SkiaSharp.SKAlphaType.Unpremul
+                  && TestImage.FromApi(sk).Rgba.SequenceEqual(src.Rgba) && TestImage.FromApi(back).Rgba.SequenceEqual(src.Rgba),
+                "ImageSharp と SKBitmap の受け渡し: 半透明も含めて画素の値が変わらない（RGBA・乗算しない）");
+        }
     }
 
     static bool IsRed(Color c) => c.R > 200 && c.G < 60 && c.B < 60;

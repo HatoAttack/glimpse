@@ -68,7 +68,7 @@ public static class Combiner
             foreach (var p in paths)
             {
                 ct.ThrowIfCancellationRequested();
-                images.Add(Imaging.ImageLoader.Load(p));
+                images.Add(Imaging.ImageLoader.LoadForEdit(p));
             }
             // 形式の上限を超える大きさなら、大きなキャンバスを作る前にやめる
             var layout = Layout(SizesOf(images), options);
@@ -124,7 +124,7 @@ public static class Combiner
                 // 大きさが分からない画像も縮小して読む（原寸で読んでメモリを使い切らないように）
                 var options = h != null && scale >= 1 ? Imaging.LoadOptions.Full
                     : Imaging.LoadOptions.Thumbnail(Math.Max(1, (int)Math.Round((h != null ? Math.Max(h.Width, h.Height) : maxEdge) * scale)));
-                images.Add(Imaging.ImageLoader.Load(paths[i], options));
+                images.Add(Imaging.ImageLoader.LoadForEdit(paths[i], options));
             }
             return (images, scale);
         }

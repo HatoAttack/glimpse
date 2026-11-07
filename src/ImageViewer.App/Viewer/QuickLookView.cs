@@ -888,7 +888,7 @@ public sealed class QuickLookView : Control
             for (int i = 0; i < frames.Length; i++)
             {
                 ct.ThrowIfCancellationRequested();
-                frames[i] = ThumbnailGenerator.ToPArgbBitmap(anim.Image.Frames[i]);
+                frames[i] = ThumbnailGenerator.ToPArgbBitmap(anim.Frames[i]);
             }
         }
         catch
