@@ -1,5 +1,5 @@
 // Skia（SKCodec）での画像の読み込み: JPEG・PNG・GIF・WebP・BMP・ICO
-// - 中身で形式を決める（拡張子は見ない）。Skia の形式でなければ TryOpen が null を返し、呼び出し側が ImageSharp・WIC で読む
+// - 中身で形式を決める（拡張子は見ない）。Skia の形式でなければ TryOpen が null を返し、呼び出し側が自前（QOI・PNM）・WIC で読む
 // - 埋め込みの色プロファイル（Display P3 など）は sRGB に変換して読む（#81 の決定。プロファイルが無ければ sRGB とみなす）
 // - EXIF の向きは、画素を直接並べ替えて直す（キャンバスに描くより速い）
 // - 返す画像は RGBA・乗算しない（ImageSharp の Rgba32 と同じ並び）。縮小と重ね合わせは乗算済みで行う

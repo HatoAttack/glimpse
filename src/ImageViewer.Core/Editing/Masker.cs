@@ -1,9 +1,6 @@
 // モザイク・ぼかし。画像の中の選んだ範囲（いくつでも。四角・楕円・自由な形）だけにかける。
 // 保存先が元のファイルなら上書きする（切り抜きの上書きと同じ条件で）
 using ImageViewer.Core.Imaging;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
 using SkiaSharp;
 
 namespace ImageViewer.Core.Editing;
@@ -111,7 +108,7 @@ public static class Masker
     private const int MaxBoxRadius = 100;
 
     /// <summary>塗りつぶしの色</summary>
-    private static readonly Rgba32 FillColor = new(0, 0, 0);
+    private static readonly Rgba FillColor = new(0, 0, 0);
 
     /// <summary>
     /// 強さ（1〜10）から、モザイクの 1 マスの大きさ（px）を決める。画像の長い辺に対する割合なので、
@@ -120,95 +117,86 @@ public static class Masker
     public static int EffectSize(int width, int height, int level) =>
         Math.Max(2, (int)Math.Round(Math.Max(width, height) * Math.Clamp(level, MinLevel, MaxLevel) / 300.0));
 
-    /// <summary>
-    /// image の regions の範囲に、マスの大きさ size でモザイク・ぼかしをかける（範囲の外は変えない。
-    /// 移行中は ImageSharp の画像に写して処理する）
-    /// </summary>
+    /// <summary>image の regions の範囲に、マスの大きさ size でモザイク・ぼかしをかける（その場で変える。範囲の外は変えない）</summary>
     public static void Apply(SKBitmap image, IEnumerable<MaskRegion> regions, MaskEffect effect, int size) =>
-        ImageSharpBridge.Edit(image, img => Apply(img, regions, effect, size));
+        SkiaEdit.Edit(image, rgba => ApplyRgba(rgba, regions, effect, size));
 
-    /// <summary>image の regions の範囲に、マスの大きさ size でモザイク・ぼかしをかける（範囲の外は変えない）</summary>
-    internal static void Apply(Image<Rgba32> image, IEnumerable<MaskRegion> regions, MaskEffect effect, int size)
+    private static void ApplyRgba(SKBitmap image, IEnumerable<MaskRegion> regions, MaskEffect effect, int size)
     {
         if (size < 2 && effect != MaskEffect.Fill) return;
         foreach (var region in regions)
         {
-            var box = ImageSharpBridge.ToRectangle(Cropper.ClampBox(region.X0, region.Y0, region.X1, region.Y1, image.Width, image.Height));
+            var box = Cropper.ClampBox(region.X0, region.Y0, region.X1, region.Y1, image.Width, image.Height);
             if (box.Width <= 0 || box.Height <= 0) continue;
             if (effect == MaskEffect.Fill)
             {
                 FillRegion(image, region, box);
                 continue;
             }
-            if (region.Shape == MaskShape.Rectangle)
+            // 範囲を切り出してかけ（範囲の外の画素はぼかしに混ぜない。端の画素が続いているものとして扱う）、
+            // 四角はそのまま、四角以外は形の中の画素だけを戻す
+            using var part = SkiaEdit.Crop(image, box);
+            Effect(part, effect, size);
+            for (int y = 0; y < box.Height; y++)
             {
-                image.Mutate(c => Effect(c, box, effect, size));
-                continue;
-            }
-            // 四角以外: 外枠を切り出してかけてから、形の中の画素だけを戻す
-            using var part = image.Clone(c => c.Crop(box));
-            part.Mutate(c => Effect(c, new Rectangle(0, 0, box.Width, box.Height), effect, size));
-            image.ProcessPixelRows(part, (dst, src) =>
-            {
-                for (int y = 0; y < box.Height; y++)
+                var dstRow = image.Row(box.Top + y);
+                var srcRow = part.Row(y);
+                if (region.Shape == MaskShape.Rectangle)
                 {
-                    var xs = region.Crossings(box.Top + y + 0.5); // 画素の中心で判定する
-                    if (xs.Count < 2) continue;
-                    var dstRow = dst.GetRowSpan(box.Top + y);
-                    var srcRow = src.GetRowSpan(y);
-                    for (int k = 0; k + 1 < xs.Count; k += 2)
-                    {
-                        // 中心（x + 0.5）が xs[k]〜xs[k+1] に入る画素
-                        int from = Math.Max(box.Left, (int)Math.Ceiling(xs[k] - 0.5));
-                        int to = Math.Min(box.Right, (int)Math.Ceiling(xs[k + 1] - 0.5));
-                        for (int x = from; x < to; x++) dstRow[x] = srcRow[x - box.Left];
-                    }
+                    srcRow.CopyTo(dstRow.Slice(box.Left, box.Width));
+                    continue;
                 }
-            });
+                var xs = region.Crossings(box.Top + y + 0.5); // 画素の中心で判定する
+                for (int k = 0; k + 1 < xs.Count; k += 2)
+                {
+                    // 中心（x + 0.5）が xs[k]〜xs[k+1] に入る画素
+                    int from = Math.Max(box.Left, (int)Math.Ceiling(xs[k] - 0.5));
+                    int to = Math.Min(box.Right, (int)Math.Ceiling(xs[k + 1] - 0.5));
+                    for (int x = from; x < to; x++) dstRow[x] = srcRow[x - box.Left];
+                }
+            }
         }
     }
 
-    private static void Effect(IImageProcessingContext c, Rectangle box, MaskEffect effect, int size)
+    /// <summary>切り出した範囲の画像全体にかける</summary>
+    private static void Effect(SKBitmap part, MaskEffect effect, int size)
     {
-        // ImageSharp のモザイクはマスが、ぼかしは差し渡し（半径 × 2 + 1）が範囲の幅・高さより大きいと例外になるので、
-        // 小さい範囲（ドラッグし始めの数 px など）では範囲に収まるまで弱める
-        int shortSide = Math.Min(box.Width, box.Height);
+        // マス・ぼかしの差し渡し（半径 × 2 + 1）が範囲の幅・高さより大きくならないよう、
+        // 小さい範囲（ドラッグし始めの数 px など）では範囲に収まるまで弱める（ImageSharp のときと同じ強さ）
+        int shortSide = Math.Min(part.Width, part.Height);
         int maxRadius = (shortSide - 1) / 2;
         switch (effect)
         {
             case MaskEffect.Mosaic:
                 int cell = Math.Min(size, shortSide);
-                if (cell >= 2) c.Pixelate(cell, box);
+                if (cell >= 2) SkiaEdit.Pixelate(part, cell);
                 break;
             case MaskEffect.BoxBlur:
                 int radius = Math.Min(Math.Clamp(size / 2, 1, MaxBoxRadius), maxRadius);
-                if (radius >= 1) c.BoxBlur(radius, box);
+                if (radius >= 1) SkiaEdit.BoxBlur(part, radius);
                 break;
             default:
                 // ガウスの半径は ceil(σ × 3)
                 float sigma = Math.Min(Math.Min(MaxSigma, size / 2f), maxRadius / 3f);
-                if (sigma > 0 && maxRadius >= 1) c.GaussianBlur(sigma, box);
+                if (sigma > 0 && maxRadius >= 1) SkiaEdit.GaussianBlur(part, sigma);
                 break;
         }
     }
 
     /// <summary>範囲の形の中を塗りつぶす（四角も楕円・自由な形も、行ごとに境目との交点の間を塗る）</summary>
-    private static void FillRegion(Image<Rgba32> image, MaskRegion region, Rectangle box)
+    private static void FillRegion(SKBitmap image, MaskRegion region, SKRectI box)
     {
-        image.ProcessPixelRows(rows =>
+        for (int y = box.Top; y < box.Bottom; y++)
         {
-            for (int y = box.Top; y < box.Bottom; y++)
+            var xs = region.Crossings(y + 0.5);
+            var row = image.Row(y);
+            for (int k = 0; k + 1 < xs.Count; k += 2)
             {
-                var xs = region.Crossings(y + 0.5);
-                var row = rows.GetRowSpan(y);
-                for (int k = 0; k + 1 < xs.Count; k += 2)
-                {
-                    int from = Math.Max(box.Left, (int)Math.Ceiling(xs[k] - 0.5));
-                    int to = Math.Min(box.Right, (int)Math.Ceiling(xs[k + 1] - 0.5));
-                    for (int x = from; x < to; x++) row[x] = FillColor;
-                }
+                int from = Math.Max(box.Left, (int)Math.Ceiling(xs[k] - 0.5));
+                int to = Math.Min(box.Right, (int)Math.Ceiling(xs[k + 1] - 0.5));
+                for (int x = from; x < to; x++) row[x] = FillColor;
             }
-        });
+        }
     }
 
     /// <summary>
@@ -258,7 +246,7 @@ public static class Masker
     {
         bool overwrite = SourceGuard.IsSameFile(src, dst);
         if (overwrite) SourceGuard.EnsureReplaceable(src);
-        using var image = ImageLoader.LoadForEdit(src);
+        using var image = ImageLoader.Load(src);
         if (overwrite) SourceGuard.EnsureKeepsMetadata(src);
         Apply(image, CarryRegions(regions, fromWidth, fromHeight, image.Width, image.Height), effect, EffectSize(image.Width, image.Height, level));
         return SourceGuard.Save(image, src, dst);

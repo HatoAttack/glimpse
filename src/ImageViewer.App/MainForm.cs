@@ -1571,7 +1571,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         return markMenu;
     }
 
-    /// <summary>どの PC でも読める形式（ImageSharp と Windows 標準の WIC）と、この PC の WIC 拡張機能で読める形式を表示</summary>
+    /// <summary>どの PC でも読める形式（Skia・自前と Windows 標準の WIC）と、この PC の WIC 拡張機能で読める形式を表示</summary>
     private void ShowSupportedFormats()
     {
         var builtInSet = ImageFormats.BuiltInExtensions.ToHashSet(StringComparer.OrdinalIgnoreCase);

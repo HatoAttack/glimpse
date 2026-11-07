@@ -1,6 +1,4 @@
 // 元の画像を編集結果で置き換えるときの検査と、編集結果の保存（切り抜き・モザイク・枠や矢印・回転で共通）
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
 using SkiaSharp;
 
 namespace ImageViewer.Core.Editing;
@@ -44,12 +42,5 @@ public static class SourceGuard
         if (!IsSameFile(src, dst)) return ImageSaver.SaveNew(image, dst, metadataFrom: src);
         ImageSaver.Save(image, dst, metadataFrom: src);
         return dst;
-    }
-
-    /// <summary>ImageSharp の画像を保存する（移行中だけ。#81 の手順7 で消す）。メタデータは SKBitmap 版と同じく、元のファイルから読み直す</summary>
-    internal static string Save(Image<Rgba32> image, string src, string dst)
-    {
-        using var bitmap = Imaging.ImageSharpBridge.ToSkia(image);
-        return Save(bitmap, src, dst);
     }
 }

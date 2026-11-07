@@ -16,14 +16,13 @@ public static class ImageFormats
         StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Windows に標準で入っている WIC のデコーダで読む拡張子（どの PC でも読める）。
-    /// TIFF は ImageSharp 3.1 の TIFF デコーダに脆弱性（GHSA-wmxv-xphr-5c9g）があるので、ImageSharp では読まない
+    /// Windows に標準で入っている WIC のデコーダで読む拡張子（どの PC でも読める。Skia には TIFF のデコーダが無い）
     /// </summary>
     public static readonly IReadOnlySet<string> BuiltInWicExtensions = new HashSet<string>(
         new[] { ".tif", ".tiff" },
         StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>どの PC でも読める拡張子（ImageSharp ＋ Windows 標準の WIC）</summary>
+    /// <summary>どの PC でも読める拡張子（Skia・自前 ＋ Windows 標準の WIC）</summary>
     public static IEnumerable<string> BuiltInExtensions => ImageSharpExtensions.Concat(BuiltInWicExtensions);
 
     public static bool IsImageSharpFormat(string path) =>

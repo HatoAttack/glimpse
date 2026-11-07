@@ -5,8 +5,6 @@
 // - 色プロファイルは付けない（画素は読むときに sRGB に変換してある。#81 の決定）
 using System.Windows.Media.Imaging;
 using ImageViewer.Core.Imaging;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
 using SkiaSharp;
 using Wpf = System.Windows.Media;
 
@@ -86,13 +84,6 @@ public static class ImageSaver
     {
         byte[] data = Encode(image, Path.GetExtension(dst), metadataFrom == null ? null : ImageLoader.MetadataForSave(metadataFrom)?.Exif);
         WriteAtomically(dst, data, overwrite);
-    }
-
-    /// <summary>ImageSharp の画像を保存する（移行中だけ。#81 の手順7 で消す）。メタデータは SKBitmap 版と同じく metadataFrom から</summary>
-    internal static void Save(Image<Rgba32> image, string dst, bool overwrite = true, string? metadataFrom = null)
-    {
-        using var bitmap = ImageSharpBridge.ToSkia(image);
-        Save(bitmap, dst, overwrite, metadataFrom);
     }
 
     /// <summary>

@@ -45,7 +45,7 @@ public static class WicCodecs
         }
         catch (Exception ex) when (ex is COMException or ArgumentException or InvalidCastException)
         {
-            // WIC が使えない環境（通常の Windows ではまず無い）では空のまま＝ImageSharp のみで動く
+            // WIC が使えない環境（通常の Windows ではまず無い）では空のまま＝Skia・自前の形式だけで動く
             System.Diagnostics.Debug.WriteLine($"WIC デコーダの列挙に失敗: {ex.Message}");
         }
         return result;

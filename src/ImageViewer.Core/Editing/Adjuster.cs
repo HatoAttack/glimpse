@@ -1,8 +1,6 @@
 // 色調補正: 色温度 → レベル補正（黒点・白点・ガンマ）→ 明るさ → コントラスト → 彩度 の順に、画像全体へかける
-// 1 枚表示のプレビュー（BGRA の画素の並び）と保存（ImageSharp の画像）の両方で同じ計算を使う
+// 1 枚表示のプレビュー（BGRA の画素の並び）と保存（SKBitmap）の両方で同じ計算を使う
 using ImageViewer.Core.Imaging;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
 using SkiaSharp;
 
 namespace ImageViewer.Core.Editing;
@@ -119,27 +117,18 @@ public static class Adjuster
         }
     }
 
-    /// <summary>画像に補正をかける（透明度はそのまま）</summary>
-    internal static void Apply(Image<Rgba32> image, AdjustOptions options)
+    /// <summary>画像に補正をかける（その場で変える。透明度はそのまま）</summary>
+    public static void Apply(SKBitmap image, AdjustOptions options)
     {
         if (options.IsIdentity) return;
         var (rt, gt, bt) = BuildChannelTables(options);
         int saturation = SaturationFactor(options);
-        image.ProcessPixelRows(rows =>
+        SkiaEdit.Edit(image, rgba =>
         {
-            for (int y = 0; y < rows.Height; y++)
-            {
-                foreach (ref var p in rows.GetRowSpan(y))
+            for (int y = 0; y < rgba.Height; y++)
+                foreach (ref var p in rgba.Row(y))
                     AdjustPixel(ref p.R, ref p.G, ref p.B, rt, gt, bt, saturation);
-            }
         });
-    }
-
-    /// <summary>SKBitmap に補正をかける（透明度はそのまま。移行中は ImageSharp の画像に写して処理する）</summary>
-    public static void Apply(SKBitmap image, AdjustOptions options)
-    {
-        if (options.IsIdentity) return;
-        ImageSharpBridge.Edit(image, img => Apply(img, options));
     }
 
     /// <summary>
@@ -160,8 +149,8 @@ public static class Adjuster
     }
 
     /// <summary>
-    /// ファイルを読み、補正をかけて保存する（回転は反映する）。アニメや複数ページの画像（コマが 2 つ以上）は NotSupportedException。ImageSharp で読めた画像は EXIF などのメタデータを残す。
-    /// WIC で読んだ画像（TIFF / HEIC / AVIF / RAW や、ImageSharp で読めない JPEG の亜種）は画素だけなので残せない
+    /// ファイルを読み、補正をかけて保存する（回転は反映する）。アニメや複数ページの画像（コマが 2 つ以上）は NotSupportedException。撮影情報（EXIF）は残す。
+    /// WIC で読んだ画像（TIFF / HEIC / AVIF / RAW など）は画素だけなので残せない
     /// </summary>
     /// <param name="allowMetadataLoss">
     /// false なら、メタデータを残せないときは保存せずに MetadataLossException（ユーザーに確かめてから true で呼び直す）
@@ -176,7 +165,7 @@ public static class Adjuster
         // 数えられなかった画像は、ページが消えるかもしれないので上書きしない（別のファイルに書くならよい）
         if (frames == null && SourceGuard.IsSameFile(src, dst))
             throw new NotSupportedException("ページの数を確かめられない画像なので、上書きしませんでした");
-        using var image = ImageLoader.LoadForEdit(src); // 回転補正済み
+        using var image = ImageLoader.Load(src); // 回転補正済み
         // メタデータは保存するときに元のファイルから読み直す（読めなければ画素だけ）
         if (!allowMetadataLoss && ImageLoader.MetadataForSave(src) == null) throw new MetadataLossException(src);
         if (autoLevels) options = options.WithLevels(Auto(image));
@@ -216,22 +205,12 @@ public static class Adjuster
     /// </summary>
     public static AdjustOptions Auto(SKBitmap image)
     {
-        using var img = ImageSharpBridge.ToImageSharp(image);
-        return Auto(img);
-    }
-
-    /// <inheritdoc cref="Auto(SKBitmap)"/>
-    internal static AdjustOptions Auto(Image<Rgba32> image)
-    {
         var histogram = new long[256];
-        image.ProcessPixelRows(rows =>
-        {
-            for (int y = 0; y < rows.Height; y++)
-            {
-                foreach (ref var p in rows.GetRowSpan(y))
-                    if (p.A != 0) histogram[Luma(p.R, p.G, p.B)]++;
-            }
-        });
+        using var copy = SkiaEdit.IsRgba(image) ? null : SkiaEdit.ToRgba(image);
+        var rgba = copy ?? image;
+        for (int y = 0; y < rgba.Height; y++)
+            foreach (var p in rgba.Row(y))
+                if (p.A != 0) histogram[Luma(p.R, p.G, p.B)]++;
         return AutoFromHistogram(histogram);
     }
 
