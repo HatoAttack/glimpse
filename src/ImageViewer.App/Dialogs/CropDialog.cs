@@ -10,9 +10,9 @@
 using System.Drawing.Drawing2D;
 using ImageViewer.Core.Editing;
 using ImageViewer.Core.Thumbnails;
-using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
 using ImageViewer.App.Theming;
+using ImageViewer.Core.Imaging;
+using SkiaSharp;
 
 namespace ImageViewer.App.Dialogs;
 
@@ -270,7 +270,7 @@ public sealed class CropDialog : ThemedForm
                 _display = ThumbnailGenerator.ToPArgbBitmap(_stepper.Image);
             else
             {
-                using var small = _stepper.Image.Clone(x => x.Resize(size.Width, size.Height, KnownResamplers.Triangle));
+                using var small = BitmapEdits.Resized(_stepper.Image, size.Width, size.Height);
                 _display = ThumbnailGenerator.ToPArgbBitmap(small);
             }
         }

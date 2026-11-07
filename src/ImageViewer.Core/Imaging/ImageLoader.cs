@@ -5,7 +5,7 @@
 // 拡張子を変えた TIFF も ImageSharp の TIFF デコーダには渡らず、読めない扱いになって WIC で読み直す
 // どちらの経路でも「回転補正済み・sRGB・Rgba32」の画像を返す
 // ImageSharp から SkiaSharp への移行中（#81）: Load は SKBitmap（RGBA・乗算しない）を返す。
-// 編集の処理はまだ ImageSharp の画像とそのメタデータを使うので、LoadForEdit で読む（編集を SKBitmap に移したら消す）
+// Core の中の編集の処理（ファイルを読んで保存するもの）は、まだ ImageSharp の画像を使うので LoadForEdit で読む（処理を Skia に移したら消す）
 using System.Windows.Media;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.Formats;
@@ -69,7 +69,7 @@ public static class ImageLoader
     /// 編集用に、メタデータ（EXIF など）付きの ImageSharp の画像として読む。
     /// 移行中（#81）だけ使う。編集の処理を SKBitmap に移したら消す
     /// </summary>
-    public static Image<Rgba32> LoadForEdit(string path, LoadOptions? options = null)
+    internal static Image<Rgba32> LoadForEdit(string path, LoadOptions? options = null)
     {
         options ??= LoadOptions.Full;
         if (ImageFormats.IsImageSharpFormat(path))
@@ -273,7 +273,7 @@ public static class ImageLoader
     /// 読み込んだ画像は EXIF の回転を直してあるので、向きは「そのまま」（1）にする。
     /// ImageSharp で読めない形式・中身（TIFF・HEIC など WIC で読むもの）は null（画素だけを保存する）
     /// </summary>
-    public static SixLabors.ImageSharp.Metadata.ImageMetadata? MetadataForSave(string path)
+    internal static SixLabors.ImageSharp.Metadata.ImageMetadata? MetadataForSave(string path)
     {
         if (!ImageFormats.IsImageSharpFormat(path)) return null;
         ImageInfo info;

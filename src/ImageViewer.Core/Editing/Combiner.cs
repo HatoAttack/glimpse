@@ -46,18 +46,18 @@ public sealed record CombineOptions
 }
 
 /// <summary>連結の配置: 全体の大きさと、各画像を置く位置と大きさ（画素は扱わない）</summary>
-public sealed record CombineLayoutResult(Size Canvas, IReadOnlyList<Rectangle> Places);
+public sealed record CombineLayoutResult(SKSizeI Canvas, IReadOnlyList<SKRectI> Places);
 
 public static class Combiner
 {
     /// <summary>"#RGB" / "#RRGGBB" を色に。透過なら完全な透明</summary>
-    public static Rgba32 ParseColor(string hex, bool transparent)
+    public static SKColor ParseColor(string hex, bool transparent)
     {
-        if (transparent) return new Rgba32(0, 0, 0, 0);
+        if (transparent) return new SKColor(0, 0, 0, 0); // SKColors.Transparent は透明な白なので使わない（今までどおり透明な黒）
         string s = hex.Trim().TrimStart('#');
         if (s.Length == 3) s = string.Concat(s.Select(c => $"{c}{c}"));
         if (s.Length != 6 || !s.All(Uri.IsHexDigit)) throw new ArgumentException($"色の指定が正しくありません: {hex}");
-        return new Rgba32(Convert.ToByte(s[..2], 16), Convert.ToByte(s.Substring(2, 2), 16), Convert.ToByte(s.Substring(4, 2), 16));
+        return new SKColor(Convert.ToByte(s[..2], 16), Convert.ToByte(s.Substring(2, 2), 16), Convert.ToByte(s.Substring(4, 2), 16));
     }
 
     /// <summary>ファイルを原寸で読んで連結し、dst に保存する（重いので別スレッドで）</summary>
@@ -90,13 +90,13 @@ public static class Combiner
     /// <summary>
     /// 仕上がりの大きさ（原寸）を、画像を読まずにヘッダーだけから計算する。大きさの分からない画像があれば null
     /// </summary>
-    public static Size? MeasureFiles(IReadOnlyList<string> paths, CombineOptions options)
+    public static SKSizeI? MeasureFiles(IReadOnlyList<string> paths, CombineOptions options)
     {
-        var sizes = new List<Size>(paths.Count);
+        var sizes = new List<SKSizeI>(paths.Count);
         foreach (var p in paths)
         {
             if (Imaging.ImageLoader.Identify(p) is not { } h) return null;
-            sizes.Add(new Size(h.Width, h.Height));
+            sizes.Add(new SKSizeI(h.Width, h.Height));
         }
         return Layout(sizes, options).Canvas;
     }
@@ -106,7 +106,7 @@ public static class Combiner
     /// 「全部の画素数の合計が maxTotalPixels 以下」になるように決める（何百枚選んでもメモリが増えすぎない。拡大はしない）。
     /// 大きさを揃える計算が原寸と同じになるよう、全部同じ比率にする
     /// </summary>
-    public static (List<Image<Rgba32>> Images, double Scale) LoadForPreview(IReadOnlyList<string> paths, int maxEdge, long maxTotalPixels,
+    public static (List<SKBitmap> Images, double Scale) LoadForPreview(IReadOnlyList<string> paths, int maxEdge, long maxTotalPixels,
         CancellationToken ct = default)
     {
         var headers = paths.Select(p => Imaging.ImageLoader.Identify(p)).ToList();
@@ -115,7 +115,7 @@ public static class Combiner
         double scale = Math.Min(1, Math.Min(
             longest > 0 ? (double)maxEdge / longest : 1,
             totalPixels > 0 ? Math.Sqrt(maxTotalPixels / totalPixels) : 1));
-        var images = new List<Image<Rgba32>>(paths.Count);
+        var images = new List<SKBitmap>(paths.Count);
         try
         {
             for (int i = 0; i < paths.Count; i++)
@@ -125,7 +125,7 @@ public static class Combiner
                 // 大きさが分からない画像も縮小して読む（原寸で読んでメモリを使い切らないように）
                 var options = h != null && scale >= 1 ? Imaging.LoadOptions.Full
                     : Imaging.LoadOptions.Thumbnail(Math.Max(1, (int)Math.Round((h != null ? Math.Max(h.Width, h.Height) : maxEdge) * scale)));
-                images.Add(Imaging.ImageLoader.LoadForEdit(paths[i], options));
+                images.Add(Imaging.ImageLoader.Load(paths[i], options));
             }
             return (images, scale);
         }
@@ -160,21 +160,21 @@ public static class Combiner
     }
 
     /// <summary>連結した画像（原寸）</summary>
-    public static Image<Rgba32> Combine(IReadOnlyList<Image<Rgba32>> images, CombineOptions options) =>
+    internal static Image<Rgba32> Combine(IReadOnlyList<Image<Rgba32>> images, CombineOptions options) =>
         Render(images, Layout(SizesOf(images), options), options, maxEdge: null);
 
     /// <summary>長辺が maxEdge 以下になるよう縮めて連結する（プレビュー用。はじめから縮めたキャンバスに描く）</summary>
-    public static Image<Rgba32> CombineBounded(IReadOnlyList<Image<Rgba32>> images, CombineOptions options, int maxEdge) =>
+    internal static Image<Rgba32> CombineBounded(IReadOnlyList<Image<Rgba32>> images, CombineOptions options, int maxEdge) =>
         Render(images, Layout(SizesOf(images), options), options, maxEdge);
 
-    private static List<Size> SizesOf(IReadOnlyList<Image<Rgba32>> images) => images.Select(im => new Size(im.Width, im.Height)).ToList();
+    private static List<SKSizeI> SizesOf(IReadOnlyList<Image<Rgba32>> images) => images.Select(im => new SKSizeI(im.Width, im.Height)).ToList();
 
     /// <summary>画像の大きさだけから配置を計算する</summary>
-    public static CombineLayoutResult Layout(IReadOnlyList<Size> sizes, CombineOptions options)
+    public static CombineLayoutResult Layout(IReadOnlyList<SKSizeI> sizes, CombineOptions options)
     {
         if (sizes.Count == 0) throw new ArgumentException("画像がありません");
         int spacing = Math.Max(0, options.Spacing), padding = Math.Max(0, options.Padding);
-        var places = new List<Rectangle>(sizes.Count);
+        var places = new List<SKRectI>(sizes.Count);
 
         if (options.Layout == CombineLayout.Grid)
         {
@@ -191,9 +191,9 @@ public static class Combiner
                 int w = s >= 1 ? size.Width : Math.Max(1, (int)Math.Round(size.Width * s));
                 int h = s >= 1 ? size.Height : Math.Max(1, (int)Math.Round(size.Height * s));
                 int r = i / columns, c = i % columns;
-                places.Add(new Rectangle(padding + c * (cw + spacing) + (cw - w) / 2, padding + r * (ch + spacing) + (ch - h) / 2, w, h));
+                places.Add(SKRectI.Create(padding + c * (cw + spacing) + (cw - w) / 2, padding + r * (ch + spacing) + (ch - h) / 2, w, h));
             }
-            return new(new Size(columns * cw + spacing * (columns - 1) + 2 * padding, rows * ch + spacing * (rows - 1) + 2 * padding), places);
+            return new(new SKSizeI(columns * cw + spacing * (columns - 1) + 2 * padding, rows * ch + spacing * (rows - 1) + 2 * padding), places);
         }
 
         // 横は高さ、縦は幅を揃える（比を保って拡大縮小）
@@ -207,8 +207,8 @@ public static class Combiner
             _ => null,
         };
         var fitted = sizes.Select(s => target is not int t ? s
-            : horizontal ? (s.Height == t ? s : new Size(Math.Max(1, (int)Math.Round((double)s.Width * t / s.Height)), t))
-            : s.Width == t ? s : new Size(t, Math.Max(1, (int)Math.Round((double)s.Height * t / s.Width)))).ToList();
+            : horizontal ? (s.Height == t ? s : new SKSizeI(Math.Max(1, (int)Math.Round((double)s.Width * t / s.Height)), t))
+            : s.Width == t ? s : new SKSizeI(t, Math.Max(1, (int)Math.Round((double)s.Height * t / s.Width)))).ToList();
 
         int n = fitted.Count;
         int contentW = horizontal ? fitted.Sum(s => s.Width) + spacing * (n - 1) : fitted.Max(s => s.Width);
@@ -217,11 +217,11 @@ public static class Combiner
         foreach (var s in fitted)
         {
             places.Add(horizontal
-                ? new Rectangle(cur, padding + AlignOffset(contentH, s.Height, options.Align), s.Width, s.Height)
-                : new Rectangle(padding + AlignOffset(contentW, s.Width, options.Align), cur, s.Width, s.Height));
+                ? SKRectI.Create(cur, padding + AlignOffset(contentH, s.Height, options.Align), s.Width, s.Height)
+                : SKRectI.Create(padding + AlignOffset(contentW, s.Width, options.Align), cur, s.Width, s.Height));
             cur += (horizontal ? s.Width : s.Height) + spacing;
         }
-        return new(new Size(contentW + 2 * padding, contentH + 2 * padding), places);
+        return new(new SKSizeI(contentW + 2 * padding, contentH + 2 * padding), places);
     }
 
     private static int AlignOffset(int total, int size, CombineAlign align) => align switch
@@ -234,7 +234,8 @@ public static class Combiner
     /// <summary>配置どおりに描く。maxEdge を指定すると全体がその大きさに収まるよう縮めて描く</summary>
     private static Image<Rgba32> Render(IReadOnlyList<Image<Rgba32>> images, CombineLayoutResult layout, CombineOptions options, int? maxEdge)
     {
-        var bg = ParseColor(options.Background, options.Transparent);
+        var c = ParseColor(options.Background, options.Transparent);
+        var bg = new Rgba32(c.Red, c.Green, c.Blue, c.Alpha);
         int longest = Math.Max(layout.Canvas.Width, layout.Canvas.Height);
         double scale = maxEdge is int m && longest > m ? (double)m / longest : 1;
         int Scale(int v) => scale >= 1 ? v : (int)Math.Round(v * scale);
@@ -246,7 +247,7 @@ public static class Combiner
             {
                 var place = layout.Places[i];
                 int w = Math.Max(1, Scale(place.Width)), h = Math.Max(1, Scale(place.Height));
-                var at = new Point(Scale(place.X), Scale(place.Y));
+                var at = new Point(Scale(place.Left), Scale(place.Top));
                 var image = images[i];
                 if (image.Width == w && image.Height == h)
                 {

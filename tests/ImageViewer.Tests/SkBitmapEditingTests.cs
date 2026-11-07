@@ -1,5 +1,5 @@
 // 編集の API を SKBitmap で受け渡したときの動作確認（#81 手順4）。
-// 画素は ImageSharp の画像で受け渡したときと同じになること、保存するときは元のファイルからメタデータを読み直すことを確かめる
+// 受け渡しで画素の値が変わらないこと、保存するときは元のファイルからメタデータを読み直すことを確かめる
 using ImageViewer.Core.Editing;
 using ImageViewer.Core.Imaging;
 using SkiaSharp;
@@ -12,37 +12,17 @@ static class SkBitmapEditingTests
         string P(string name) => Path.Combine(dir, name);
         var source = new TestImage(60, 40, new Px(90, 120, 150)).Fill(Px.Red, 0, 0, 30, 40).Fill(new Px(0, 0, 255, 128), 40, 10, 10, 10);
 
-        // ---- 画素: ImageSharp の画像で受け渡したときと同じ ----
-        bool Same(Action<SKBitmap> skia, Action<SixLabors.ImageSharp.Image<SixLabors.ImageSharp.PixelFormats.Rgba32>> imageSharp)
+        // ---- 画素: 移行中は SKBitmap を ImageSharp の画像に写して処理し書き戻すが、その受け渡しで値は変わらない ----
         {
-            using var a = source.ToSkia();
-            using var b = source.ToApi();
-            skia(a);
-            imageSharp(b);
-            return TestImage.FromApi(a).Rgba.AsSpan().SequenceEqual(TestImage.FromApi(b).Rgba);
+            var gradient = new TestImage(256, 4);
+            for (int x = 0; x < 256; x++)
+                for (int y = 0; y < 4; y++)
+                    gradient[x, y] = new Px((byte)x, (byte)(255 - x), (byte)(x * 7), (byte)(y * 60 + 15));
+            using var bitmap = gradient.ToApi();
+            Annotator.Draw(bitmap, Array.Empty<Annotation>()); // 何も描かない（写して書き戻すだけ）
+            check(TestImage.FromApi(bitmap).Rgba.AsSpan().SequenceEqual(gradient.Rgba), "SKBitmap: 処理の受け渡しで、半透明も含めて画素の値が変わらない");
         }
-        var adjust = new AdjustOptions { Brightness = 30, Saturation = -40 };
-        check(Same(b => Adjuster.Apply(b, adjust), i => Adjuster.Apply(i, adjust)), "SKBitmap: 補正の結果が同じ（半透明も）");
-        using (var a = source.ToSkia())
-        using (var b = source.ToApi())
-            check(Adjuster.Auto(a) == Adjuster.Auto(b), "SKBitmap: 自動補正の値が同じ");
-        var regions = new[] { MaskRegion.Rect(5, 5, 35, 30), new MaskRegion(MaskShape.Ellipse, 30, 0, 60, 40) };
-        foreach (var effect in new[] { MaskEffect.Mosaic, MaskEffect.Blur, MaskEffect.Fill })
-            check(Same(b => Masker.Apply(b, regions, effect, 6), i => Masker.Apply(i, regions, effect, 6)), $"SKBitmap: モザイク・ぼかしの結果が同じ（{effect}）");
-        var marks = new[] { new Annotation(AnnotationKind.Frame, 5, 5, 50, 30, new SixLabors.ImageSharp.PixelFormats.Rgba32(0, 200, 0), 4, 0, 4, true) };
-        check(Same(b => Annotator.Draw(b, marks), i => Annotator.Draw(i, marks)), "SKBitmap: 枠の結果が同じ");
-        using (var a = source.ToSkia())
-        using (var b = new TestImage(30, 50, Px.Blue).ToSkia())
-        using (var a2 = source.ToApi())
-        using (var b2 = new TestImage(30, 50, Px.Blue).ToApi())
-        {
-            var options = new CombineOptions { Spacing = 4, Padding = 2 };
-            using var combined = Combiner.Combine(new[] { a, b }, options);
-            using var expected = Combiner.Combine(new[] { a2, b2 }, options);
-            check(TestImage.FromApi(combined).Rgba.AsSpan().SequenceEqual(TestImage.FromApi(expected).Rgba), "SKBitmap: 連結の結果が同じ");
-            using var bounded = Combiner.CombineBounded(new[] { a, b }, options, 40);
-            check(Math.Max(bounded.Width, bounded.Height) <= 40, $"SKBitmap: 縮めて連結する（{bounded.Width}×{bounded.Height}）");
-        }
+        var marks = new[] { new Annotation(AnnotationKind.Frame, 5, 5, 50, 30, new Px(0, 200, 0), 4, 0, 4, true) };
 
         // ---- 保存: SKBitmap にはメタデータが無いので、元のファイルから読み直す ----
         // 向き 6（右に 90° 回して見る）の写真を読む。読んだ画像は回転を直してあるので、保存すると向きは「そのまま」になる
@@ -76,7 +56,7 @@ static class SkBitmapEditingTests
         }
 
         // メタデータの無い画像（新しく作った画像）を、元のファイルを指定せずに保存すると、メタデータは付かない
-        using (var fresh = source.ToSkia())
+        using (var fresh = source.ToApi())
         {
             ImageSaver.Save(fresh, P("fresh.jpg"));
             check(!TestImage.HasExif(P("fresh.jpg")), "SKBitmap: 元のファイルを指定しなければメタデータを付けない");

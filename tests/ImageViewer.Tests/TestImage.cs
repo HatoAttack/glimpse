@@ -4,8 +4,6 @@
 // - Core の API に渡す画像への変換は ToApi / FromApi の 1 か所だけにする（API の画像の型が変わったら、ここだけ直す）
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using SixLabors.ImageSharp;
-using SixLabors.ImageSharp.PixelFormats;
 
 /// <summary>画素の色（乗算しない RGBA）</summary>
 readonly record struct Px(byte R, byte G, byte B, byte A = 255)
@@ -18,6 +16,51 @@ readonly record struct Px(byte R, byte G, byte B, byte A = 255)
         Math.Abs(R - o.R) <= tolerance && Math.Abs(G - o.G) <= tolerance && Math.Abs(B - o.B) <= tolerance && Math.Abs(A - o.A) <= tolerance;
 
     public override string ToString() => $"({R},{G},{B},{A})";
+
+    /// <summary>Core の API に渡す色（枠の色・連結の背景色など）</summary>
+    public static implicit operator SkiaSharp.SKColor(Px p) => new(p.R, p.G, p.B, p.A);
+}
+
+/// <summary>
+/// Core の API に渡す画像（TestImage.ToApi と同じ形）を、画素を直に読み書きできるようにしたもの。
+/// その場で画像を変える API（補正・モザイク・枠など）に渡して、変わった画素をそのまま確かめるテスト用
+/// </summary>
+sealed class ApiImage : IDisposable
+{
+    public SkiaSharp.SKBitmap Bitmap { get; }
+
+    public ApiImage(int width, int height, Px fill = default) => Bitmap = new TestImage(width, height, fill).ToApi();
+
+    public int Width => Bitmap.Width;
+    public int Height => Bitmap.Height;
+
+    public Px this[int x, int y]
+    {
+        get
+        {
+            nint p = Offset(x, y);
+            return new Px(System.Runtime.InteropServices.Marshal.ReadByte(p), System.Runtime.InteropServices.Marshal.ReadByte(p, 1),
+                System.Runtime.InteropServices.Marshal.ReadByte(p, 2), System.Runtime.InteropServices.Marshal.ReadByte(p, 3));
+        }
+        set
+        {
+            nint p = Offset(x, y);
+            System.Runtime.InteropServices.Marshal.WriteByte(p, value.R);
+            System.Runtime.InteropServices.Marshal.WriteByte(p, 1, value.G);
+            System.Runtime.InteropServices.Marshal.WriteByte(p, 2, value.B);
+            System.Runtime.InteropServices.Marshal.WriteByte(p, 3, value.A);
+        }
+    }
+
+    private nint Offset(int x, int y)
+    {
+        if ((uint)x >= (uint)Width || (uint)y >= (uint)Height) throw new ArgumentOutOfRangeException(nameof(x), $"({x}, {y}) は画像の外です");
+        return Bitmap.GetPixels() + y * Bitmap.RowBytes + x * 4;
+    }
+
+    public static implicit operator SkiaSharp.SKBitmap(ApiImage image) => image.Bitmap;
+
+    public void Dispose() => Bitmap.Dispose();
 }
 
 /// <summary>テストの画像に付ける EXIF（null の項目は付けない）</summary>
@@ -77,10 +120,8 @@ sealed class TestImage
 
     // ---- Core の API との受け渡し（ここだけが API の画像の型を知る） ----
 
-    public Image<Rgba32> ToApi() => SixLabors.ImageSharp.Image.LoadPixelData<Rgba32>(Rgba, Width, Height);
-
-    /// <summary>Core の API に渡す SKBitmap（RGBA・乗算しない）</summary>
-    public SkiaSharp.SKBitmap ToSkia()
+    /// <summary>Core の API に渡す画像（SKBitmap。RGBA・乗算しない）</summary>
+    public SkiaSharp.SKBitmap ToApi()
     {
         var bitmap = new SkiaSharp.SKBitmap(new SkiaSharp.SKImageInfo(Width, Height, SkiaSharp.SKColorType.Rgba8888, SkiaSharp.SKAlphaType.Unpremul));
         System.Runtime.InteropServices.Marshal.Copy(Rgba, 0, bitmap.GetPixels(), Rgba.Length);
@@ -104,20 +145,6 @@ sealed class TestImage
             handle.Free();
         }
         return new TestImage(bitmap.Width, bitmap.Height, rgba);
-    }
-
-    /// <summary>Core の API が返した画像の frame 番目のコマ</summary>
-    public static TestImage FromApi(Image<Rgba32> image, int frame)
-    {
-        using var one = image.Frames.CloneFrame(frame);
-        return FromApi(one);
-    }
-
-    public static TestImage FromApi(Image<Rgba32> image)
-    {
-        var rgba = new byte[image.Width * image.Height * 4];
-        image.CopyPixelDataTo(rgba);
-        return new TestImage(image.Width, image.Height, rgba);
     }
 
     /// <summary>コミットしてあるテスト用の画像（Fixtures フォルダ）を dir に写したパス。テストで書き換えても元は変わらない</summary>
