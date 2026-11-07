@@ -3,6 +3,7 @@ using ImageViewer.Core.Imaging;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 using SixLabors.ImageSharp.Processing;
+using SkiaSharp;
 
 namespace ImageViewer.Core.Editing;
 
@@ -90,6 +91,20 @@ public static class Cropper
 
     /// <summary>src から読み込み済みの画像の box の範囲を保存する（dst が src なら上書き）</summary>
     /// <returns>実際に保存したパス</returns>
+    public static string SaveCrop(SKBitmap image, SKRectI box, string src, string dst)
+    {
+        if (SourceGuard.IsSameFile(src, dst))
+        {
+            SourceGuard.EnsureReplaceable(src);
+            SourceGuard.EnsureKeepsMetadata(src);
+        }
+        using var cropped = new SKBitmap(); // image の画素をそのまま指す（写さない）
+        if (box.IsEmpty || !image.ExtractSubset(cropped, box))
+            throw new ArgumentException($"切り抜く範囲が画像の外です（{box}、画像 {image.Width}×{image.Height}）", nameof(box));
+        return SourceGuard.Save(cropped, src, dst);
+    }
+
+    /// <inheritdoc cref="SaveCrop(SKBitmap, SKRectI, string, string)"/>
     public static string SaveCrop(Image<Rgba32> image, Rectangle box, string src, string dst)
     {
         if (SourceGuard.IsSameFile(src, dst))

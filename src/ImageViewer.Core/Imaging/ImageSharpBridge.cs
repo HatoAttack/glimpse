@@ -68,6 +68,14 @@ public static class ImageSharpBridge
         return SixLabors.ImageSharp.Image.WrapMemory(Configuration.Default, pixels.AsMemory(), width, height, metadata.DeepClone());
     }
 
+    /// <summary>bitmap を ImageSharp の画像に写して edit で変え、bitmap に書き戻す（その場で変える API 用）</summary>
+    public static void Edit(SKBitmap bitmap, Action<Image<Rgba32>> edit)
+    {
+        using var image = ToImageSharp(bitmap);
+        edit(image);
+        CopyInto(image, bitmap);
+    }
+
     /// <summary>ImageSharp で処理した画像の画素を、同じ大きさの SKBitmap に書き戻す（その場で変える API 用）</summary>
     public static unsafe void CopyInto(Image<Rgba32> source, SKBitmap target)
     {
