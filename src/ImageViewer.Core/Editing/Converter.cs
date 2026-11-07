@@ -113,7 +113,7 @@ public static class Converter
     /// </summary>
     public static bool KeepsMetadata(string path)
     {
-        if (!ImageFormats.IsImageSharpFormat(path)) return false;
+        if (!ImageFormats.IsEmbeddedFormat(path)) return false;
         var stamp = ArchivePath.IsInside(path) ? DateTime.MinValue : File.GetLastWriteTimeUtc(path);
         if (_keepsMetadata.TryGetValue(path, out var cached) && cached.Stamp == stamp) return cached.Keeps;
         bool keeps = ImageLoader.IsBuiltInContent(path);
