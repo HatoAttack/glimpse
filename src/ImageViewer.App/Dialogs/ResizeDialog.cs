@@ -27,6 +27,12 @@ public sealed class ResizeDialog : ThemedForm
     // 形式・画質
     private readonly List<(RadioButton Radio, OutputFormat Format)> _formatRadios = new();
     private readonly List<(RadioButton Radio, ResizeAlgorithm Algorithm)> _algorithmRadios = new();
+    private readonly TrackBar _quality = new()
+    {
+        Minimum = ImageSaver.MinQuality, Maximum = ImageSaver.MaxQuality, TickStyle = TickStyle.None, SmallChange = 1, LargeChange = 5,
+        Width = 220, AutoSize = false, Height = 26,
+    };
+    private readonly NumericUpDown _qualityValue;
     private readonly CheckBox _stripMetadata = new() { Text = "EXIF などのメタデータを消す（色の情報 ICC は残す）", AutoSize = true };
 
     // ファイル名
@@ -99,7 +105,11 @@ public sealed class ResizeDialog : ThemedForm
             _algorithmRadios.Add((rb, a));
             algorithmRow.Controls.Add(rb);
         }
-        var formatGroup = Group("形式・画質", formatRow, algorithmRow, Flow(_stripMetadata));
+        _qualityValue = SliderInput.Link(_quality);
+        _qualityValue.Margin = new Padding(3, 4, 3, 3);
+        var qualityRow = Flow(Caption("画質:"), _quality, _qualityValue, Caption("%"),
+            Hint($"JPG・WEBP で書くときに使います（既定は {ImageSaver.DefaultQuality}）"));
+        var formatGroup = Group("形式・画質", formatRow, qualityRow, algorithmRow, Flow(_stripMetadata));
 
         var nameGroup = Group("ファイル名",
             Flow(Caption("置換前"), _search, Caption("→ 置換後"), _replace, _useSuffix, _suffix, Hint("例: _s → photo_s.jpg")),
@@ -177,6 +187,7 @@ public sealed class ResizeDialog : ThemedForm
         _noUpscale.Checked = o.NoUpscale;
         (_formatRadios.FirstOrDefault(r => r.Format == o.Format).Radio ?? _formatRadios[0].Radio).Checked = true;
         (_algorithmRadios.FirstOrDefault(r => r.Algorithm == o.Algorithm).Radio ?? _algorithmRadios[^1].Radio).Checked = true;
+        _quality.Value = Math.Clamp(o.Quality ?? ImageSaver.JpegQuality, _quality.Minimum, _quality.Maximum);
         _stripMetadata.Checked = o.StripMetadata;
         _search.Text = o.ReplaceSearch;
         _replace.Text = o.ReplaceWith;
@@ -198,6 +209,7 @@ public sealed class ResizeDialog : ThemedForm
         ExactHeight = (int)_exactHeight.Value,
         Format = _formatRadios.First(r => r.Radio.Checked).Format,
         Algorithm = _algorithmRadios.First(r => r.Radio.Checked).Algorithm,
+        Quality = _quality.Value,
         StripMetadata = _stripMetadata.Checked,
         ReplaceSearch = _search.Text,
         ReplaceWith = _replace.Text,

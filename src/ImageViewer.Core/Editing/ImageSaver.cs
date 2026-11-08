@@ -41,6 +41,8 @@ public static class ImageSaver
         set => _webpQuality = Math.Clamp(value, MinQuality, MaxQuality);
     }
 
+    private static int? Clamp(int? quality) => quality is int q ? Math.Clamp(q, MinQuality, MaxQuality) : null;
+
     /// <summary>WEBP で保存できる最大の縦横</summary>
     public const int WebpMaxEdge = 16383;
 
@@ -80,16 +82,18 @@ public static class ImageSaver
     /// このファイルの撮影情報（EXIF）を読み直して書く（編集した画像の元のファイル）。null なら書かない。
     /// EXIF を書けるのは JPEG・PNG・WebP（ほかの形式に保存すると画素だけになる）
     /// </param>
-    public static void Save(SKBitmap image, string dst, bool overwrite = true, string? metadataFrom = null)
+    /// <param name="quality">JPEG・WebP の画質（1〜100）。null なら保存の画質の設定（JpegQuality・WebpQuality）</param>
+    public static void Save(SKBitmap image, string dst, bool overwrite = true, string? metadataFrom = null, int? quality = null)
     {
-        byte[] data = Encode(image, Path.GetExtension(dst), metadataFrom == null ? null : ImageLoader.MetadataForSave(metadataFrom)?.Exif);
+        byte[] data = Encode(image, Path.GetExtension(dst), metadataFrom == null ? null : ImageLoader.MetadataForSave(metadataFrom)?.Exif, quality);
         WriteAtomically(dst, data, overwrite);
     }
 
     /// <summary>
-    /// 拡張子 extension の形式に書いたバイト列。exif（TIFF の形）があれば、画像の大きさに合わせて直して入れる（JPEG・PNG・WebP だけ）
+    /// 拡張子 extension の形式に書いたバイト列。exif（TIFF の形）があれば、画像の大きさに合わせて直して入れる（JPEG・PNG・WebP だけ）。
+    /// quality は JPEG・WebP の画質（null なら保存の画質の設定）
     /// </summary>
-    internal static byte[] Encode(SKBitmap image, string extension, byte[]? exif)
+    internal static byte[] Encode(SKBitmap image, string extension, byte[]? exif, int? quality = null)
     {
         string ext = extension.ToLowerInvariant();
         if (ext == ".webp" && Math.Max(image.Width, image.Height) > WebpMaxEdge)
@@ -109,7 +113,7 @@ public static class ImageSaver
             {
                 using var flat = FlattenOnWhite(pixmap);
                 using var flatPixmap = flat.PeekPixels();
-                var jpeg = EncodeWith(flatPixmap.Encode(new SKJpegEncoderOptions(JpegQuality, SKJpegEncoderDownsample.Downsample420, SKJpegEncoderAlphaOption.Ignore)), ext);
+                var jpeg = EncodeWith(flatPixmap.Encode(new SKJpegEncoderOptions(Clamp(quality) ?? JpegQuality, SKJpegEncoderDownsample.Downsample420, SKJpegEncoderAlphaOption.Ignore)), ext);
                 return fixedExif == null ? jpeg : ExifBlock.AddToJpeg(jpeg, fixedExif);
             }
             case ".png":
@@ -119,7 +123,7 @@ public static class ImageSaver
             }
             case ".webp":
             {
-                var webp = EncodeWith(pixmap.Encode(new SKWebpEncoderOptions(SKWebpEncoderCompression.Lossy, WebpQuality)), ext);
+                var webp = EncodeWith(pixmap.Encode(new SKWebpEncoderOptions(SKWebpEncoderCompression.Lossy, Clamp(quality) ?? WebpQuality)), ext);
                 return fixedExif == null ? webp : ExifBlock.AddToWebp(webp, fixedExif, image.Width, image.Height);
             }
             case ".qoi":

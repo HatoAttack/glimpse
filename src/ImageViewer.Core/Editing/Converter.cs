@@ -31,6 +31,8 @@ public sealed record ConvertOptions
     /// <summary>EXIF・XMP・IPTC・PNG のテキストを消す（ICC プロファイルは残す）</summary>
     public bool StripMetadata { get; init; } = true;
     public OutputFormat Format { get; init; } = OutputFormat.Keep;
+    /// <summary>JPEG・WebP で書くときの画質（1〜100）。null なら保存の画質の設定（前の版の設定ファイルには無い）</summary>
+    public int? Quality { get; init; }
 
     // ファイル名（適用順: 置換 → 末尾に付ける → 小文字化）
     public string ReplaceSearch { get; init; } = "";
@@ -176,7 +178,7 @@ public static class Converter
             if (crop.Width != image.Width || crop.Height != image.Height) Replace(ref image, SkiaEdit.Crop(image, crop));
             if (w != image.Width || h != image.Height) Replace(ref image, SkiaEdit.Resize(image, w, h, QualityOf(options.Algorithm)));
             // 撮影情報（EXIF）は元のファイルから読み直して書く（メタデータを消す設定なら書かない）
-            ImageSaver.Save(image, dst, overwrite, metadataFrom: options.StripMetadata ? null : src);
+            ImageSaver.Save(image, dst, overwrite, metadataFrom: options.StripMetadata ? null : src, quality: options.Quality);
         }
         finally
         {

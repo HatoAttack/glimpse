@@ -73,7 +73,7 @@ public sealed class AnnotateDialog : ThemedForm
     private readonly RadioButton _toolText = new() { Text = "文字", AutoSize = true };
     private readonly RadioButton _toolNumber = new() { Text = "番号", AutoSize = true };
     private readonly TextBox _text = new() { Multiline = true, AcceptsReturn = true, ScrollBars = ScrollBars.Vertical, Width = 186, Height = 40, MaxLength = 500 };
-    private readonly Label _fontText = SliderLabel();
+    private readonly Label _fontText = SliderLabel("大きさ");
     private readonly TrackBar _font = Slider(MinFontSize, MaxFontSize);
     private readonly Label _backText = new() { Text = "背景:", AutoSize = true, Margin = new Padding(3, 6, 0, 3) };
     private readonly RadioButton _backNone = new() { Text = "なし", AutoSize = true };
@@ -90,16 +90,18 @@ public sealed class AnnotateDialog : ThemedForm
     private readonly ComboBox _fontBox = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 112, DropDownWidth = 240, MaxDropDownItems = 20, Margin = new Padding(8, 4, 3, 3) };
     private readonly SwatchPanel _swatch = new() { Width = 28, Height = 24, Margin = new Padding(3, 3, 2, 3), Cursor = Cursors.Hand };
     private readonly Button _pickColor = new() { Text = "色...", AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink };
-    private readonly Label _thicknessText = SliderLabel();
+    private readonly Label _thicknessText = SliderLabel("太さ");
     private readonly TrackBar _thickness = Slider(1, 100);
-    private readonly Label _radiusText = SliderLabel();
+    private readonly Label _radiusText = SliderLabel("丸み");
     private readonly TrackBar _radius = Slider(0, 200);
-    private readonly Label _angleText = SliderLabel();
+    private readonly Label _angleText = SliderLabel("傾き");
     private readonly TrackBar _angle = Slider(-180, 180);
-    private readonly Label _skewText = SliderLabel();
+    private readonly Label _skewText = SliderLabel("斜め");
     private readonly TrackBar _skew = Slider(-(int)Annotator.MaxSkew, (int)Annotator.MaxSkew);
-    private readonly Label _headText = SliderLabel();
+    private readonly Label _headText = SliderLabel("先端");
     private readonly TrackBar _head = Slider((int)(Annotator.MinHeadSize * HeadScale), (int)(Annotator.MaxHeadSize * HeadScale));
+    // スライダーの横の、数字を直接打てる欄（コンストラクターでスライダーとつなぐ）
+    private readonly NumericUpDown _fontValue, _thicknessValue, _radiusValue, _angleValue, _skewValue, _headValue;
     private readonly CheckBox _shadow = new() { Text = "影を付ける", AutoSize = true };
     private readonly Button _removeSelected = new() { Text = "選んだものを消す", Width = 112, Height = 26 };
     private readonly Button _removeAll = new() { Text = "すべて消す", Width = 82, Height = 26 };
@@ -129,15 +131,21 @@ public sealed class AnnotateDialog : ThemedForm
 
     private static TrackBar Slider(int min, int max) => new()
     {
-        Minimum = min, Maximum = max, TickStyle = TickStyle.None, LargeChange = Math.Max(1, (max - min) / 10), Width = 108, AutoSize = false, Height = 26,
+        Minimum = min, Maximum = max, TickStyle = TickStyle.None, LargeChange = Math.Max(1, (max - min) / 10), Width = 92, AutoSize = false, Height = 26,
     };
 
-    /// <summary>スライダーの左に置く、項目の名前と今の値（縦に場所を取らないよう、スライダーと同じ行に並べる）</summary>
-    private static Label SliderLabel() => new() { AutoSize = false, Width = 84, Height = 26, TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding(3, 3, 0, 3) };
+    /// <summary>スライダーの左に置く、項目の名前（縦に場所を取らないよう、スライダーと数字の欄を同じ行に並べる）</summary>
+    private static Label SliderLabel(string text) => new() { Text = text, AutoSize = false, Width = 50, Height = 26, TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding(3, 3, 0, 3) };
 
     public AnnotateDialog(IReadOnlyList<string> paths, int startIndex = 0)
     {
         _stepper = new ImageStepper(paths);
+        _fontValue = SliderInput.Link(_font);
+        _thicknessValue = SliderInput.Link(_thickness);
+        _radiusValue = SliderInput.Link(_radius);
+        _angleValue = SliderInput.Link(_angle);
+        _skewValue = SliderInput.Link(_skew);
+        _headValue = SliderInput.Link(_head, HeadScale);
         _stepper.StepRequested += async delta => await StepAsync(delta);
         _saver = new EditSavePanel(this, paths.Count,
             "「保存」は「元の名前_mark」で別に、「上書き保存」は元に上書きします",
@@ -267,7 +275,7 @@ public sealed class AnnotateDialog : ThemedForm
 
         // 背景・行の寄せは、それぞれ別の入れ物に入れる（同じ入れ物のラジオボタンは 1 つしか選べないため）
         // 「文字」「見た目」は縦に場所を取るので、初めは閉じておく（見出しのボタンで開く）
-        _textSection = new CollapsibleSection("文字", _lastTextOpen, _text, Row(_fontText, _font), Row(_backText, _backNone, _backBox, _backBalloon),
+        _textSection = new CollapsibleSection("文字", _lastTextOpen, _text, Row(_fontText, _font, _fontValue), Row(_backText, _backNone, _backBox, _backBalloon),
             Row(_alignText, _alignLeft, _alignCenter, _alignRight));
         side.Controls.Add(_textSection);
         foreach (var c in new Control[] { _alignText, _alignLeft, _alignCenter, _alignRight })
@@ -277,16 +285,17 @@ public sealed class AnnotateDialog : ThemedForm
         _toolTip.SetToolTip(_backBalloon, "四角に、指したい所へ向かうしっぽを付けます");
 
         _styleSection = new CollapsibleSection("見た目", _lastStyleOpen, Row(_swatch, _pickColor, _fillSwatch, _pickFill), Row(_textSwatch, _pickText, _fontBox),
-            Row(_thicknessText, _thickness), Row(_radiusText, _radius), Row(_angleText, _angle), Row(_skewText, _skew), Row(_headText, _head), _shadow);
+            Row(_thicknessText, _thickness, _thicknessValue), Row(_radiusText, _radius, _radiusValue), Row(_angleText, _angle, _angleValue),
+            Row(_skewText, _skew, _skewValue), Row(_headText, _head, _headValue), _shadow);
         side.Controls.Add(_styleSection);
-        foreach (var c in new Control[] { _angleText, _angle })
-            _toolTip.SetToolTip(c, "選んだ枠の傾き（時計回りが＋）。枠の外の丸いつまみをドラッグしても回せます（Shift で 15° ごと）");
-        foreach (var c in new Control[] { _skewText, _skew })
+        foreach (var c in new Control[] { _angleText, _angle, _angleValue })
+            _toolTip.SetToolTip(c, "選んだ枠の傾き（度。時計回りが＋）。枠の外の丸いつまみをドラッグしても回せます（Shift で 15° ごと）");
+        foreach (var c in new Control[] { _skewText, _skew, _skewValue })
             _toolTip.SetToolTip(c, $"選んだ枠の左右の辺を倒して平行四辺形にします（±{Annotator.MaxSkew}° まで。＋なら上の辺が右へずれます）。\n上下の辺の真ん中のつまみを横にドラッグしても倒せます（Shift で 15° ごと）");
-        foreach (var c in new Control[] { _thicknessText, _thickness }) _toolTip.SetToolTip(c, "線の太さ（枠・矢印と、帯・吹き出しの縁）");
-        foreach (var c in new Control[] { _radiusText, _radius }) _toolTip.SetToolTip(c, "枠・帯・吹き出しの角の丸み。短い辺の半分より大きくはなりません");
-        foreach (var c in new Control[] { _headText, _head }) _toolTip.SetToolTip(c, "矢印の先端の大きさ（線の太さの何倍か）");
-        foreach (var c in new Control[] { _fontText, _font }) _toolTip.SetToolTip(c, "文字・番号の大きさ（文字の四隅のドラッグは、文字でなく本体の大きさを変えます）");
+        foreach (var c in new Control[] { _thicknessText, _thickness, _thicknessValue }) _toolTip.SetToolTip(c, "線の太さ（px。枠・矢印と、帯・吹き出しの縁）");
+        foreach (var c in new Control[] { _radiusText, _radius, _radiusValue }) _toolTip.SetToolTip(c, "枠・帯・吹き出しの角の丸み（px）。短い辺の半分より大きくはなりません");
+        foreach (var c in new Control[] { _headText, _head, _headValue }) _toolTip.SetToolTip(c, "矢印の先端の大きさ（線の太さの何倍か）");
+        foreach (var c in new Control[] { _fontText, _font, _fontValue }) _toolTip.SetToolTip(c, "文字・番号の大きさ（px。文字の四隅のドラッグは、文字でなく本体の大きさを変えます）");
 
         _removeSelected.Click += (_, _) => RemoveSelected();
         _removeAll.Click += (_, _) => RemoveAll();
@@ -444,18 +453,12 @@ public sealed class AnnotateDialog : ThemedForm
         _head.Enabled = _headText.Enabled = kind == AnnotationKind.Arrow;
         SyncAngle();
         _angle.Enabled = _angleText.Enabled = _skew.Enabled = _skewText.Enabled = Selected?.Kind == AnnotationKind.Frame;
-        _angleText.Text = $"傾き {_angle.Value}°";
-        _skewText.Text = _skew.Value == 0 ? "斜め なし" : $"斜め {_skew.Value}°";
         _font.Enabled = _fontText.Enabled = kind is AnnotationKind.Text or AnnotationKind.Number;
         _text.Enabled = _backText.Enabled = _backNone.Enabled = _backBox.Enabled = _backBalloon.Enabled = text;
         _alignText.Enabled = _alignLeft.Enabled = _alignCenter.Enabled = _alignRight.Enabled = text;
         _fillSwatch.Enabled = _pickFill.Enabled = boxed;
         _textSwatch.Enabled = _pickText.Enabled = text;
         _fontBox.Enabled = _font.Enabled;
-        _fontText.Text = $"大きさ {_font.Value} px";
-        _thicknessText.Text = $"太さ {_thickness.Value} px";
-        _radiusText.Text = _radius.Value == 0 ? "丸み なし" : $"丸み {_radius.Value} px";
-        _headText.Text = $"先端 {(double)_head.Value / HeadScale:0.0} 倍";
     }
 
     protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
@@ -470,7 +473,7 @@ public sealed class AnnotateDialog : ThemedForm
             case Keys.Shift | Keys.Enter when !_saver.Busy && !(ActiveControl is TextBox or NumericUpDown or ComboBox):
                 _ = SaveCurrentAsync(advance: true, overwrite: true);
                 return true;
-            case Keys.Delete or Keys.Back when !(ActiveControl is TextBox):
+            case Keys.Delete or Keys.Back when !(ActiveControl is TextBox or NumericUpDown):
                 RemoveSelected();
                 return true;
             case Keys.PageDown:
