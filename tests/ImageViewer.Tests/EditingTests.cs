@@ -150,6 +150,20 @@ static class EditingTests
         check(ImageSaver.JpegQuality == ImageSaver.MinQuality && ImageSaver.WebpQuality == ImageSaver.MaxQuality, "画質: 範囲外は 1〜100 に丸める");
         ImageSaver.JpegQuality = ImageSaver.WebpQuality = ImageSaver.DefaultQuality;
 
+        // リサイズ・形式変換の画質: 保存の画質の設定より、変換で指定した画質を使う（指定しなければ設定のまま）
+        SavedSize("q_src.png");
+        long Converted(string name, OutputFormat format, int? quality)
+        {
+            Converter.ConvertOne(P("q_src.png"), P(name), new ConvertOptions { LongEdge = ConvertOptions.KeepSize, Format = format, Quality = quality });
+            return new FileInfo(P(name)).Length;
+        }
+        long jpegDefault = Converted("c_default.jpg", OutputFormat.Jpeg, null);
+        check(Converted("c_q20.jpg", OutputFormat.Jpeg, 20) < jpegDefault && jpegDefault < Converted("c_q100.jpg", OutputFormat.Jpeg, 100)
+              && jpegDefault == Converted("c_q90.jpg", OutputFormat.Jpeg, ImageSaver.DefaultQuality),
+            "変換の画質: JPG は指定した画質で書く（指定なしは保存の画質の設定）");
+        check(Converted("c_q20.webp", OutputFormat.Webp, 20) < Converted("c_q100.webp", OutputFormat.Webp, 100), "変換の画質: WEBP も指定した画質で書く");
+        check(Converted("c_q0.jpg", OutputFormat.Jpeg, 0) == Converted("c_q1.jpg", OutputFormat.Jpeg, 1), "変換の画質: 範囲外は 1〜100 に丸める");
+
         // ---- 切り抜き ----
         var (cx, cy, cw, ch) = Cropper.CenterRect(400, 300, 1.0);
         check(cx == 50 && cy == 0 && cw == 300 && ch == 300, "切り抜き: 中央の 1:1");

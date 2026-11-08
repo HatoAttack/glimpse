@@ -1,4 +1,4 @@
-// 保存の画質: JPEG / WEBP で保存するときの画質（リサイズ・切り抜き・連結で共通）
+// 保存の画質: JPEG / WEBP で保存するときの画質（切り抜き・連結などで共通。リサイズ・形式変換は自分の画面で選ぶ）
 using ImageViewer.App.Theming;
 using ImageViewer.Core.Editing;
 
@@ -53,7 +53,7 @@ public sealed class SaveQualityDialog : ThemedForm
         {
             AutoSize = true, MaximumSize = new Size(360, 0),
             Text = "JPEG / WEBP で保存するときの画質（1〜100）。大きいほどきれいで、ファイルも大きくなります。" +
-                   "リサイズ・切り抜き・連結の保存に使います。",
+                   "切り抜き・連結などの保存に使います（リサイズ・形式変換は、その画面で選んだ画質を使います）。",
         });
         layout.Controls.Add(fields);
         layout.Controls.Add(bottom);
