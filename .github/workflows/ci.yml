@@ -25,12 +25,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # SDK は手元と同じく global.json で選ぶ（10.0 の最新）
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: 10.0.x
+          global-json-file: global.json
+
+      # packages.lock.json のとおりに復元する。プロジェクト定義とロックファイルが合わなければ、ここで失敗する（NU1004）
+      - name: 依存の復元
+        run: dotnet restore ImageViewer.sln --locked-mode
 
       - name: ビルド
-        run: dotnet build ImageViewer.sln -c Release
+        run: dotnet build ImageViewer.sln -c Release --no-restore
 
       - name: テスト
         run: dotnet run --project tests/ImageViewer.Tests -c Release --no-build

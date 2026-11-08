@@ -1,0 +1,14 @@
+# 依存の更新 PR を作らせる（#77）。NuGet のパッケージはロックファイルで固定しているので、
+# パッチ（セキュリティ修正を含む）もこの PR で取り込む。どの PR も「検証」の build-and-test が通ってからマージする
+version: 2
+updates:
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

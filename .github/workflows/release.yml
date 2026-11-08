@@ -3,7 +3,8 @@
 # 名前を変える前のバージョン（v0.1.5 まで）は ImageViewer.exe を探して更新するので、同じ中身を ImageViewer.exe の名前でも添付する
 # （そのバージョンの人が更新し終わったころに外す）。
 # 手順は docs/development.md の「リリースの手順」を参照。
-# このファイルを変える PR でも同じ処理を試しに走らせる（exe は添付せず、Actions の成果物に置く）
+# このファイルや、SDK・依存パッケージの指定を変える PR（Dependabot の更新 PR を含む）でも同じ処理を試しに走らせる
+# （exe は添付せず、Actions の成果物に置く）
 name: リリース
 
 on:
@@ -12,6 +13,10 @@ on:
   pull_request:
     paths:
       - .github/workflows/release.yml
+      - global.json
+      - Directory.Build.props
+      - '**/*.csproj'
+      - '**/packages.lock.json'
 
 permissions:
   contents: write
@@ -22,10 +27,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # SDK は手元と同じく global.json で選ぶ（10.0 の最新）
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: 10.0.x
+          global-json-file: global.json
 
+      # テスト・exe 作成の復元も、Directory.Build.props の指定で locked mode になる（packages.lock.json のとおり）
       - name: テスト
         run: dotnet run --project tests/ImageViewer.Tests -c Release
 
