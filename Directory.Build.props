@@ -1,0 +1,27 @@
+<Project>
+
+  <!-- 依存パッケージの復元を固定する（#77）。
+       各プロジェクトの packages.lock.json に、推移的な依存も含めて復元したパッケージの版を記録する。
+       GitHub Actions では locked mode で復元し、プロジェクト定義とロックファイルが合わなければ失敗させる。
+       更新の手順は docs/development.md の「依存パッケージの更新」 -->
+  <PropertyGroup>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreLockedMode Condition="'$(GITHUB_ACTIONS)' == 'true'">true</RestoreLockedMode>
+    <!-- リリースの exe は -r win-x64 の自己完結ビルドで、RID 専用のパッケージも使う。
+         ロックファイルに win-x64 の分も入れておかないと、locked mode の publish が失敗する -->
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+  </PropertyGroup>
+
+  <!-- リリースの exe は単一ファイルにするので、単一ファイルで動かない書き方（Assembly.Location など）を警告する解析器を、publish だけでなくビルドでも使う。
+       解析器のパッケージ（Microsoft.NET.ILLink.Tasks）は、何もしないと SDK が自分の版に合わせて publish のときだけ足すため、
+       SDK の更新でロックファイルと合わなくなる。そこで版を明示して固定し、ほかのパッケージと同じく Dependabot で更新する。
+       publish の指定は参照先のプロジェクトにも伝わるので、全プロジェクトに付ける -->
+  <PropertyGroup>
+    <EnableSingleFileAnalyzer>true</EnableSingleFileAnalyzer>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.ILLink.Tasks" Version="10.0.13" />
+  </ItemGroup>
+
+</Project>

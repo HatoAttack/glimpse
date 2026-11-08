@@ -3,7 +3,12 @@
 ## 必要なもの
 
 - Windows
-- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
+- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)（10.0.100 以上の 10.0 の SDK）
+
+使う SDK は `global.json` で決めている（`"version": "10.0.100"`、`"rollForward": "latestFeature"`）。
+10.0 の SDK のうち、入っている最新のもの（機能バンド・パッチは新しくてよい）を使い、.NET 11 など別のメジャーバージョンの SDK は使わない。
+10.0 の SDK が入っていないと、`dotnet` のコマンドは「A compatible .NET SDK was not found」と、`global.json` が求める版を表示して止まる。そのときは上のリンクから 10.0 の SDK を入れる。
+入っている SDK は `dotnet --list-sdks`、実際に選ばれる SDK は `dotnet --version` で確かめられる。GitHub Actions も同じ `global.json` で SDK を選ぶ。
 
 ```
 dotnet run --project src/ImageViewer.App        # 起動
@@ -70,9 +75,40 @@ public sealed class CopyPathsCommand : ImageCommandBase
 手元で同じことをするには次のとおり:
 
 ```
-dotnet build ImageViewer.sln -c Release
+dotnet restore ImageViewer.sln --locked-mode
+dotnet build ImageViewer.sln -c Release --no-restore
 dotnet run --project tests/ImageViewer.Tests -c Release --no-build
 ```
+
+## 依存パッケージの固定と更新
+
+NuGet のパッケージは、プロジェクトに具体的な版を書いたうえで、各プロジェクトの `packages.lock.json` に推移的な依存も含めた版とハッシュを記録して固定している
+（`Directory.Build.props` の `RestorePackagesWithLockFile`）。ロックファイルには、リリースの exe（`-r win-x64` の自己完結ビルド）で使う win-x64 用の分も入っている。
+
+- GitHub Actions では locked mode で復元する。プロジェクトの定義とロックファイルが合わないと、「依存の復元」の手順が `NU1004` で失敗する
+- 手元ではロックファイルを書き換えてよい通常の復元になる。プロジェクトの依存を変えたら、書き換わったロックファイルも一緒にコミットする
+- 単一ファイルの解析器（`Microsoft.NET.ILLink.Tasks`）も版を固定している。SDK に任せると、SDK の版に合わせて publish のときだけ足され、ロックファイルと合わなくなるため（`Directory.Build.props` に理由を書いている）
+
+### 更新のしかた
+
+更新は Dependabot（`.github/dependabot.yml`）が週に 1 回、NuGet のパッケージと GitHub Actions について PR を作る。
+NuGet の更新 PR はロックファイルも書き換えている。手動で更新するときは次のとおり:
+
+1. `.csproj` か `Directory.Build.props` の `Version` を書き換える
+2. ロックファイルを作り直す:
+   ```
+   dotnet restore ImageViewer.sln --force-evaluate
+   ```
+3. CI と同じ確認をする（locked mode で復元できること、ビルドとテスト）:
+   ```
+   dotnet restore ImageViewer.sln --locked-mode
+   dotnet build ImageViewer.sln -c Release --no-restore
+   dotnet run --project tests/ImageViewer.Tests -c Release --no-build
+   ```
+4. リリースと同じ自己完結の exe が作れることを確かめる（「リリースの手順」のコマンド）。PR では「リリース」のワークフローが同じことを試しに行う
+5. `.csproj` とロックファイルをいっしょにコミットする
+
+どの更新 PR も「検証」の `build-and-test` が通ってからマージする。SkiaSharp・MetadataExtractor など画像の読み書きに関わる更新は、[manual-test.md](manual-test.md) で表示と保存も確かめる。
 
 ## 手動確認
 
