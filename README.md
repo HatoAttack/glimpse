@@ -84,6 +84,7 @@ dotnet run --project tests/ImageViewer.Tests
 ```
 
 プロジェクトの構成・コマンドの追加方法・保存データ・リリースの手順は [docs/development.md](docs/development.md) を見てください。
+クラスの役割と関係・守るべき約束事（スレッド・Bitmap の Dispose・読み込みの打ち切り）・変更の種類ごとに読む場所は [docs/architecture.md](docs/architecture.md) にあります。
 
 ## ライセンス
 
