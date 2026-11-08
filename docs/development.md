@@ -1,5 +1,7 @@
 # 開発者向けメモ
 
+クラスの役割と関係、守るべき約束事（スレッド・Bitmap の Dispose・読み込みの打ち切り）、変更の種類ごとに読む場所は [architecture.md](architecture.md) にまとめている。
+
 ## 必要なもの
 
 - Windows
