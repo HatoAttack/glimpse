@@ -354,6 +354,30 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _grid.ContentsChanged += (_, _) => _quickLook.ItemsChanged(ViewItems);
     }
 
+    /// <summary>
+    /// 1 枚だけの補正（フッターの「補正」・Ctrl+Shift+E）: その画像を 1 枚表示で開き、補正パネルを出す。
+    /// 1 枚表示で別の画像を見ていて、保存していない補正があれば先に聞く
+    /// </summary>
+    private async void OpenAdjustInViewer(string path)
+    {
+        if (!string.Equals(_quickLook.CurrentPath, path, StringComparison.OrdinalIgnoreCase))
+        {
+            if (_quickLook.Visible && !await _quickLook.ConfirmLeaveAsync()) return;
+            var items = ViewItems;
+            int view = -1;
+            for (int i = 0; i < items.Count; i++)
+            {
+                if (!string.Equals(items[i].FullName, path, StringComparison.OrdinalIgnoreCase)) continue;
+                view = i;
+                break;
+            }
+            if (view < 0) return;
+            _grid.SelectImage(ToGridIndex(view));
+            _quickLook.Open(items, view, byKey: false);
+        }
+        _quickLook.OpenAdjust();
+    }
+
     // ---- 1 枚表示・2 枚比較に渡す並び（画像だけ。画像以外のファイルは飛ばす） ----
 
     // 一覧の中身が入れ替わったら、次に使うときに作り直す（一覧からの通知の順番に頼らない）
@@ -1349,7 +1373,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         _registry.Register(new CropCommand(this));
         _registry.Register(new MaskCommand(this));
         _registry.Register(new AnnotateCommand(this));
-        _registry.Register(new AdjustCommand(this, this));
+        _registry.Register(new AdjustCommand(this, this, OpenAdjustInViewer));
         _registry.Register(new RotateCommand(this, RotateDirection.Right90));
         _registry.Register(new RotateCommand(this, RotateDirection.Left90));
         _registry.Register(new RotateCommand(this, RotateDirection.Half));

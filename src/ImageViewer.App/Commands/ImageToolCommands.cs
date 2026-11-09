@@ -132,8 +132,11 @@ public sealed class AnnotateCommand(Form owner) : ImageCommandBase
     }
 }
 
-/// <summary>選んだ画像にまとめて色調補正をかける。値は 1 枚表示の補正と「前回の補正」を共有する</summary>
-public sealed class AdjustCommand(Form owner, ISettingsAccess settings) : ImageCommandBase
+/// <summary>
+/// 色調補正。1 枚なら 1 枚表示で開いて補正パネルを出し（openSingle）、2 枚以上なら「まとめて補正」のダイアログを出す。
+/// 値は 1 枚表示の補正と「前回の補正」を共有する
+/// </summary>
+public sealed class AdjustCommand(Form owner, ISettingsAccess settings, Action<string> openSingle) : ImageCommandBase
 {
     public override string Id => "image.adjust";
     public override string Name => "補正...";
@@ -141,6 +144,12 @@ public sealed class AdjustCommand(Form owner, ISettingsAccess settings) : ImageC
 
     public override Task ExecuteAsync(CommandContext context)
     {
+        // 1 枚だけなら、100% で確かめられる 1 枚表示の補正を使う（入口が 2 つで画面が違うとややこしいため）
+        if (context.Paths.Count == 1)
+        {
+            openSingle(context.Paths[0]);
+            return Task.CompletedTask;
+        }
         using var dialog = new AdjustBatchDialog(context.Paths, settings.Settings.LastAdjust?.Normalize(), settings.Settings.AdjustBatch ?? new AdjustBatchOptions());
         dialog.ShowDialog(owner);
         if (dialog.UsedOptions is { } used)
