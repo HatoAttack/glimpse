@@ -1,4 +1,4 @@
-// まとめて補正のダイアログ（一覧のフッターの「補正」から）。
+// まとめて補正のダイアログ（画像を 2 枚以上選んで、一覧のフッターの「補正」・Ctrl+Shift+E から。1 枚なら 1 枚表示の補正パネルを使う）。
 // 左に代表の 1 枚（◀ ▶ で選んだ画像を切り替えて確かめられる）、右に 1 枚表示と同じ補正パネル、下に「元 → 出力」の一覧と、出力先・ボタン。
 // プレビューは画面の大きさに縮小して読んだものに補正をかける（保存は原寸で読み直してかける）
 using ImageViewer.App.Theming;
@@ -66,7 +66,7 @@ public sealed class AdjustBatchDialog : ThemedForm
     public AdjustBatchDialog(IReadOnlyList<string> paths, AdjustOptions? last, AdjustBatchOptions initial)
     {
         _paths = paths;
-        Text = $"補正（{paths.Count} 枚）";
+        Text = $"まとめて補正（{paths.Count} 枚）";
         Font = new Font("Yu Gothic UI", 9F);
         StartPosition = FormStartPosition.CenterParent;
         MinimizeBox = false;

@@ -12,7 +12,8 @@
 //   一度出したら閉じるまで出したまま。Space を押し続けて見ているときは出さない。クリックでその画像へ
 // - GIF / WEBP のアニメは再生する（先に先頭のコマの静止画を見せ、裏で全部のコマを読む）。P で止める / 再開、, . で 1 コマずつ、
 //   Ctrl+S で今のコマを原寸の PNG で保存（フレーム保存）。持つのは今の画像のコマだけで、次の画像へ移る・閉じると捨てる
-// - E で右側に補正パネル。表示中の画像にそのままかけて見せ（100% でも）、Ctrl+S / 「保存」で元のファイルを上書きする。
+// - E で右側に補正パネル（一覧で 1 枚選んで「補正」・Ctrl+Shift+E でも）。表示中の画像にそのままかけて見せ（100% でも）、
+//   Ctrl+S / 「保存」で元のファイルを上書き、Ctrl+Shift+S / 「別名で保存」で保存先を選んで書く。
 //   保存していない補正があるまま送る・閉じる・パネルを閉じるときは、保存するか聞く。アニメでは開かない
 using System.Diagnostics;
 using System.Runtime.InteropServices;
@@ -109,6 +110,9 @@ public sealed class QuickLookView : Control
     public bool IsOpen => Visible;
     public int CurrentIndex => _index;
 
+    /// <summary>表示中の画像のパス（閉じていれば null）</summary>
+    public string? CurrentPath => Visible && !_closing && _index >= 0 && _index < _items.Count ? _items[_index].FullName : null;
+
     public QuickLookView()
     {
         SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint
@@ -123,6 +127,7 @@ public sealed class QuickLookView : Control
         Adjust.OptionsChanged += (_, _) => Invalidate();
         Adjust.AutoRequested += (_, _) => RunAuto();
         Adjust.SaveRequested += (_, _) => _ = SaveAdjustAsync();
+        Adjust.SaveAsRequested += (_, _) => _ = SaveAdjustAsAsync();
         Adjust.CompareChanged += (_, on) =>
         {
             _comparing = on;
@@ -145,6 +150,7 @@ public sealed class QuickLookView : Control
         if (_closing) FinishClose();
         _items = items;
         _openedByKey = byKey;
+        _adjustAfterZoom = false;
         HideFilmstrip();
         _spaceReleased = !byKey;
         _openedFor.Restart();
@@ -486,6 +492,11 @@ public sealed class QuickLookView : Control
         _backdrop?.Dispose();
         _backdrop = null;
         Invalidate();
+        if (_adjustAfterZoom)
+        {
+            _adjustAfterZoom = false;
+            if (Visible && !Adjust.Visible) ToggleAdjust();
+        }
     }
 
     private void OnZoomTick(object? sender, EventArgs e)
@@ -1005,7 +1016,8 @@ public sealed class QuickLookView : Control
 
     private const Keys AdjustKey = Keys.E;
     private const Keys SaveKey = Keys.Control | Keys.S;
-    private bool _comparing;                                  // 「補正前」を押している間
+    private const Keys SaveAsKey = Keys.Control | Keys.Shift | Keys.S;
+    private bool _comparing;                                 // 「補正前」を押している間
     private readonly AdjustedBitmap _adjustedView = new();    // 画面に合わせて読んだ画像に補正をかけたもの
     private readonly AdjustedBitmap _adjustedFull = new();    // 100% 用に原寸で読んだ画像の、見えている範囲に補正をかけたもの
 
@@ -1016,6 +1028,20 @@ public sealed class QuickLookView : Control
     public bool HasUnsavedAdjust => Adjust.Visible && !Adjust.Options.IsIdentity;
 
     private Image Adjusted(Bitmap source, AdjustedBitmap cache) => Adjusting ? cache.Get(source, Adjust.Options) : source;
+
+    private bool _adjustAfterZoom; // 開く動きが止まったら補正パネルを開く（一覧の「補正」から開いたとき）
+
+    /// <summary>補正パネルを開く（一覧で 1 枚選んで「補正」したとき）。開く動きの途中なら、止まってから開く</summary>
+    public void OpenAdjust()
+    {
+        if (!Visible || _closing || Adjust.Visible) return;
+        if (_zooming)
+        {
+            _adjustAfterZoom = true;
+            return;
+        }
+        ToggleAdjust();
+    }
 
     private async void ToggleAdjust()
     {
@@ -1084,17 +1110,66 @@ public sealed class QuickLookView : Control
     }
 
     /// <summary>
+    /// 別名で保存: 保存先を選んで、補正をかけた画像を書く（元のファイルはそのまま）。形式は選んだ拡張子で決まる。
+    /// 元のファイルを選んだときは上書きと同じ
+    /// </summary>
+    private async Task<bool> SaveAdjustAsAsync()
+    {
+        if (!HasUnsavedAdjust || Adjust.Saving || _index < 0) return false;
+        string source = _items[_index].FullName;
+        string folder = Path.GetDirectoryName(source)!;
+        string ext = ImageSaver.ExtensionFor(OutputFormat.Keep, Path.GetExtension(source));
+        using var dialog = new SaveFileDialog
+        {
+            Title = "補正した画像の保存先",
+            InitialDirectory = folder,
+            FileName = Path.GetFileName(ImageSaver.UniquePath(Path.Combine(folder, Path.GetFileNameWithoutExtension(source) + "_adjust" + ext))),
+            Filter = SaveAsFilter(ext, out int filterIndex),
+            FilterIndex = filterIndex,
+            DefaultExt = ext.TrimStart('.'),
+            AddExtension = true,
+            OverwritePrompt = true,
+        };
+        var answer = dialog.ShowDialog(FindForm());
+        Focus();
+        if (answer != DialogResult.OK) return false;
+        // ダイアログの間に別の画像へ移った・パネルを閉じたなら保存しない
+        if (_index < 0 || !string.Equals(_items[_index].FullName, source, StringComparison.OrdinalIgnoreCase)) return false;
+        string target = dialog.FileName;
+        if (!ImageSaver.CanWrite(Path.GetExtension(target)))
+        {
+            ShowNotice($"{Path.GetExtension(target)} の形式では保存できません");
+            return false;
+        }
+        return await SaveAdjustAsync(SourceGuard.IsSameFile(source, target) ? null : target);
+    }
+
+    /// <summary>別名で保存の形式の一覧（元の形式を先頭の候補にする）</summary>
+    private static string SaveAsFilter(string ext, out int index)
+    {
+        var formats = new (string Name, string Pattern)[]
+        {
+            ("JPEG", "*.jpg;*.jpeg"), ("PNG", "*.png"), ("WEBP", "*.webp"), ("BMP", "*.bmp"), ("TIFF", "*.tif;*.tiff"),
+            ("GIF", "*.gif"), ("QOI", "*.qoi"),
+        };
+        int at = Array.FindIndex(formats, f => f.Pattern.Split(';').Contains("*" + ext, StringComparer.OrdinalIgnoreCase));
+        index = (at < 0 ? 0 : at) + 1; // FilterIndex は 1 から
+        return string.Join("|", formats.Select(f => $"{f.Name}|{f.Pattern}"));
+    }
+
+    /// <summary>
     /// 今の画像に補正をかけて保存する。書き出せる形式なら上書き、HEIC / RAW などは元を残して同じ名前の JPG に。
+    /// saveAs を渡したら、そこへ書く（元のファイルはそのまま。あれば置き換える。ダイアログで確かめてある）。
     /// 撮影情報（EXIF）を残せない画像は、先に確かめる。保存できたら true
     /// </summary>
-    private async Task<bool> SaveAdjustAsync()
+    private async Task<bool> SaveAdjustAsync(string? saveAs = null)
     {
         if (!HasUnsavedAdjust || Adjust.Saving || _index < 0) return false;
         string source = _items[_index].FullName;
         var options = Adjust.Options;
         // 上書きするのは元のファイルだけ。JPG を別に作るときは、保存している間にほかで同じ名前ができても上書きせず、次の名前にする
-        bool overwrite = ImageSaver.CanWrite(Path.GetExtension(source));
-        string target = overwrite ? source : ImageSaver.UniquePath(Path.ChangeExtension(source, ".jpg"));
+        bool overwrite = saveAs != null || ImageSaver.CanWrite(Path.GetExtension(source));
+        string target = saveAs ?? (overwrite ? source : ImageSaver.UniquePath(Path.ChangeExtension(source, ".jpg")));
         Adjust.Saving = true;
         try
         {
@@ -1380,6 +1455,11 @@ public sealed class QuickLookView : Control
         if (keyData == SaveKey && Visible && !_closing && Adjust.Visible)
         {
             _ = SaveAdjustAsync();
+            return true;
+        }
+        if (keyData == SaveAsKey && Visible && !_closing && Adjust.Visible)
+        {
+            _ = SaveAdjustAsAsync();
             return true;
         }
         if (keyData == SaveFrameKey && Visible && !_closing && _animFrames != null)

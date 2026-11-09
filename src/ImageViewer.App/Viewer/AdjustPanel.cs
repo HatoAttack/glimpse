@@ -14,7 +14,7 @@ public sealed class AdjustPanel : ScrollableControl
 
     private readonly List<SliderRow> _rows = new();
     private readonly SliderRow _brightness, _contrast, _saturation, _temperature, _black, _white, _gamma;
-    private readonly PanelButton _auto, _last, _reset, _compare, _save;
+    private readonly PanelButton _auto, _last, _reset, _compare, _save, _saveAs;
     private bool _updating, _levelsEnabled = true;
     private int _levelsTop;
 
@@ -26,6 +26,9 @@ public sealed class AdjustPanel : ScrollableControl
 
     /// <summary>「保存」が押された</summary>
     public event EventHandler? SaveRequested;
+
+    /// <summary>「別名で保存」が押された</summary>
+    public event EventHandler? SaveAsRequested;
 
     /// <summary>「補正前」を押している間 true</summary>
     public event EventHandler<bool>? CompareChanged;
@@ -98,11 +101,14 @@ public sealed class AdjustPanel : ScrollableControl
         _save = AddButton("保存（上書き）  Ctrl+S", "補正した画像で元のファイルを上書きします");
         _save.Primary = true;
         _save.Visible = showSave;
+        _saveAs = AddButton("別名で保存...  Ctrl+Shift+S", "保存先を選んで、補正した画像を書きます（元のファイルはそのまま）");
+        _saveAs.Visible = showSave;
 
         _auto.Click += (_, _) => AutoRequested?.Invoke(this, EventArgs.Empty);
         _last.Click += (_, _) => { if (Last != null) Options = Last; };
         _reset.Click += (_, _) => Options = new AdjustOptions();
         _save.Click += (_, _) => SaveRequested?.Invoke(this, EventArgs.Empty);
+        _saveAs.Click += (_, _) => SaveAsRequested?.Invoke(this, EventArgs.Empty);
         _compare.MouseDown += (_, e) => { if (e.Button == MouseButtons.Left) CompareChanged?.Invoke(this, true); };
         _compare.MouseUp += (_, _) => CompareChanged?.Invoke(this, false);
         _compare.MouseCaptureChanged += (_, _) => { if (!_compare.Capture) CompareChanged?.Invoke(this, false); };
@@ -194,9 +200,9 @@ public sealed class AdjustPanel : ScrollableControl
 
     private void UpdateButtons()
     {
-        if (_save == null) return; // 作っている途中
+        if (_saveAs == null) return; // 作っている途中
         bool identity = Options.IsIdentity;
-        _save.Enabled = !identity && !_saving;
+        _save.Enabled = _saveAs.Enabled = !identity && !_saving;
         _reset.Enabled = !identity && !_saving;
         _compare.Enabled = !identity || !_levelsEnabled; // 1 枚ずつ自動で決めるときは、値が既定のままでも変わる
         _auto.Enabled = !_saving && _levelsEnabled;
@@ -212,7 +218,7 @@ public sealed class AdjustPanel : ScrollableControl
     protected override void OnLayout(LayoutEventArgs levent)
     {
         base.OnLayout(levent);
-        if (_save == null) return;
+        if (_saveAs == null) return;
         // 位置は中身の上端から数える（LabelTop・_levelsTop も）。部品は今のスクロールの分ずらして置く（AutoScrollPosition.Y は 0 か負）
         int x = Pad, width = Math.Max(1, ClientSize.Width - Pad * 2), top = AutoScrollPosition.Y;
         Rectangle At(int left, int y, int w, int h) => new(left, y + top, w, h);
@@ -243,6 +249,8 @@ public sealed class AdjustPanel : ScrollableControl
         {
             y += Gap * 2;
             _save.Bounds = At(x, y, width, ButtonHeight);
+            y += ButtonHeight + Gap;
+            _saveAs.Bounds = At(x, y, width, ButtonHeight);
             y += ButtonHeight;
         }
         // 中身の高さ（ウィンドウがこれより低ければスクロールバーが出る）
