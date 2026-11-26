@@ -47,7 +47,10 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
     private readonly FolderOrderStore _orderStore = FolderOrderStore.CreateDefault();
     private readonly List<(ToolStripMenuItem Item, SortMode Mode)> _sortItems = new();
+    private readonly List<(ToolStripMenuItem Item, bool Descending)> _directionItems = new();
     private SortMode _sortMode = SortMode.Name;
+    // 自動で並べるときの並び順と向き（設定に覚える。手動の並びを保存していないフォルダはこれで開く）
+    private SortPreference _autoSort;
 
     // 直前の名前の変更（元に戻す用）。変更前の手動の並び順と並び順の種類も一緒に覚えておく
     private (IReadOnlyList<RenameOp> Ops, IReadOnlyList<string>? SavedOrder, SortMode Mode)? _lastRename;
@@ -125,6 +128,8 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         AllowDrop = true;
 
         _settings = _settingsStore.Load();
+        _autoSort = SortPreference.From(_settings.SortMode, _settings.SortDescending);
+        _sortMode = _autoSort.Mode;
         Theme.Initialize(Theme.ParseMode(_settings.Theme));
         ApplySaveQuality();
         ApplyListingSettings();
@@ -1553,19 +1558,35 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             items.Add(item);
         }
         items.Add(new ToolStripSeparator());
+        foreach (var (label, descending) in new[] { ("昇順(&A)", false), ("降順(&E)", true) })
+        {
+            var item = new ToolStripMenuItem(label, null, async (_, _) => await ChangeSortDirectionAsync(descending));
+            _directionItems.Add((item, descending));
+            items.Add(item);
+        }
+        items.Add(new ToolStripSeparator());
         items.Add(new ToolStripMenuItem("手動の並び順を削除(&R)", null, async (_, _) => await DeleteManualOrderAsync()));
     }
 
     private void UpdateSortChecks()
     {
         foreach (var (item, mode) in _sortItems) item.Checked = mode == _sortMode;
-        _sortButton.Text = _sortMode switch
+        // 手動の並びには向きが無い
+        bool manual = _sortMode == SortMode.Manual;
+        foreach (var (item, descending) in _directionItems)
+        {
+            item.Enabled = !manual;
+            item.Checked = !manual && descending == _autoSort.Descending;
+        }
+        string name = _sortMode switch
         {
             SortMode.Modified => "更新日時順",
             SortMode.Size => "サイズ順",
             SortMode.Manual => "手動の並び",
             _ => "名前順",
         };
+        // エクスプローラーと同じく ↑ が昇順、↓ が降順
+        _sortButton.Text = manual ? name : $"{name} {(_autoSort.Descending ? "↓" : "↑")}";
         _toolbar.PerformLayout();
     }
 
@@ -1830,7 +1851,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
     /// <summary>
     /// 名前の変更を画面・チェック・手動の並び順に反映する。
-    /// 手動の並びで、変更後の名前順と並びが一致したら（並べ替え → 連番の振り直しが済んだ）保存した並び順は消して名前順に戻す。
+    /// 手動の並びで、変更後の名前順（今の向き）と並びが一致したら（並べ替え → 連番の振り直しが済んだ）保存した並び順は消して名前順に戻す。
     /// restore を渡したとき（元に戻す）は、変更前の並び順と種類をそのまま復元する
     /// </summary>
     private void ApplyRenamed(IReadOnlyList<RenameOp> ops, (IReadOnlyList<string>? SavedOrder, SortMode Mode)? restore)
@@ -1852,7 +1873,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
             else if (_sortMode == SortMode.Manual)
             {
                 var names = items.Select(f => f.Name).ToList();
-                if (names.SequenceEqual(FileSorting.Sort(items, SortMode.Name).Select(f => f.Name)))
+                if (names.SequenceEqual(FileSorting.Sort(items, SortMode.Name, _autoSort.Descending).Select(f => f.Name)))
                 {
                     _orderStore.Delete(_folder);
                     _sortMode = SortMode.Name;
@@ -1870,7 +1891,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
 
         UpdateSortChecks();
         var saved = _sortMode == SortMode.Manual ? _orderStore.Load(_folder) : null;
-        _grid.SetItems(FolderLoader.Arrange(items, _sortMode, saved), reload: true, renamed: map);
+        _grid.SetItems(FolderLoader.Arrange(items, _sortMode, saved, _autoSort.Descending), reload: true, renamed: map);
         _undoItem.Enabled = _lastRename != null;
         _undoItem.Text = _lastRename != null ? "元に戻す: 名前の変更(&U)" : "元に戻す(&U)";
     }
@@ -2001,7 +2022,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         FolderContents? contents;
         try
         {
-            contents = await _loader.LoadAsync(folder, reload, _sortMode);
+            contents = await _loader.LoadAsync(folder, reload, _sortMode, _autoSort);
         }
         catch (Exception ex)
         {
@@ -2048,11 +2069,32 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
     private async Task ChangeSortAsync(SortMode mode)
     {
         _sortMode = mode;
+        // 手動以外は、手動の並びを保存していないフォルダでも次から使うように覚える
+        if (mode != SortMode.Manual) RememberAutoSort(_autoSort with { Mode = mode });
         UpdateSortChecks();
         if (_folder == null) return;
         string folder = _folder;
         var saved = mode == SortMode.Manual ? await Task.Run(() => _orderStore.Load(folder)) : null;
-        _grid.SetItems(FolderLoader.Arrange(_grid.Items, mode, saved), reload: true);
+        _grid.SetItems(FolderLoader.Arrange(_grid.Items, mode, saved, _autoSort.Descending), reload: true);
+    }
+
+    /// <summary>昇順 / 降順を変える（手動の並びのときは使えない）</summary>
+    private async Task ChangeSortDirectionAsync(bool descending)
+    {
+        if (_sortMode == SortMode.Manual) return;
+        RememberAutoSort(_autoSort with { Descending = descending });
+        await ChangeSortAsync(_sortMode);
+    }
+
+    private void RememberAutoSort(SortPreference sort)
+    {
+        if (sort == _autoSort) return;
+        _autoSort = sort;
+        ((ISettingsAccess)this).UpdateSettings(s => s with
+        {
+            SortMode = sort.Mode == SortMode.Name ? null : sort.Mode,
+            SortDescending = sort.Descending ? true : null,
+        });
     }
 
     /// <summary>ドラッグで並べ替えた: 手動に切り替えて今の並びを保存</summary>
@@ -2078,7 +2120,7 @@ public class MainForm : Form, ICommandHost, ISettingsAccess
         if (_folder == null) return;
         _orderStore.Delete(_folder);
         Notify("手動の並び順を削除しました");
-        if (_sortMode == SortMode.Manual) await ChangeSortAsync(SortMode.Name);
+        if (_sortMode == SortMode.Manual) await ChangeSortAsync(_autoSort.Mode);
     }
 
     private static string? DroppedFolder(DragEventArgs e) =>

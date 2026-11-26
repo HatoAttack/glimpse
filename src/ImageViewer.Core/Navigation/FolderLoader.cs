@@ -10,13 +10,13 @@ public sealed record FolderContents(List<DirectoryInfo> Folders, List<ImageFile>
 
 public sealed class FolderLoader
 {
-    private readonly Func<string, bool, SortMode, CancellationToken, FolderContents> _read;
+    private readonly Func<string, bool, SortMode, SortPreference, CancellationToken, FolderContents> _read;
     private CancellationTokenSource? _cts;
 
-    public FolderLoader(FolderOrderStore orderStore) : this((folder, reload, mode, ct) => Read(folder, reload, mode, orderStore, ct)) { }
+    public FolderLoader(FolderOrderStore orderStore) : this((folder, reload, mode, auto, ct) => Read(folder, reload, mode, auto, orderStore, ct)) { }
 
-    /// <param name="read">一覧を読む処理（フォルダ, 読み直しか, 今の並び順, 打ち切り）。テストで差し替える</param>
-    public FolderLoader(Func<string, bool, SortMode, CancellationToken, FolderContents> read) => _read = read;
+    /// <param name="read">一覧を読む処理（フォルダ, 読み直しか, 今の並び順, 自動で並べるときの並び順と向き, 打ち切り）。テストで差し替える</param>
+    public FolderLoader(Func<string, bool, SortMode, SortPreference, CancellationToken, FolderContents> read) => _read = read;
 
     /// <summary>1 度でも読み込みを頼んだか</summary>
     public bool Started => _cts != null;
@@ -26,13 +26,14 @@ public sealed class FolderLoader
     /// 読んでいる間に次の読み込みが頼まれていたら、読めていても・失敗していても null（古い結果もエラーも画面に出さない）
     /// </summary>
     /// <param name="reload">今開いているフォルダの読み直し（並び順は currentMode のまま）</param>
-    public async Task<FolderContents?> LoadAsync(string folder, bool reload, SortMode currentMode)
+    /// <param name="auto">自動で並べるときの並び順と向き（別のフォルダを開いたときの並び順と、手動以外のときの向き）</param>
+    public async Task<FolderContents?> LoadAsync(string folder, bool reload, SortMode currentMode, SortPreference auto = default)
     {
         _cts?.Cancel();
         var cts = _cts = new CancellationTokenSource();
         try
         {
-            var contents = await Task.Run(() => _read(folder, reload, currentMode, cts.Token), cts.Token);
+            var contents = await Task.Run(() => _read(folder, reload, currentMode, auto, cts.Token), cts.Token);
             // 打ち切りを見ない所（並び順の読み込みなど）まで進んでいた読み込みは、打ち切った後でも読み終わる
             return IsLatest(cts) ? contents : null;
         }
@@ -49,9 +50,9 @@ public sealed class FolderLoader
     private bool IsLatest(CancellationTokenSource cts) => ReferenceEquals(_cts, cts);
 
     /// <summary>
-    /// 別のフォルダを開いたときは、手動の並び順が保存されていれば手動、無ければ名前順で始める
+    /// 別のフォルダを開いたときは、手動の並び順が保存されていれば手動、無ければ auto の並び順で始める
     /// </summary>
-    private static FolderContents Read(string folder, bool reload, SortMode currentMode, FolderOrderStore orderStore, CancellationToken ct)
+    private static FolderContents Read(string folder, bool reload, SortMode currentMode, SortPreference auto, FolderOrderStore orderStore, CancellationToken ct)
     {
         bool archive = ArchivePath.TrySplit(folder, out string zip, out string inner);
         List<ImageFile> listed;
@@ -82,14 +83,14 @@ public sealed class FolderLoader
             subfolders.AddRange(FolderListing.ListArchives(folder, ct));
         }
         var saved = orderStore.Load(folder);
-        var mode = reload ? currentMode : saved != null ? SortMode.Manual : SortMode.Name;
-        return new(subfolders, Arrange(listed, mode, saved), mode, archive);
+        var mode = reload ? currentMode : saved != null ? SortMode.Manual : auto.Mode;
+        return new(subfolders, Arrange(listed, mode, saved, auto.Descending), mode, archive);
     }
 
-    /// <summary>並び順を当てる。手動は保存した並び（無ければ名前順）</summary>
-    public static List<ImageFile> Arrange(IReadOnlyList<ImageFile> files, SortMode mode, IReadOnlyList<string>? savedOrder)
+    /// <summary>並び順を当てる。手動は保存した並び（無ければ名前の昇順。向きは見ない）</summary>
+    public static List<ImageFile> Arrange(IReadOnlyList<ImageFile> files, SortMode mode, IReadOnlyList<string>? savedOrder, bool descending = false)
     {
-        var sorted = FileSorting.Sort(files, mode);
+        var sorted = FileSorting.Sort(files, mode, descending);
         return mode == SortMode.Manual && savedOrder != null ? ManualOrder.Apply(sorted, savedOrder) : sorted;
     }
 }

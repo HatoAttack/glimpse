@@ -59,6 +59,15 @@ public sealed record AppSettings
     /// <summary>1 枚表示で詳細パネルを表示する（null は既定 = 表示しない。I キーで切り替え）</summary>
     public bool? QuickLookDetailsVisible { get; init; }
 
+    /// <summary>
+    /// 手動の並びを保存していないフォルダで使う並び順（Name / Modified / Size。null は既定 = 名前順）。
+    /// 最後に選んだものを覚える（手動を選んでも変えない）
+    /// </summary>
+    public Ordering.SortMode? SortMode { get; init; }
+
+    /// <summary>名前・更新日時・サイズ順を降順にする（null は既定 = 昇順）</summary>
+    public bool? SortDescending { get; init; }
+
     /// <summary>画像以外のファイルも一覧に出す（null は既定 = 出さない）</summary>
     public bool? ShowOtherFiles { get; init; }
 

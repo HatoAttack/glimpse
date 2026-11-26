@@ -39,7 +39,7 @@ static class NavigationTests
         // ---- フォルダの読み込み: 続けて別のフォルダを開いたら、最後に頼んだ読み込みの結果だけを返す ----
         using var started = new SemaphoreSlim(0);
         using var release = new ManualResetEventSlim();
-        var loader = new FolderLoader((folder, _, mode, _) =>
+        var loader = new FolderLoader((folder, _, mode, _, _) =>
         {
             if (folder.StartsWith("slow"))
             {
@@ -64,6 +64,24 @@ static class NavigationTests
         bool latestThrew = false;
         try { loader.LoadAsync("slow-broken", false, SortMode.Name).GetAwaiter().GetResult(); } catch (IOException) { latestThrew = true; }
         check(latestThrew, "読み込み: 最後に頼んだ読み込みの失敗は例外で知らせる");
+
+        // ---- フォルダの読み込み: 別のフォルダは覚えた並び順と向きで、手動の並びを保存したフォルダは手動で開く ----
+        string sortRoot = Path.Combine(Path.GetDirectoryName(dir)!, Path.GetFileName(dir) + "_sort"); // dir はこの後サブフォルダの一覧に使うので別の所に作る
+        if (Directory.Exists(sortRoot)) Directory.Delete(sortRoot, recursive: true);
+        string sortDir = Directory.CreateDirectory(Path.Combine(sortRoot, "sort")).FullName;
+        string manualDir = Directory.CreateDirectory(Path.Combine(sortRoot, "sort-manual")).FullName;
+        foreach (var d in new[] { sortDir, manualDir })
+            foreach (var name in new[] { "a.jpg", "b.jpg", "c.jpg" }) File.WriteAllBytes(Path.Combine(d, name), new byte[] { 0 });
+        var sortStore = new FolderOrderStore(Path.Combine(sortRoot, "store"));
+        sortStore.Save(manualDir, new[] { "b.jpg", "c.jpg", "a.jpg" });
+        var realLoader = new FolderLoader(sortStore);
+        string Names(FolderContents? c) => c == null ? "null" : $"{c.Mode}:{string.Join(",", c.Files.Select(f => f.Name))}";
+        var byPreference = realLoader.LoadAsync(sortDir, false, SortMode.Manual, new SortPreference(SortMode.Name, true)).GetAwaiter().GetResult();
+        check(Names(byPreference) == "Name:c.jpg,b.jpg,a.jpg", $"読み込み: 別のフォルダは覚えた並び順と向きで開く（前のフォルダが手動でも） ({Names(byPreference)})");
+        var manualOpened = realLoader.LoadAsync(manualDir, false, SortMode.Name, new SortPreference(SortMode.Name, true)).GetAwaiter().GetResult();
+        check(Names(manualOpened) == "Manual:b.jpg,c.jpg,a.jpg", $"読み込み: 手動の並びを保存したフォルダは手動で開く（向きは見ない） ({Names(manualOpened)})");
+        var reloaded = realLoader.LoadAsync(manualDir, true, SortMode.Size, new SortPreference(SortMode.Size, false)).GetAwaiter().GetResult();
+        check(reloaded?.Mode == SortMode.Size, $"読み込み: 読み直しは今の並び順のまま ({Names(reloaded)})");
 
         // ---- サブフォルダの一覧 ----
         Directory.CreateDirectory(dir);
