@@ -572,7 +572,9 @@ public sealed class MaskDialog : ThemedForm
             double u = (mx - fx) * cos + (my - fy) * sin, v = -(mx - fx) * sin + (my - fy) * cos;
             // 倒した四角の対角の横の差には、倒れの分（縦の差 × tan）が混ざるので足して戻す
             double w = Math.Abs(u + r.Shear * v), h = Math.Abs(v), cx = (fx + mx) / 2, cy = (fy + my) / 2;
-            if (w >= MinSizePx && h >= MinSizePx) _rects[_selected] = r.WithBounds(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2);
+            var resized = r.WithBounds(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2);
+            // マウスを画像の中に収めても、ほかの角は外へ出ることがある。出るなら前の形のまま（傾けていない四角と同じく、角を画像の中に保つ）
+            if (w >= MinSizePx && h >= MinSizePx && resized.StaysInside(r, _stepper.Image!.Width, _stepper.Image.Height)) _rects[_selected] = resized;
             return;
         }
         double x0 = Math.Min(fx, mx), x1 = Math.Max(fx, mx), y0 = Math.Min(fy, my), y1 = Math.Max(fy, my);

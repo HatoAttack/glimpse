@@ -311,6 +311,13 @@ static class EditingTests
         check(slanted.Transformed && slanted.Contains(35, 11) && !slanted.Contains(12, 11) && slanted.Contains(5, 29) && !slanted.Contains(28, 29)
               && slanted.Width == 20 && slanted.Height == 20,
             "倒した四角: 上の辺が右へ、下の辺が左へずれる平行四辺形（幅・高さは変えない）");
+        // 大きさを変えた後の形が画像からはみ出すか（100×100 の画像で 45° 回した 40×40 の正方形）
+        var turned = MaskRegion.Rect(30, 30, 70, 70) with { Angle = 45 };
+        var grown = turned.WithBounds(30, 30, 90, 90); // 下の角を引いて大きくした: 四隅が画像の外へ出る
+        var overEdge = MaskRegion.Rect(80, 30, 120, 70) with { Angle = 45 };
+        check(turned.StaysInside(turned, 100, 100) && !grown.StaysInside(turned, 100, 100)
+              && overEdge.WithBounds(85, 35, 115, 65).StaysInside(overEdge, 100, 100) && !overEdge.WithBounds(80, 30, 130, 80).StaysInside(overEdge, 100, 100),
+            "傾けた四角: 大きさを変えて画像の外へ出るなら変えない（既にはみ出していれば、それより外へ出なければよい）");
         check(!MaskRegion.Rect(0, 0, 10, 10).Transformed && !(new MaskRegion(MaskShape.Ellipse, 0, 0, 10, 10) with { Angle = 30 }).Transformed,
             "傾けていない四角と、四角以外は傾けない");
         using (var img = Checker())

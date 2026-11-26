@@ -67,6 +67,19 @@ public sealed record MaskRegion(MaskShape Shape, double X0, double Y0, double X1
         }
     }
 
+    /// <summary>
+    /// 形を変えた後の範囲が、width × height の画像からはみ出さないか（四隅が収まる四角で見る）。
+    /// 前の範囲 before が既にはみ出していた辺は、それより外へ出なければよい（はみ出した範囲を縮めて戻せるように）
+    /// </summary>
+    public bool StaysInside(MaskRegion before, int width, int height)
+    {
+        const double eps = 1e-6;
+        var (left, top, right, bottom) = Bounds;
+        var (bl, bt, br, bb) = before.Bounds;
+        return left >= Math.Min(0, bl) - eps && top >= Math.Min(0, bt) - eps
+               && right <= Math.Max(width, br) + eps && bottom <= Math.Max(height, bb) + eps;
+    }
+
     /// <summary>形を変えずに動かす</summary>
     public MaskRegion Offset(double dx, double dy) => WithBounds(X0 + dx, Y0 + dy, X1 + dx, Y1 + dy);
 
