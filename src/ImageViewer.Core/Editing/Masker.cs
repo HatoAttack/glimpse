@@ -1,4 +1,4 @@
-// モザイク・ぼかし。画像の中の選んだ範囲（いくつでも。四角・楕円・自由な形）だけにかける。
+// モザイク・ぼかし。画像の中の選んだ範囲（いくつでも。四角（傾け・倒しもできる）・楕円・自由な形）だけにかける。
 // 保存先が元のファイルなら上書きする（切り抜きの上書きと同じ条件で）
 using ImageViewer.Core.Imaging;
 using SkiaSharp;
@@ -11,13 +11,77 @@ public enum MaskEffect { Mosaic, Blur, BoxBlur, Fill }
 public enum MaskShape { Rectangle, Ellipse, Freehand }
 
 /// <summary>
-/// モザイク・ぼかしをかける範囲（画像座標）。X0〜X1 / Y0〜Y1 は外枠。
+/// モザイク・ぼかしをかける範囲（画像座標）。X0〜X1 / Y0〜Y1 は外枠（四角を傾けたときは、傾ける前の四角）。
 /// 自由な形（Freehand）の Points は外枠に対する割合（0〜1）なので、外枠を動かす・大きさを変える・引き継ぐだけで形が付いてくる
 /// </summary>
 public sealed record MaskRegion(MaskShape Shape, double X0, double Y0, double X1, double Y1, IReadOnlyList<(double X, double Y)>? Points = null)
 {
     public double Width => X1 - X0;
     public double Height => Y1 - Y0;
+
+    /// <summary>四角の傾き（度。時計回りが正）。傾ける前の四角の中心を軸に回す。四角のほかは使わない（赤枠の Annotation.Angle と同じ）</summary>
+    public double Angle { get; init; }
+
+    /// <summary>
+    /// 四角の左右の辺の倒れ（度。-MaxSkew〜MaxSkew。正なら上の辺が右へずれる平行四辺形）。幅・高さは変えない。
+    /// 倒してから Angle だけ回す。四角のほかは使わない（赤枠の Annotation.Skew と同じ）
+    /// </summary>
+    public double Skew { get; init; }
+
+    public const double MaxSkew = Annotator.MaxSkew;
+
+    /// <summary>左右の辺の倒れの tan（縦に 1 進むと横にどれだけずれるか）</summary>
+    public double Shear => Shape == MaskShape.Rectangle ? Math.Tan(Math.Clamp(Skew, -MaxSkew, MaxSkew) * Math.PI / 180) : 0;
+
+    /// <summary>傾けたか倒した四角か（false なら画像の縦横にそろった四角か、四角以外）</summary>
+    public bool Transformed => Shape == MaskShape.Rectangle && (Angle % 360 != 0 || Shear != 0);
+
+    public (double X, double Y) Center => ((X0 + X1) / 2, (Y0 + Y1) / 2);
+
+    /// <summary>傾ける前の四角での位置（中心からの横 u・縦 v）を、画像の位置にする</summary>
+    public (double X, double Y) FromLocal(double u, double v)
+    {
+        double rad = (Shape == MaskShape.Rectangle ? Angle : 0) * Math.PI / 180, cos = Math.Cos(rad), sin = Math.Sin(rad);
+        var (cx, cy) = Center;
+        return (cx + u * cos - v * sin, cy + u * sin + v * cos);
+    }
+
+    /// <summary>四隅（倒して傾けた後。左上・右上・右下・左下の順。四角以外は外枠の四隅）</summary>
+    public (double X, double Y)[] Corners
+    {
+        get
+        {
+            double hx = Width / 2, hy = Height / 2, s = Shear * hy; // 上の辺は右へ s、下の辺は左へ s ずれる
+            return new[] { FromLocal(-hx + s, -hy), FromLocal(hx + s, -hy), FromLocal(hx - s, hy), FromLocal(-hx - s, hy) };
+        }
+    }
+
+    /// <summary>形が収まる四角（傾けた・倒した四角は四隅が収まる四角）</summary>
+    public (double Left, double Top, double Right, double Bottom) Bounds
+    {
+        get
+        {
+            if (!Transformed) return (X0, Y0, X1, Y1);
+            var c = Corners;
+            return (c.Min(p => p.X), c.Min(p => p.Y), c.Max(p => p.X), c.Max(p => p.Y));
+        }
+    }
+
+    /// <summary>
+    /// 形を変えた後の範囲が、width × height の画像からはみ出さないか（四隅が収まる四角で見る）。
+    /// 前の範囲 before が既にはみ出していた辺は、それより外へ出なければよい（はみ出した範囲を縮めて戻せるように）
+    /// </summary>
+    public bool StaysInside(MaskRegion before, int width, int height)
+    {
+        const double eps = 1e-6;
+        var (left, top, right, bottom) = Bounds;
+        var (bl, bt, br, bb) = before.Bounds;
+        return left >= Math.Min(0, bl) - eps && top >= Math.Min(0, bt) - eps
+               && right <= Math.Max(width, br) + eps && bottom <= Math.Max(height, bb) + eps;
+    }
+
+    /// <summary>形を変えずに動かす</summary>
+    public MaskRegion Offset(double dx, double dy) => WithBounds(X0 + dx, Y0 + dy, X1 + dx, Y1 + dy);
 
     public static MaskRegion Rect(double x0, double y0, double x1, double y1) => new(MaskShape.Rectangle, x0, y0, x1, y1);
 
@@ -34,7 +98,10 @@ public sealed record MaskRegion(MaskShape Shape, double X0, double Y0, double X1
     /// <summary>外枠を置き換える（形はそのまま付いてくる）</summary>
     public MaskRegion WithBounds(double x0, double y0, double x1, double y1) => this with { X0 = x0, Y0 = y0, X1 = x1, Y1 = y1 };
 
-    /// <summary>縦・横それぞれの倍率で拡大・縮小する（表示用の縮小や、大きさの違う画像への引き継ぎ用）</summary>
+    /// <summary>
+    /// 縦・横それぞれの倍率で拡大・縮小する（表示用の縮小や、大きさの違う画像への引き継ぎ用）。
+    /// 傾けた四角は、中心の位置と、傾ける前の幅・高さをそれぞれの倍率で変え、傾きと倒れはそのまま（縦横の倍率が違うときは形が少し変わる）
+    /// </summary>
     public MaskRegion Scale(double sx, double sy) => WithBounds(X0 * sx, Y0 * sy, X1 * sx, Y1 * sy);
 
     /// <summary>自由な形の頂点（画像座標）</summary>
@@ -44,7 +111,8 @@ public sealed record MaskRegion(MaskShape Shape, double X0, double Y0, double X1
     /// <summary>点が範囲の中か（クリックで選ぶとき用）</summary>
     public bool Contains(double x, double y)
     {
-        if (x < X0 || x > X1 || y < Y0 || y > Y1) return false;
+        var (left, top, right, bottom) = Bounds;
+        if (x < left || x > right || y < top || y > bottom) return false;
         switch (Shape)
         {
             case MaskShape.Ellipse:
@@ -53,11 +121,17 @@ public sealed record MaskRegion(MaskShape Shape, double X0, double Y0, double X1
             case MaskShape.Freehand:
                 return Crossings(y).Count(cx => cx <= x) % 2 == 1;
             default:
-                return true;
+                if (!Transformed) return true;
+                // 傾けた四角: 傾ける前の向きへ戻して、倒れの分を戻してから四角の中か見る
+                double rad = Angle * Math.PI / 180, cos = Math.Cos(rad), sin = Math.Sin(rad);
+                var (cx, cy) = Center;
+                double u = (x - cx) * cos + (y - cy) * sin, v = -(x - cx) * sin + (y - cy) * cos;
+                u += Shear * v; // 縦に v 進んだ所では、左右の辺が -Shear × v ずれている
+                return Math.Abs(u) <= Width / 2 && Math.Abs(v) <= Height / 2;
         }
     }
 
-    /// <summary>横の線 y が範囲の境目と交わる x（小さい順）。自由な形は偶奇規則で、楕円は左右の 2 点</summary>
+    /// <summary>横の線 y が範囲の境目と交わる x（小さい順）。自由な形・傾けた四角は偶奇規則で、楕円は左右の 2 点</summary>
     internal List<double> Crossings(double y)
     {
         var xs = new List<double>();
@@ -73,18 +147,11 @@ public sealed record MaskRegion(MaskShape Shape, double X0, double Y0, double X1
                 break;
             }
             case MaskShape.Freehand:
-            {
-                var poly = Polygon().ToList();
-                for (int i = 0; i < poly.Count; i++)
-                {
-                    var a = poly[i];
-                    var b = poly[(i + 1) % poly.Count];
-                    if ((a.Y <= y && y < b.Y) || (b.Y <= y && y < a.Y))
-                        xs.Add(a.X + (y - a.Y) * (b.X - a.X) / (b.Y - a.Y));
-                }
-                xs.Sort();
+                PolygonCrossings(Polygon().ToList(), y, xs);
                 break;
-            }
+            case MaskShape.Rectangle when Transformed:
+                PolygonCrossings(Corners, y, xs);
+                break;
             default:
                 if (y >= Y0 && y < Y1)
                 {
@@ -94,6 +161,19 @@ public sealed record MaskRegion(MaskShape Shape, double X0, double Y0, double X1
                 break;
         }
         return xs;
+    }
+
+    /// <summary>多角形の辺と横の線 y が交わる x を xs に足して、小さい順に並べる</summary>
+    private static void PolygonCrossings(IReadOnlyList<(double X, double Y)> poly, double y, List<double> xs)
+    {
+        for (int i = 0; i < poly.Count; i++)
+        {
+            var a = poly[i];
+            var b = poly[(i + 1) % poly.Count];
+            if ((a.Y <= y && y < b.Y) || (b.Y <= y && y < a.Y))
+                xs.Add(a.X + (y - a.Y) * (b.X - a.X) / (b.Y - a.Y));
+        }
+        xs.Sort();
     }
 }
 
@@ -126,22 +206,23 @@ public static class Masker
         if (size < 2 && effect != MaskEffect.Fill) return;
         foreach (var region in regions)
         {
-            var box = Cropper.ClampBox(region.X0, region.Y0, region.X1, region.Y1, image.Width, image.Height);
+            var (left, top, right, bottom) = region.Bounds;
+            var box = Cropper.ClampBox(left, top, right, bottom, image.Width, image.Height);
             if (box.Width <= 0 || box.Height <= 0) continue;
             if (effect == MaskEffect.Fill)
             {
                 FillRegion(image, region, box);
                 continue;
             }
-            // 範囲を切り出してかけ（範囲の外の画素はぼかしに混ぜない。端の画素が続いているものとして扱う）、
-            // 四角はそのまま、四角以外は形の中の画素だけを戻す
+            // 範囲（傾けた四角は四隅が収まる四角）を切り出してかけ（範囲の外の画素はぼかしに混ぜない。端の画素が続いているものとして扱う）、
+            // 縦横にそろった四角はそのまま、ほかは形の中の画素だけを戻す（モザイクのマスは画像の縦横にそろえたまま）
             using var part = SkiaEdit.Crop(image, box);
             Effect(part, effect, size);
             for (int y = 0; y < box.Height; y++)
             {
                 var dstRow = image.Row(box.Top + y);
                 var srcRow = part.Row(y);
-                if (region.Shape == MaskShape.Rectangle)
+                if (region.Shape == MaskShape.Rectangle && !region.Transformed)
                 {
                     srcRow.CopyTo(dstRow.Slice(box.Left, box.Width));
                     continue;
