@@ -301,6 +301,32 @@ static class EditingTests
         var moved = Masker.CarryRegions(new[] { triangle! }, 40, 40, 80, 80)[0];
         check(moved.Contains(10, 10) && !moved.Contains(70, 70), "自由な形: 大きさの違う画像へ引き継ぐと形ごと伸びる");
 
+        // 傾けた・倒した四角（赤枠と同じ持ち方: 傾ける前の四角と、傾き・左右の辺の倒れ）
+        var diamond = MaskRegion.Rect(10, 10, 30, 30) with { Angle = 45 };
+        var (dl, dt, dr, db) = diamond.Bounds;
+        check(diamond.Transformed && diamond.Contains(20, 20) && diamond.Contains(6.5, 20) && !diamond.Contains(11, 11)
+              && Math.Abs(dl - (20 - 10 * Math.Sqrt(2))) < 1e-9 && Math.Abs(db - (20 + 10 * Math.Sqrt(2))) < 1e-9,
+            $"傾けた四角: 45° 回すとひし形（中・外の判定と、四隅が収まる四角 {dl:0.##},{dt:0.##}〜{dr:0.##},{db:0.##}）");
+        var slanted = MaskRegion.Rect(10, 10, 30, 30) with { Skew = 45 };
+        check(slanted.Transformed && slanted.Contains(35, 11) && !slanted.Contains(12, 11) && slanted.Contains(5, 29) && !slanted.Contains(28, 29)
+              && slanted.Width == 20 && slanted.Height == 20,
+            "倒した四角: 上の辺が右へ、下の辺が左へずれる平行四辺形（幅・高さは変えない）");
+        check(!MaskRegion.Rect(0, 0, 10, 10).Transformed && !(new MaskRegion(MaskShape.Ellipse, 0, 0, 10, 10) with { Angle = 30 }).Transformed,
+            "傾けていない四角と、四角以外は傾けない");
+        using (var img = Checker())
+        {
+            var black = new Px(0, 0, 0);
+            Masker.Apply(img, new[] { diamond }, MaskEffect.Fill, 0);
+            check(img[20, 20] == black && img[7, 20] == black && img[11, 11] == Red && img[29, 10] == Blue,
+                "傾けた四角: 塗りつぶしは形の中だけ（四隅が収まる四角の角は変えない）");
+        }
+        using (var img = Checker())
+        {
+            Masker.Apply(img, new[] { slanted }, MaskEffect.Blur, 8);
+            var inside = img[30, 12];
+            check(inside.R is > 60 and < 200 && img[12, 11] == Blue && img[28, 29] == Blue, $"倒した四角: ぼかしは形の中だけ（{inside}）");
+        }
+
         new TestImage(60, 30, Px.Red).Save(P("mask.png"));
         string maskOut = Masker.OutputPathFor(P("mask.png"), dir, MaskEffect.Mosaic);
         check(maskOut == P("mask_mosaic.png") && Masker.OutputPathFor(P("mask.png"), dir, MaskEffect.Blur) == P("mask_blur.png"),

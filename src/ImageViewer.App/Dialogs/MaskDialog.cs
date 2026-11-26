@@ -1,6 +1,7 @@
 // モザイク・ぼかしダイアログ（切り抜きダイアログと同じ作り）
 // - 画像の上をドラッグで範囲を選ぶ（いくつでも）。形は 四角 / 円・楕円 / 自由（ドラッグでなぞった形）。
 //   範囲の中をドラッグで移動、四隅で大きさを変える（自由な形も外枠ごと伸び縮みする）。選んだ範囲は Delete か右クリックで消す
+// - 四角は赤枠と同じように、外に出る丸いつまみで回し、上下の辺の真ん中のつまみを横に動かして左右の辺を倒せる（1° ごと、Shift で 15° ごと。スライダーは無い）
 // - モザイク / ぼかし / ボックスぼかし / 塗りつぶし（黒）と強さ（1〜10。塗りつぶしは使わない）。表示はかけた後の見た目（縮小した画像にかけるので、細かい所は保存したものと少し違う）
 // - 選択した画像を ◀ ▶（PageUp / PageDown）で切り替え。Enter で保存して次へ。範囲は画像ごとに覚える
 // - 「次の画像も同じ範囲にかける」なら、切り替えても範囲を引き継ぐ（大きさが違う画像には割合で合わせる）。
@@ -40,11 +41,14 @@ public sealed class MaskDialog : ThemedForm
     private readonly PendingEdits<MaskRegion> _edits = new();
     // 引き継ぐ元: 最後に自分で範囲を変えた画像の範囲と、その画像の大きさ
     private (List<MaskRegion> Rects, int Width, int Height)? _anchor;
-    private enum DragMode { None, Move, Resize, Draw }
+    // Rotate: 四角の傾き、Skew: 四角の左右の辺の倒れ
+    private enum DragMode { None, Move, Resize, Draw, Rotate, Skew }
     private DragMode _mode;
     private bool _creating;                // 新しく作っている範囲（小さすぎれば離したときに消す）
     private (double X, double Y) _fixed;   // 大きさを変えるときに動かない角
-    private (double X, double Y) _moveOff;
+    private (double X, double Y) _moveLast; // 移動で最後に動かした所のマウスの位置（画像座標）
+    private double _rotateStartAngle, _rotateStartMouse; // 回し始めたときの四角の傾きと、中心から見たマウスの向き（度）
+    private bool _skewTop;                 // 倒すときにつかんだのが上の辺の真ん中か
     private List<(double X, double Y)>? _path; // 自由な形をなぞっている途中の点（画像座標）
 
     private readonly RadioButton _shapeRect = new() { Text = "四角", AutoSize = true };
@@ -251,8 +255,10 @@ public sealed class MaskDialog : ThemedForm
         _stepper.StepEnabled = !_saver.Busy;
         _selectionInfo.Text = _stepper.Image == null ? ""
             : _rects.Count == 0 ? "画像の上をドラッグして、隠す範囲を選んでください（いくつでも選べます）"
-            : _selected >= 0
-                ? $"範囲 {_rects.Count} 個（選んだ範囲: {Math.Round(_rects[_selected].Width)} × {Math.Round(_rects[_selected].Height)} px）"
+            : _selected >= 0 && _rects[_selected] is var r
+                ? $"範囲 {_rects.Count} 個（選んだ範囲: {Math.Round(r.Width)} × {Math.Round(r.Height)} px"
+                  + (r.Transformed && r.Angle % 360 != 0 ? $"・傾き {Math.Round(r.Angle)}°" : "")
+                  + (r.Transformed && r.Skew != 0 ? $"・斜め {Math.Round(r.Skew)}°" : "") + "）"
                 : $"範囲 {_rects.Count} 個";
     }
 
@@ -359,20 +365,54 @@ public sealed class MaskDialog : ThemedForm
                     if (polygon.Length >= 2) g.DrawPolygon(pen, polygon);
                     break;
                 default:
-                    g.DrawRectangle(pen, fx0, fy0, fx1 - fx0, fy1 - fy0);
+                    // 傾けた・倒した四角も四隅を結ぶ（傾けていなければ、ただの四角になる）
+                    g.DrawPolygon(pen, r.Corners.Select(p => _canvas.ToCanvasPoint(p.X, p.Y)).ToArray());
                     break;
             }
             if (i != _selected) continue;
-            // 選んだ範囲だけ四隅のハンドルを出す（四角以外は外枠も薄く出して、どこを引っ張れば伸びるか分かるように）
+            // 選んだ範囲だけつかむ点を出す（四角以外は外枠も薄く出して、どこを引っ張れば伸びるか分かるように）。四角は回すつまみも出す
             if (r.Shape != MaskShape.Rectangle) g.DrawRectangle(frame, fx0, fy0, fx1 - fx0, fy1 - fy0);
-            _canvas.DrawHandles(g, CornersOf(r));
+            else
+            {
+                var (from, handle) = RotateHandleOf(r);
+                _canvas.DrawRotateHandle(g, from, handle);
+            }
+            _canvas.DrawHandles(g, HandlesOf(r));
         }
         // なぞっている途中の線
         if (_path is { Count: >= 2 } path)
             g.DrawLines(selectedFrame, path.Select(p => _canvas.ToCanvasPoint(p.X, p.Y)).ToArray());
     }
 
-    private static (double X, double Y)[] CornersOf(MaskRegion r) => new[] { (r.X0, r.Y0), (r.X1, r.Y0), (r.X1, r.Y1), (r.X0, r.Y1) };
+    /// <summary>
+    /// 選んだ範囲のつかむ点。0〜3 は四隅（左上・右上・右下・左下）。四角は 4・5 に、左右の辺を倒すための上・下の辺の真ん中も出す
+    /// </summary>
+    private static (double X, double Y)[] HandlesOf(MaskRegion r)
+    {
+        if (r.Shape != MaskShape.Rectangle) return new[] { (r.X0, r.Y0), (r.X1, r.Y0), (r.X1, r.Y1), (r.X0, r.Y1) };
+        double hy = r.Height / 2, s = r.Shear * hy;
+        return r.Corners.Append(r.FromLocal(s, -hy)).Append(r.FromLocal(-s, hy)).ToArray();
+    }
+
+    /// <summary>
+    /// 四角を回すつまみ: 線を引く元（辺の真ん中）とつまみの位置。上の辺の外に出す（キャンバスからはみ出すなら下の辺の外。赤枠と同じ）
+    /// </summary>
+    private ((double X, double Y) From, (double X, double Y) Handle) RotateHandleOf(MaskRegion r)
+    {
+        double hy = r.Height / 2, s = r.Shear * hy, gap = _canvas.HandleRadius * 3 / _canvas.Zoom;
+        var top = r.FromLocal(s, -hy - gap);
+        var (cx, cy) = _canvas.ImageToCanvas(top.X, top.Y);
+        int m = _canvas.HandleRadius;
+        if (cx >= m && cy >= m && cx <= _canvas.ClientSize.Width - m && cy <= _canvas.ClientSize.Height - m) return (r.FromLocal(s, -hy), top);
+        return (r.FromLocal(-s, hy), r.FromLocal(-s, hy + gap));
+    }
+
+    /// <summary>範囲の中心から見た点の向き（度）</summary>
+    private static double AngleAround(MaskRegion r, double x, double y)
+    {
+        var (cx, cy) = r.Center;
+        return Math.Atan2(y - cy, x - cx) * 180 / Math.PI;
+    }
 
     // ---- マウス ----
 
@@ -402,16 +442,30 @@ public sealed class MaskDialog : ThemedForm
         }
         if (e.Button != MouseButtons.Left) return;
 
-        // 選んだ範囲の四隅なら大きさを変える
+        // 選んだ範囲のつかむ点なら形を変える（四角は回すつまみと、倒すための上下の辺の真ん中もある）
         if (_selected >= 0)
         {
-            var corners = CornersOf(_rects[_selected]);
-            for (int i = 0; i < 4; i++)
+            var r = _rects[_selected];
+            _creating = false;
+            if (r.Shape == MaskShape.Rectangle && _canvas.HitsHandle(e.X, e.Y, RotateHandleOf(r).Handle))
             {
-                if (!_canvas.HitsHandle(e.X, e.Y, corners[i])) continue;
+                _mode = DragMode.Rotate;
+                _rotateStartAngle = r.Angle;
+                _rotateStartMouse = AngleAround(r, ix, iy);
+                return;
+            }
+            var handles = HandlesOf(r);
+            for (int i = handles.Length - 1; i >= 0; i--)
+            {
+                if (!_canvas.HitsHandle(e.X, e.Y, handles[i])) continue;
+                if (i >= 4)
+                {
+                    _mode = DragMode.Skew;
+                    _skewTop = i == 4;
+                    return;
+                }
                 _mode = DragMode.Resize;
-                _creating = false;
-                _fixed = corners[(i + 2) % 4]; // 対角を固定
+                _fixed = handles[(i + 2) % 4]; // 対角を固定
                 return;
             }
         }
@@ -422,7 +476,7 @@ public sealed class MaskDialog : ThemedForm
         {
             _selected = target;
             _mode = DragMode.Move;
-            _moveOff = (ix - _rects[target].X0, iy - _rects[target].Y0);
+            _moveLast = (ix, iy);
         }
         else if (CurrentShape == MaskShape.Freehand)
         {
@@ -456,6 +510,8 @@ public sealed class MaskDialog : ThemedForm
         }
         if (_mode == DragMode.None || _stepper.Image == null || _selected < 0) return;
         if (_mode == DragMode.Move) DoMove(e);
+        else if (_mode == DragMode.Rotate) DoRotate(e);
+        else if (_mode == DragMode.Skew) DoSkew(e);
         else DoResize(e);
         RenderPreview();
         UpdateButtons();
@@ -494,21 +550,60 @@ public sealed class MaskDialog : ThemedForm
 
     private void DoMove(MouseEventArgs e)
     {
+        // 画像の外へ出ない範囲で動かす（傾けた四角は四隅が収まる四角で見る。画像より大きければその向きには動かさない）
         var (ix, iy) = _canvas.CanvasToImage(e.X, e.Y);
         var r = _rects[_selected];
-        double rw = r.Width, rh = r.Height;
-        double x0 = Math.Clamp(ix - _moveOff.X, 0, _stepper.Image!.Width - rw);
-        double y0 = Math.Clamp(iy - _moveOff.Y, 0, _stepper.Image.Height - rh);
-        _rects[_selected] = r.WithBounds(x0, y0, x0 + rw, y0 + rh);
+        var (left, top, right, bottom) = r.Bounds;
+        double dx = Math.Clamp(ix - _moveLast.X, Math.Min(0, -left), Math.Max(0, _stepper.Image!.Width - right));
+        double dy = Math.Clamp(iy - _moveLast.Y, Math.Min(0, -top), Math.Max(0, _stepper.Image.Height - bottom));
+        _rects[_selected] = r.Offset(dx, dy);
+        _moveLast = (_moveLast.X + dx, _moveLast.Y + dy);
     }
 
     private void DoResize(MouseEventArgs e)
     {
         var (fx, fy) = _fixed;
+        var r = _rects[_selected];
         var (mx, my) = _canvas.ClampToImage(_canvas.CanvasToImage(e.X, e.Y));
+        if (r.Transformed)
+        {
+            // 傾けた四角は、傾ける前の向きで動かない角からの横・縦の長さを測る（対角の 2 点の真ん中が新しい中心。赤枠と同じ）
+            double rad = r.Angle * Math.PI / 180, cos = Math.Cos(rad), sin = Math.Sin(rad);
+            double u = (mx - fx) * cos + (my - fy) * sin, v = -(mx - fx) * sin + (my - fy) * cos;
+            // 倒した四角の対角の横の差には、倒れの分（縦の差 × tan）が混ざるので足して戻す
+            double w = Math.Abs(u + r.Shear * v), h = Math.Abs(v), cx = (fx + mx) / 2, cy = (fy + my) / 2;
+            if (w >= MinSizePx && h >= MinSizePx) _rects[_selected] = r.WithBounds(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2);
+            return;
+        }
         double x0 = Math.Min(fx, mx), x1 = Math.Max(fx, mx), y0 = Math.Min(fy, my), y1 = Math.Max(fy, my);
         // 作っている途中は小さくてもよい（離したときに確かめる）。作った範囲を小さくしすぎることはできない
-        if (_creating || (x1 - x0 >= MinSizePx && y1 - y0 >= MinSizePx)) _rects[_selected] = _rects[_selected].WithBounds(x0, y0, x1, y1);
+        if (_creating || (x1 - x0 >= MinSizePx && y1 - y0 >= MinSizePx)) _rects[_selected] = r.WithBounds(x0, y0, x1, y1);
+    }
+
+    /// <summary>四角: 中心を軸に、マウスが回った分だけ回す（1° ごと。Shift を押している間は 15° ごと）</summary>
+    private void DoRotate(MouseEventArgs e)
+    {
+        var r = _rects[_selected];
+        var (mx, my) = _canvas.CanvasToImage(e.X, e.Y);
+        double step = (ModifierKeys & Keys.Shift) != 0 ? 15 : 1;
+        double angle = Math.Round((_rotateStartAngle + AngleAround(r, mx, my) - _rotateStartMouse) / step) * step;
+        angle -= 360 * Math.Ceiling((angle - 180) / 360); // -180 より大きく 180 以下に
+        _rects[_selected] = r with { Angle = angle };
+    }
+
+    /// <summary>四角: 上か下の辺の真ん中をマウスの横の位置まで動かして、左右の辺を倒す（1° ごと。Shift で 15° ごと。±MaxSkew まで）</summary>
+    private void DoSkew(MouseEventArgs e)
+    {
+        var r = _rects[_selected];
+        double hy = r.Height / 2;
+        if (hy <= 0) return;
+        var (mx, my) = _canvas.CanvasToImage(e.X, e.Y);
+        var (cx, cy) = r.Center;
+        double rad = r.Angle * Math.PI / 180;
+        double u = (mx - cx) * Math.Cos(rad) + (my - cy) * Math.Sin(rad); // 傾ける前の向きでの横の位置
+        double step = (ModifierKeys & Keys.Shift) != 0 ? 15 : 1;
+        double skew = Math.Atan((_skewTop ? u : -u) / hy) * 180 / Math.PI;
+        _rects[_selected] = r with { Skew = Math.Clamp(Math.Round(skew / step) * step, -MaskRegion.MaxSkew, MaskRegion.MaxSkew) };
     }
 
     // ---- 保存 ----

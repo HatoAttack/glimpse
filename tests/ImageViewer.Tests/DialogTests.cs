@@ -64,6 +64,16 @@ static class DialogTests
         ui.Click("保存");
         check(File.Exists(Path.Combine(dir, "m1_mosaic.png")) && dialog.SavedCount == 2 && ui.Title.StartsWith("[1/3]"), "モザイク: 保存（別の名前で保存して、その画像のまま）");
 
+        // 四角は、上の辺の真ん中のつまみで倒し、外に出る丸いつまみで回せる（Drag で作った四角は中央 ±100 × ±60）
+        ui.Click("範囲をすべて消す");
+        ui.Drag();
+        var (mx, my) = ui.CanvasCenter;
+        ui.DragBetween(mx, my - 60, mx + 60, my - 60); // 上の辺の真ん中を 60px 右へ（高さの半分も 60px なので 45°）
+        check(ui.LabelContains("斜め 45°"), "モザイク: 上の辺の真ん中のつまみを横に動かすと、四角の左右の辺が倒れる");
+        int gap = ui.HandleRadius * 3;
+        ui.DragBetween(mx + 60, my - 60 - gap, mx + 60 + gap, my + 60); // 中心から見て右回りに 90° 回す
+        check(ui.LabelContains("傾き 90°・斜め 45°"), "モザイク: 外に出る丸いつまみで四角を回す（倒れはそのまま）");
+
         // 続けて送ったら、最後に頼んだ画像になる（途中の画像の読み込みは捨てる）
         ui.Button("次 ▶").PerformClick();
         ui.Button("次 ▶").PerformClick();
@@ -188,6 +198,13 @@ static class DialogTests
         public Button Button(string text) => All(Form).OfType<Button>().First(b => b.Text == text);
         public RadioButton Radio(string text) => All(Form).OfType<RadioButton>().First(r => r.Text == text);
         public bool HasLabel(string prefix) => All(Form).OfType<Label>().Any(l => l.Text.StartsWith(prefix, StringComparison.Ordinal));
+        public bool LabelContains(string text) => All(Form).OfType<Label>().Any(l => l.Text.Contains(text, StringComparison.Ordinal));
+
+        /// <summary>キャンバスの中央（Drag で作る範囲の中心）</summary>
+        public (int X, int Y) CanvasCenter => (Canvas.ClientSize.Width / 2, Canvas.ClientSize.Height / 2);
+
+        /// <summary>つかむ点の当たり判定の半径（キャンバスの px。EditCanvas.HandleRadius と同じ式）</summary>
+        public int HandleRadius => Math.Max(7, 7 * Canvas.DeviceDpi / 96);
 
         /// <summary>◀ ▶ の横の見出し（「[1/3] 名前  （幅 × 高さ）」）</summary>
         public string Title => Button("◀ 前").Parent!.Controls.OfType<Label>().First().Text;
@@ -203,18 +220,23 @@ static class DialogTests
         /// <summary>キャンバスの中央あたり（画像の中）を斜めにドラッグする（dx, dy でドラッグする所をずらす）</summary>
         public void Drag(int dx = 0, int dy = 0)
         {
-            var canvas = Canvas;
-            int cx = canvas.ClientSize.Width / 2 + dx, cy = canvas.ClientSize.Height / 2 + dy;
-            Mouse("OnMouseDown", cx - 100, cy - 60);
-            Mouse("OnMouseMove", cx, cy);
-            Mouse("OnMouseMove", cx + 100, cy + 60);
-            Mouse("OnMouseUp", cx + 100, cy + 60);
-            WaitIdle();
-
-            void Mouse(string method, int x, int y) =>
-                typeof(Control).GetMethod(method, BindingFlags.Instance | BindingFlags.NonPublic)!
-                    .Invoke(canvas, new object[] { new MouseEventArgs(MouseButtons.Left, 1, x, y, 0) });
+            var (cx, cy) = CanvasCenter;
+            DragBetween(cx + dx - 100, cy + dy - 60, cx + dx + 100, cy + dy + 60);
         }
+
+        /// <summary>キャンバスの (x0, y0) から (x1, y1) までドラッグする（途中で真ん中も通る）</summary>
+        public void DragBetween(int x0, int y0, int x1, int y1)
+        {
+            Mouse("OnMouseDown", x0, y0);
+            Mouse("OnMouseMove", (x0 + x1) / 2, (y0 + y1) / 2);
+            Mouse("OnMouseMove", x1, y1);
+            Mouse("OnMouseUp", x1, y1);
+            WaitIdle();
+        }
+
+        private void Mouse(string method, int x, int y) =>
+            typeof(Control).GetMethod(method, BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(Canvas, new object[] { new MouseEventArgs(MouseButtons.Left, 1, x, y, 0) });
 
         /// <summary>読み込みと保存が終わるまで（または閉じるまで）メッセージを回す</summary>
         public void WaitIdle()
